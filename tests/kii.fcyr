@@ -1,28 +1,44 @@
-# kii fuzz harness — arg parser crash-safety.
+# kii fuzz harness — two crash-safety surfaces in one binary.
 #
-# Sub-bite (d) of M1. Drives kii's flag set (registered via
-# kii_register_flags) with deterministic LCG-generated random
-# argv arrays. The contract is narrow: flags_parse must never
-# crash on malformed input, only return FLAG_ERR_* cleanly.
+# 1. Arg parser (M1 sub-bite (d)): drives kii's flag set via
+#    kii_register_flags with deterministic LCG-generated random
+#    argv arrays. Contract: flags_parse never crashes on malformed
+#    input, only returns FLAG_ERR_* cleanly.
+#
+# 2. PNG decoder (M2 sub-bite (d)): writes random byte sequences
+#    to /tmp/kii-fuzz-png.bin + drives png_decode_structure over
+#    them. 50% of iterations prepend a valid signature + IHDR so
+#    the post-IHDR chunk walker gets exercised. Contract:
+#    png_decode_structure never crashes; returns PNG_OK or any
+#    PNG_ERR_* cleanly.
 #
 # Determinism: fixed seed (1) + Numerical Recipes LCG. Same byte
-# sequences every CI run; failures bisect cleanly. M2 will add a
-# separate harness (driven from kii.fcyr or a new tests/png_fuzz.fcyr)
-# for malformed PNG bytes — different surface entirely.
+# sequences every CI run; failures bisect cleanly.
 #
-# Stdlib + flags + cli.cyr auto-included via cyrius.cyml + the
-# include below.
+# Stdlib + flags + cli.cyr + png.cyr auto-included via cyrius.cyml
+# + the includes below.
 
 include "src/cli.cyr"
+include "src/png.cyr"
 
-# Total iterations. 10_000 takes well under a second; raised at
-# M7 (security audit) to 10⁶ per the v1.0 acceptance criterion.
+# Iteration counts. Arg-parser fuzz: 10k (no I/O, runs in <50 ms).
+# PNG fuzz: 2k (each iter does a /tmp file_write_all + open + read,
+# ~1 ms each on tmpfs; 2k iters keeps CI under ~3 s while still
+# covering the major dispatch paths). Both raised at M7 (security
+# audit) to 10⁶ per the v1.0 acceptance criterion.
 var FUZZ_ITERS       = 10000;
+var PNG_FUZZ_ITERS   = 2000;
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
 var FUZZ_MAX_ARGC    = 8;
 var FUZZ_MAX_ARG_LEN = 24;
+
+# Per-iter PNG fuzz shape. Random byte payload length ∈ [0,
+# PNG_FUZZ_MAX_LEN]; optionally prepended with a 33-byte valid
+# signature + IHDR prefix (50% of iters) so the chunk walker is
+# reached. Scratch buf accommodates prefix + payload.
+var PNG_FUZZ_MAX_LEN = 1024;
 
 # ---- deterministic LCG ----------------------------------------------
 # Numerical Recipes constants. Seed is mutable module state so each
@@ -82,6 +98,76 @@ fn _fuzz_build_arg(buf, max_len): i64 {
     return off + body_len;
 }
 
+# ---- PNG fuzz support ----------------------------------------------
+# Pre-built 33-byte "valid prefix" (signature + IHDR for a 4x2 RGB
+# image with computed IHDR CRC) — prepended to random-byte fuzz
+# inputs 50% of the time so the chunk walker post-IHDR sees random
+# chunks. Module-scope `var arr[33]` = 33 × u64 slots = 264 bytes
+# (we use the first 33 bytes; rest is wasted but cheap). Caller
+# must call _png_fuzz_init_prefix() once before the first PNG fuzz
+# iter so the IHDR CRC is computed and stored.
+var _png_fuzz_prefix[33];
+var _png_fuzz_prefix_inited = 0;
+
+fn _png_fuzz_init_prefix(): i64 {
+    if (_png_fuzz_prefix_inited == 1) { return 0; }
+    png_crc_init();
+    var b = &_png_fuzz_prefix;
+    # signature
+    memcpy(b, PNG_MAGIC, PNG_MAGIC_LEN);
+    # IHDR length = 13
+    store8(b + 8, 0);  store8(b + 9, 0);  store8(b + 10, 0); store8(b + 11, 13);
+    # IHDR type "IHDR"
+    store8(b + 12, 0x49); store8(b + 13, 0x48); store8(b + 14, 0x44); store8(b + 15, 0x52);
+    # IHDR data: 4×2, depth=8, RGB, comp=0, filter=0, interlace=0
+    store8(b + 16, 0); store8(b + 17, 0); store8(b + 18, 0); store8(b + 19, 4);
+    store8(b + 20, 0); store8(b + 21, 0); store8(b + 22, 0); store8(b + 23, 2);
+    store8(b + 24, 8); store8(b + 25, 2);
+    store8(b + 26, 0); store8(b + 27, 0); store8(b + 28, 0);
+    # IHDR CRC32 over type + data (17 bytes at offset 12..28)
+    var crc = png_crc32(b + 12, 17);
+    store8(b + 29, (crc >> 24) & 0xFF);
+    store8(b + 30, (crc >> 16) & 0xFF);
+    store8(b + 31, (crc >> 8)  & 0xFF);
+    store8(b + 32, crc & 0xFF);
+    _png_fuzz_prefix_inited = 1;
+    return 0;
+}
+
+# One PNG-fuzz iteration. Builds a random byte buffer (optionally
+# prefixed with a valid sig + IHDR), writes it to /tmp, drives
+# png_decode_structure. Whatever the function returns is fine —
+# the contract is "never crash". `scratch_buf` is caller-owned;
+# `scratch_cap` is the buffer's capacity so we don't overflow.
+fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
+    # 50% of iters get the valid prefix; the rest are pure random.
+    var off = 0;
+    if (_fuzz_rand_range(2) == 0) {
+        memcpy(scratch_buf, &_png_fuzz_prefix, 33);
+        off = 33;
+    }
+
+    # Random payload length in [0, PNG_FUZZ_MAX_LEN].
+    var payload = _fuzz_rand_range(PNG_FUZZ_MAX_LEN + 1);
+    var max_fill = scratch_cap - off;
+    if (payload > max_fill) { payload = max_fill; }
+    var i = 0;
+    while (i < payload) {
+        store8(scratch_buf + off + i, _fuzz_rand() & 0xFF);
+        i = i + 1;
+    }
+    var total = off + payload;
+
+    # file_write_all uses O_TRUNC, so the file is fresh every iter.
+    file_write_all("/tmp/kii-fuzz-png.bin", scratch_buf, total);
+
+    # Drive the decoder. Result discarded — we only care about
+    # not-crashing.
+    var pstruct[64];
+    png_decode_structure("/tmp/kii-fuzz-png.bin", &pstruct);
+    return 0;
+}
+
 # One fuzz iteration. `scratch` holds the raw bytes of all args
 # packed back-to-back (each null-terminated). `argv_arr` holds
 # pointers into `scratch`, one per arg. argv[0] is always "kii"
@@ -118,12 +204,13 @@ fn fuzz_iter(scratch, argv_arr): i64 {
 
 fn main(): i64 {
     alloc_init();
+    _png_fuzz_init_prefix();
 
-    # Per-iter scratch + argv. Function-scope `var buf[N]` = N
-    # bytes (cyrius semantics — CLAUDE.md hard rule). 1 KB scratch
-    # is comfortably larger than FUZZ_MAX_ARGC × (FUZZ_MAX_ARG_LEN
-    # + 1) = 8 × 25 = 200 bytes. argv_arr at 80 bytes = 10 slots,
-    # one more than FUZZ_MAX_ARGC for header alignment.
+    # ---- arg-parser fuzz loop --------------------------------------
+    # Function-scope `var buf[N]` = N bytes. 1 KB scratch is well
+    # over FUZZ_MAX_ARGC × (FUZZ_MAX_ARG_LEN + 1) = 8 × 25 = 200
+    # bytes. argv_arr at 80 bytes = 10 slots, one more than
+    # FUZZ_MAX_ARGC for header alignment.
     var scratch[1024];
     var argv_arr[80];
 
@@ -133,13 +220,28 @@ fn main(): i64 {
         iter = iter + 1;
     }
 
-    # Report. fmt_printf expects a vec for its varargs (per
-    # lib/fmt.cyr — vec_get walks args by index). The integer
-    # landing in the output is what CI greps for; "fuzz: ok" stays
-    # so the human-readable log is unambiguous.
-    var report_args = vec_new();
-    vec_push(report_args, iter);
-    fmt_printf("fuzz: %d iterations passed (arg-parser crash-safety)\n", report_args);
+    # ---- png-decoder fuzz loop -------------------------------------
+    # Larger scratch: prefix (33) + max payload (1024) = 1057 bytes.
+    # 2 KB stack buf has plenty of headroom.
+    var png_scratch[2048];
+    var png_iter = 0;
+    while (png_iter < PNG_FUZZ_ITERS) {
+        fuzz_png_iter(&png_scratch, 2048);
+        png_iter = png_iter + 1;
+    }
+
+    # ---- report ----------------------------------------------------
+    # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
+    # walks args by index). One line per fuzz surface; "fuzz: ok"
+    # closes the human-readable log so CI greps see a clear sentinel.
+    var args_arg = vec_new();
+    vec_push(args_arg, iter);
+    fmt_printf("fuzz: %d iterations passed (arg-parser crash-safety)\n", args_arg);
+
+    var args_png = vec_new();
+    vec_push(args_png, png_iter);
+    fmt_printf("fuzz: %d iterations passed (png-decoder crash-safety)\n", args_png);
+
     println("fuzz: ok");
     return 0;
 }

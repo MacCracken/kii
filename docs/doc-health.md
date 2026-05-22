@@ -18,30 +18,30 @@
 |---|---|---|---|
 | `README.md` | 1 | 2026-05-22 (v0.1.0 scaffold) | Fresh. Customized from `cyrius init` template. |
 | `CLAUDE.md` | 1 | 2026-05-22 | Fresh. Custom Project Identity + Goal + color-tier discipline + domain rules. |
-| `CHANGELOG.md` | 1 | 2026-05-22 (v0.2.0 close) | `[0.2.0]` + `[0.1.0]` entries; rolls per release. |
+| `CHANGELOG.md` | 1 | 2026-05-22 (v0.3.0 close) | `[0.3.0]` + `[0.2.0]` + `[0.1.0]` entries; rolls per release. |
 | `CONTRIBUTING.md` | 1 | 2026-05-22 | Fresh. Standard + kii-specific milestone-alignment notes. |
 | `CODE_OF_CONDUCT.md` | 1 | 2026-05-22 | Contributor Covenant 2.1 pointer. |
 | `SECURITY.md` | 1 | 2026-05-22 | Fresh. Threat model explicit; image-decoder hardening discipline captured. |
-| `cyrius.cyml` | 1 | 2026-05-22 (v0.2.0 close) | Description filled; stdlib deps + toolchain pin set. `"flags"` added at v0.2.0 (consumer: CLI parsing). |
-| `docs/development/state.md` | 1 | 2026-05-22 (v0.2.0 close) | M1 close snapshot: 36 assertions, full CLI surface frozen, fuzz wired. **Bump per release.** |
+| `cyrius.cyml` | 1 | 2026-05-22 (v0.2.0 close) | Description filled; stdlib deps + toolchain pin set. `"flags"` added at v0.2.0. No deltas at v0.3.0 (M3 will add `sankoch`). |
+| `docs/development/state.md` | 1 | 2026-05-22 (v0.3.0 close) | M2 close snapshot: 88 assertions, full PNG structural decode, two fuzz surfaces. **Bump per release.** |
 | `docs/development/roadmap.md` | 1 | 2026-05-22 | M0-M7 milestones laid out to v1.0; acceptance criteria + dep gates per milestone. |
 | `docs/adr/README.md` | 2 | 2026-05-22 (cyrius init template) | No ADRs yet; first ADR likely at M3 (sankoch dep adoption). |
 | `docs/adr/template.md` | 2 | 2026-05-22 (cyrius init template) | Fresh. |
 | `docs/architecture/README.md` | 2 | 2026-05-22 (cyrius init template) | Empty placeholder. **Backfill at M2** when PNG decoder module structure crystallizes. |
 | `docs/guides/getting-started.md` | 2 | 2026-05-22 (cyrius init template) | Template-only. **Backfill at M5** when the binary actually does something visible. |
 | `docs/examples/.gitkeep` | 3 | 2026-05-22 (cyrius init template) | Empty. **Add at M5** (first image-in / ANSI-out example). |
-| `tests/kii.tcyr` | 2 | 2026-05-22 (v0.2.0 close) | 36 assertions: smoke + `kii_validate_color` + flag-parse happy/sad. Expand per milestone. |
+| `tests/kii.tcyr` | 2 | 2026-05-22 (v0.3.0 close) | 88 assertions: smoke + `kii_validate_color` + flag-parse + PNG signature/IHDR/CRC32/walker. Expand per milestone. |
 | `tests/kii.bcyr` | 2 | 2026-05-22 (cyrius init scaffold) | Stub. **Wire at M4** (first benchmark = quantization latency). |
-| `tests/kii.fcyr` | 2 | 2026-05-22 (v0.2.0 close) | Wired at M1(d): 10k-iter deterministic-LCG fuzz over kii's flag set. PNG-decoder fuzz comes at M2 (separate harness). |
+| `tests/kii.fcyr` | 2 | 2026-05-22 (v0.3.0 close) | Two fuzz surfaces in one binary: 10k arg-parser iters (M1(d)) + 2k PNG-decoder iters (M2(d)). Both deterministic-LCG. |
 | `.github/workflows/ci.yml` | 1 | 2026-05-22 (post-0.2.0) | `workflow_call:` + binary-name fix + version-drift smoke + fuzz step landed. **Still pending**: CHANGELOG-extracted release notes, aarch64 cross-build (tracked in `[Unreleased]` CHANGELOG). |
 | `.github/workflows/release.yml` | 1 | 2026-05-22 (post-0.2.0) | Binary-name fix landed. CHANGELOG-extracted release notes + multi-arch builds pending. |
 | `LICENSE` | 1 | 2026-05-22 | GPL-3.0-only header (parity with bannermanor/hapi/etc.). |
 | `.gitignore` | 2 | 2026-05-22 | Standard scaffold. |
 
-## Debt summary at v0.2.0
+## Debt summary at v0.3.0
 
-- **Tier-1 docs**: all fresh. Zero structural debt. **Carry-forward**: `release.yml` has not yet had a "thorough" pass — workflow_call wired in for v0.2.0 to function, but the punch list (fuzz step, --version smoke, CHANGELOG-extracted notes, aarch64) is captured in the v0.2.0 CHANGELOG entry and pending a dedicated cycle.
-- **Tier-2 docs**: 5 cyrius-init-template stubs remaining (`adr/README`, `adr/template`, `architecture/README`, `guides/getting-started`, `examples/.gitkeep`) — unchanged from v0.1.0; all flagged with backfill milestones. `tests/kii.fcyr` graduated from stub-with-backfill at M1(d) (early — was scheduled for M2).
+- **Tier-1 docs**: all fresh. Zero structural debt. **Carry-forward** from v0.2.0: `release.yml` still has the multi-arch / CHANGELOG-extracted-notes / Sigstore punch list pending a dedicated CI cycle. `workflow_call`, version-drift smoke, fuzz step, and binary-name fix all shipped between v0.2.0 and v0.3.0.
+- **Tier-2 docs**: 5 cyrius-init-template stubs remaining (`adr/README`, `adr/template`, `architecture/README`, `guides/getting-started`, `examples/.gitkeep`) — `architecture/README` is the next due (M2-flagged backfill — file structure of the PNG decoder is now stable enough to document). `tests/kii.fcyr` graduated at M1(d); a `docs/adr/0001-png-decoder-in-repo.md` is the natural first ADR at M3 if the PNG decoder gets extracted to a substrate lib alongside `sankoch` adoption.
 
 ## Refresh discipline
 

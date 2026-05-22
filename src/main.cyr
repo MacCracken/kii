@@ -10,16 +10,15 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 shipped at v0.2.0. M2 sub-bites (a)–(c) in progress —
-# PNG signature + IHDR parse + CRC32 + chunk walker through IEND
-# land at the entry hop. Valid + CRC-clean PNGs print
-# `<path>: <W>x<H> bit_depth=<N> color_type=<T> (structural decode
-# incomplete)` to stderr + exit 1; missing IEND adds a second
-# warning line but still emits the summary. CRC mismatch or
-# truncated post-IHDR chunk → distinct path-keyed errors + exit 1.
-# Sub-bite (d) flips the success path to stdout + exit 0 + drops
-# the parenthetical. VERSION + CHANGELOG bump to 0.3.0 lands at
-# end of M2, not per sub-bite.
+# Status: M2 SHIPPED at v0.3.0 — full PNG structural decoder
+# (signature + IHDR + CRC32 + chunk walker through IEND) at the
+# entry hop. Valid + CRC-clean PNGs print
+# `<path>: <W>x<H> bit_depth=<N> color_type=<T>` to STDOUT + exit 0;
+# missing IEND emits a stderr warning but still succeeds. Malformed
+# signature / IHDR / CRC / truncated post-IHDR chunk → distinct
+# path-keyed errors on stderr + exit 1. M3 (sankoch DEFLATE) lands
+# the actual pixel decode + replaces the structural-summary stdout
+# with a `<path>: <W>x<H> decoded <N> pixels` line.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -60,25 +59,26 @@ fn _eprint_path_msg(path, msg): i64 {
     return 0;
 }
 
-# Print "<path>: <W>x<H> bit_depth=<N> color_type=<N> (structural
-# decode incomplete)\n" to stderr. Matches the M2 acceptance
-# shape; the trailing parenthetical is the sub-bite-(b) WIP
-# marker. Sub-bite (d) drops the marker + flips to stdout/exit 0.
-fn _eprint_ihdr_summary(path, ihdr): i64 {
-    _eprint(path);
-    _eprint(": ");
+# Print "<path>: <W>x<H> bit_depth=<N> color_type=<N>\n" to STDOUT.
+# This is the M2 acceptance success shape. Goes to fd 1 (not fd 2)
+# so consumers can `kii image.png | grep '^path:'`; missing-IEND
+# warnings ride stderr separately (pipe purity).
+fn _print_ihdr_summary(path, ihdr): i64 {
+    var plen = strlen(path);
+    syscall(1, 1, path, plen);
+    syscall(1, 1, ": ", 2);
     var wbuf[16]; var wlen = fmt_int_buf(load64(ihdr + IHDR_WIDTH_OFFSET), &wbuf);
-    syscall(1, 2, &wbuf, wlen);
-    _eprint("x");
+    syscall(1, 1, &wbuf, wlen);
+    syscall(1, 1, "x", 1);
     var hbuf[16]; var hlen = fmt_int_buf(load64(ihdr + IHDR_HEIGHT_OFFSET), &hbuf);
-    syscall(1, 2, &hbuf, hlen);
-    _eprint(" bit_depth=");
+    syscall(1, 1, &hbuf, hlen);
+    syscall(1, 1, " bit_depth=", 11);
     var dbuf[8];  var dlen = fmt_int_buf(load64(ihdr + IHDR_BIT_DEPTH_OFFSET), &dbuf);
-    syscall(1, 2, &dbuf, dlen);
-    _eprint(" color_type=");
+    syscall(1, 1, &dbuf, dlen);
+    syscall(1, 1, " color_type=", 12);
     var cbuf[8];  var clen = fmt_int_buf(load64(ihdr + IHDR_COLOR_TYPE_OFFSET), &cbuf);
-    syscall(1, 2, &cbuf, clen);
-    _eprint(" (structural decode incomplete)\n");
+    syscall(1, 1, &cbuf, clen);
+    syscall(1, 1, "\n", 1);
     return 0;
 }
 
@@ -87,7 +87,7 @@ fn _eprint_ihdr_summary(path, ihdr): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 0.2.0");
+    println("kii 0.3.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -225,15 +225,17 @@ fn main(): i64 {
     }
 
     # PNG_OK. STRUCT_*_OFFSET aligns with IHDR_*_OFFSET for the
-    # first four slots, so _eprint_ihdr_summary works directly on
-    # the pstruct buffer. If IEND was missing, append a warning
-    # line per spec § 5.3 tolerance ("continues with what was
-    # read").
-    _eprint_ihdr_summary(path, &pstruct);
+    # first four slots, so _print_ihdr_summary works directly on
+    # the pstruct buffer. Summary goes to stdout + exit 0 per M2
+    # acceptance contract. If IEND was missing, append a warning
+    # line on STDERR per spec § 5.3 tolerance ("continues with
+    # what was read") — keeps stdout pipe-pure so consumers can
+    # pipe the structural summary into other tools.
+    _print_ihdr_summary(path, &pstruct);
     if (load64(&pstruct + STRUCT_SEEN_IEND_OFFSET) == 0) {
         _eprint_path_msg(path, "warning: incomplete PNG (no IEND chunk seen)");
     }
-    return KII_EXIT_RUN;
+    return KII_EXIT_OK;
 }
 
 var r = main();
