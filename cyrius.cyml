@@ -1,8 +1,9 @@
 [package]
 name = "kii"
-version = "0.1.0"
-description = "kii — TODO"
+version = "${file:VERSION}"
+description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. 8/16-color tier-1 scope at v1.0; 256-color + truecolor 'high bands' post-v1. Substrate for BBS/MUD MOTD aesthetic + general image-in-terminal viewing."
 license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/cyrius-kii"
 language = "cyrius"
 cyrius = "6.0.1"
 
@@ -12,5 +13,7 @@ test = "src/test.cyr"
 output = "kii"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
----
+# Minimal stdlib at v0.1.0. darshana (ANSI primitives) + sankoch
+# (DEFLATE for PNG IDAT) get added at v0.6.0 + v0.4.0 respectively
+# per docs/development/roadmap.md milestones.
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args"]

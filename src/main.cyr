@@ -1,9 +1,31 @@
 # kii — main entry point
 # Stdlib auto-included via cyrius.cyml
+#
+# v0.1.0 SCAFFOLD: prints version + a placeholder usage message. No image
+# decoding, no ANSI output, no working features. Scaffolded 2026-05-22.
+#
+# Milestone path to v1.0 (see docs/development/roadmap.md):
+#   M1 v0.2.0  CLI arg parsing (--help / --version / positional path / --width / --color)
+#   M2 v0.3.0  PNG structural decoder (signature + IHDR + IDAT extraction + CRC)
+#   M3 v0.4.0  PNG decode through sankoch DEFLATE → raw RGB pixels
+#   M4 v0.5.0  16-color ANSI palette + RGB→nearest quantization
+#   M5 v0.6.0  half-block (▀) glyph emit + per-row ANSI color escapes
+#   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
+#   M7 v1.0.0  CLI surface frozen; soak + docs + audit
+#
+# Domain rules (see CLAUDE.md § Domain-specific rules):
+#   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
+#   - CRC + signature validation on every input image
+#   - No file writes (stdin/args → stdout only)
+#   - Tier 1 = 8/16-color ANSI + half-block; tier 2 (256/truecolor) is post-v1
 
 fn main() {
     alloc_init();
-    println("hello from kii");
+    println("kii v0.1.0 — pre-alpha scaffold");
+    println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
+    println("");
+    println("status: no working features yet; see docs/development/roadmap.md");
+    println("        for the milestone path to v1.0.");
     return 0;
 }
 
