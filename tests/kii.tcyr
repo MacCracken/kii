@@ -1,11 +1,165 @@
 # kii test suite
-# Stdlib auto-included via cyrius.cyml
+# Stdlib + flags auto-included via cyrius.cyml.
+#
+# M1 coverage: kii_validate_color predicate + flag-parse wiring
+# (happy paths via the full kii flag set + error-variant
+# dispatch). The end-to-end binary smoke (exit codes for
+# `kii --version` / `kii image.png` / `kii --color 7 image.png`)
+# is exercised via the manual run shell — Cyrius can't trivially
+# subprocess itself inside a unit test, so the .tcyr layer owns
+# the in-process pieces and the smoke shell owns the I/O surface.
+
+include "src/cli.cyr"
 
 fn main() {
     alloc_init();
+
+    # ---- smoke ------------------------------------------------------
     test_group("smoke");
     assert(1, "true is true");
     assert_eq(1 + 1, 2, "math works");
+
+    # ---- M1(c): kii_validate_color predicate ------------------------
+    # Tier-1 scope is 8 / 16 only; 256 / truecolor are post-v1 per
+    # CLAUDE.md color-tier discipline. Locks the boundary in code so
+    # any future change that quietly admits other values regresses
+    # this test before the milestone gate.
+    test_group("M1 — kii_validate_color");
+    assert_eq(kii_validate_color(8),   1, "--color 8 valid");
+    assert_eq(kii_validate_color(16),  1, "--color 16 valid");
+    assert_eq(kii_validate_color(0),   0, "--color 0 rejected");
+    assert_eq(kii_validate_color(7),   0, "--color 7 rejected");
+    assert_eq(kii_validate_color(15),  0, "--color 15 rejected (off-by-one of 16)");
+    assert_eq(kii_validate_color(17),  0, "--color 17 rejected (off-by-one of 16)");
+    assert_eq(kii_validate_color(256), 0, "--color 256 rejected (tier-2, post-v1)");
+    assert_eq(kii_validate_color(0 - 1), 0, "--color -1 rejected");
+
+    # ---- M1(a)(b)(c): flag-parse happy paths ------------------------
+    # Mirrors the anuenue M2 test shape. Each case builds a
+    # synthetic argv, registers kii's flag set, parses, and reads
+    # back the captured values. flags_parse's internal contract is
+    # asserted in cyrius's own tests/flags.tcyr; here we verify
+    # kii's wiring (correct short codes, defaults, value extraction).
+
+    test_group("M1 — --help long form");
+    var fs1 = flags_new();
+    kii_register_flags(fs1);
+    var argv1[16];
+    store64(&argv1 + 0, "kii");
+    store64(&argv1 + 8, "--help");
+    assert_eq(flags_parse(fs1, 2, &argv1), 0, "--help parses clean");
+    assert_eq(flags_get_bool(fs1, KII_F_HELP),    1, "--help → true");
+    assert_eq(flags_get_bool(fs1, KII_F_VERSION), 0, "--version untouched");
+    assert_eq(flags_get_int (fs1, KII_F_WIDTH),   0, "--width default (0 = match terminal)");
+    assert_eq(flags_get_int (fs1, KII_F_COLOR),  16, "--color default 16");
+
+    test_group("M1 — -V short form");
+    var fs2 = flags_new();
+    kii_register_flags(fs2);
+    var argv2[16];
+    store64(&argv2 + 0, "kii");
+    store64(&argv2 + 8, "-V");
+    assert_eq(flags_parse(fs2, 2, &argv2), 0, "-V parses clean");
+    assert_eq(flags_get_bool(fs2, KII_F_VERSION), 1, "-V → true");
+
+    test_group("M1 — --width N + --color N (long forms)");
+    var fs3 = flags_new();
+    kii_register_flags(fs3);
+    var argv3[64];
+    store64(&argv3 + 0,  "kii");
+    store64(&argv3 + 8,  "--width");
+    store64(&argv3 + 16, "120");
+    store64(&argv3 + 24, "--color");
+    store64(&argv3 + 32, "8");
+    store64(&argv3 + 40, "photo.png");
+    assert_eq(flags_parse(fs3, 6, &argv3), 0, "--width 120 --color 8 photo.png parses clean");
+    assert_eq(flags_get_int(fs3, KII_F_WIDTH), 120, "--width extracted = 120");
+    assert_eq(flags_get_int(fs3, KII_F_COLOR), 8,   "--color extracted = 8");
+    assert_eq(flags_positional_count(fs3), 1, "one positional captured");
+
+    test_group("M1 — -w N + -c N (short forms)");
+    var fs4 = flags_new();
+    kii_register_flags(fs4);
+    var argv4[64];
+    store64(&argv4 + 0,  "kii");
+    store64(&argv4 + 8,  "-w");
+    store64(&argv4 + 16, "60");
+    store64(&argv4 + 24, "-c");
+    store64(&argv4 + 32, "16");
+    store64(&argv4 + 40, "img.png");
+    assert_eq(flags_parse(fs4, 6, &argv4), 0, "-w 60 -c 16 img.png parses clean");
+    assert_eq(flags_get_int(fs4, KII_F_WIDTH), 60, "-w extracted = 60");
+    assert_eq(flags_get_int(fs4, KII_F_COLOR), 16, "-c extracted = 16");
+
+    test_group("M1 — --width=N attached syntax");
+    var fs5 = flags_new();
+    kii_register_flags(fs5);
+    var argv5[24];
+    store64(&argv5 + 0,  "kii");
+    store64(&argv5 + 8,  "--width=80");
+    store64(&argv5 + 16, "img.png");
+    assert_eq(flags_parse(fs5, 3, &argv5), 0, "--width=80 parses clean");
+    assert_eq(flags_get_int(fs5, KII_F_WIDTH), 80, "--width=80 extracted");
+
+    # ---- M1(d) — malformed-arg error variants -----------------------
+    # Each FlagErr the parser can emit is reachable from a plausible
+    # invocation. Locking the variant codes here means a future
+    # flags-lib refactor (renumbering, splitting, etc.) trips this
+    # test before kii silently mis-routes its error messages.
+
+    test_group("M1(d) — error: unknown flag");
+    var fs6 = flags_new();
+    kii_register_flags(fs6);
+    var argv6[16];
+    store64(&argv6 + 0, "kii");
+    store64(&argv6 + 8, "--bogus");
+    assert_eq(flags_parse(fs6, 2, &argv6), 0 - 1, "--bogus rejected");
+    assert_eq(flags_error(fs6), FLAG_ERR_UNKNOWN, "error = UNKNOWN");
+
+    test_group("M1(d) — error: missing int value");
+    var fs7 = flags_new();
+    kii_register_flags(fs7);
+    var argv7[16];
+    store64(&argv7 + 0, "kii");
+    store64(&argv7 + 8, "--width");          # no value follows
+    assert_eq(flags_parse(fs7, 2, &argv7), 0 - 1, "--width without value rejected");
+    assert_eq(flags_error(fs7), FLAG_ERR_MISSING_VALUE, "error = MISSING_VALUE");
+
+    test_group("M1(d) — error: bad integer value");
+    var fs8 = flags_new();
+    kii_register_flags(fs8);
+    var argv8[32];
+    store64(&argv8 + 0,  "kii");
+    store64(&argv8 + 8,  "--width");
+    store64(&argv8 + 16, "abc");
+    store64(&argv8 + 24, "img.png");
+    assert_eq(flags_parse(fs8, 4, &argv8), 0 - 1, "--width abc rejected");
+    assert_eq(flags_error(fs8), FLAG_ERR_BAD_INT, "error = BAD_INT");
+
+    test_group("M1(d) — error: bundled short flags");
+    var fs9 = flags_new();
+    kii_register_flags(fs9);
+    var argv9[16];
+    store64(&argv9 + 0, "kii");
+    store64(&argv9 + 8, "-hV");              # bundled — not supported
+    assert_eq(flags_parse(fs9, 2, &argv9), 0 - 1, "-hV bundled rejected");
+    assert_eq(flags_error(fs9), FLAG_ERR_BUNDLED, "error = BUNDLED");
+
+    # ---- M1(d) — positional accumulation ----------------------------
+    # Two-positional case is a usage error in main.cyr's dispatch
+    # but flags_parse itself accepts it (and stashes them both).
+    # Locks the "kii sees N positionals" view that the dispatch
+    # branches on.
+    test_group("M1(d) — multiple positionals captured (dispatched as usage error in main)");
+    var fs10 = flags_new();
+    kii_register_flags(fs10);
+    var argv10[32];
+    store64(&argv10 + 0,  "kii");
+    store64(&argv10 + 8,  "a.png");
+    store64(&argv10 + 16, "b.png");
+    assert_eq(flags_parse(fs10, 3, &argv10), 0, "a.png b.png parses clean");
+    assert_eq(flags_positional_count(fs10), 2, "two positionals captured");
+
     return assert_summary();
 }
 

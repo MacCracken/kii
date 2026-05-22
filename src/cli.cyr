@@ -1,0 +1,54 @@
+# cli.cyr — kii's flag registration + lightweight validation.
+#
+# Split out of main.cyr at M1 sub-bite (d) so the unit-test
+# (tests/kii.tcyr) and fuzz (tests/kii.fcyr) harnesses can wire
+# kii's exact flag set into a `flags` context without linking
+# the program entry point. Stdlib (incl. flags) is auto-included
+# via cyrius.cyml.
+#
+# main.cyr keeps the I/O glue (print_version, print_usage, argv
+# packing, dispatch) — those are intertwined with stdout/stderr
+# and don't lend themselves to in-process testing. The pure
+# parse + validate pieces live here.
+
+# ---- exit codes ---------------------------------------------------
+# Mirrors the AGNOS userland convention (anuenue, hapi, bannermanor):
+#   0 = normal exit (incl. --help / --version paths)
+#   1 = runtime error (decode fail, IO error) — used at M2+
+#   2 = usage error (unknown flag, missing value, bad int, bad color)
+var KII_EXIT_OK    = 0;
+var KII_EXIT_RUN   = 1;
+var KII_EXIT_USAGE = 2;
+
+# ---- flag indices ------------------------------------------------
+# Populated by kii_register_flags(fs). Initial sentinel = -1 so
+# unregistered access trips a bounds error in `_flags_entry`
+# rather than silently reading entry 0.
+var KII_F_HELP    = 0 - 1;
+var KII_F_VERSION = 0 - 1;
+var KII_F_WIDTH   = 0 - 1;
+var KII_F_COLOR   = 0 - 1;
+
+# Register kii's full M1 flag surface into an existing `fs`
+# (caller owns flags_new + flags_parse). Short codes are ASCII
+# byte values: h = 104, V = 86 (capital — leaves lowercase v
+# free for a future --verbose), w = 119, c = 99 (mirror chafa's
+# `-w` / `-c`). Defaults: --width 0 is the M6 sentinel for
+# "match terminal"; --color 16 picks the higher fidelity tier
+# within v1.0 scope (M5 visual-review baseline is `chafa --colors 16`).
+fn kii_register_flags(fs): i64 {
+    KII_F_HELP    = flags_add_bool(fs, 104, "help",    0,  "show this help and exit");
+    KII_F_VERSION = flags_add_bool(fs,  86, "version", 0,  "print version and exit");
+    KII_F_WIDTH   = flags_add_int (fs, 119, "width",   0,  "output width in columns (0 = match terminal)");
+    KII_F_COLOR   = flags_add_int (fs,  99, "color",   16, "color tier: 8 or 16 (tier-2 modes post-v1)");
+    return 0;
+}
+
+# --color validation. Only 8 or 16 are valid within tier-1 scope;
+# 256 / truecolor are post-v1 (CLAUDE.md color-tier discipline).
+# Returns 1 if valid, 0 otherwise.
+fn kii_validate_color(color): i64 {
+    if (color == 8)  { return 1; }
+    if (color == 16) { return 1; }
+    return 0;
+}

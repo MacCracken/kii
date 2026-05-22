@@ -10,11 +10,12 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 sub-bites (a)–(c) in progress — full M1 flag surface
+# Status: M1 sub-bites (a)–(d) in progress — full M1 flag surface
 # (`--help`, `--version`, `--width N`, `--color N`, positional path)
-# parses + dispatches; values are captured + echoed by the placeholder
-# but no decoder runs yet. Sub-bite (d) adds fuzz coverage. VERSION +
-# CHANGELOG bump to 0.2.0 lands at end of M1, not per sub-bite.
+# parses + dispatches; flag registration + --color validation are
+# split into src/cli.cyr so tests + fuzz can drive them in-process;
+# values are captured + echoed by the placeholder but no decoder
+# runs yet. VERSION + CHANGELOG bump to 0.2.0 lands at end of M1.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -22,14 +23,7 @@
 #   - No file writes (stdin/args → stdout only)
 #   - Tier 1 = 8/16-color ANSI + half-block; tier 2 (256/truecolor) is post-v1
 
-# ---- exit codes ---------------------------------------------------
-# Mirrors the AGNOS userland convention (anuenue, hapi, bannermanor):
-#   0 = normal exit (incl. --help / --version paths)
-#   1 = runtime error (decode fail, IO error) — used at M2+
-#   2 = usage error (unknown flag, missing value, bad int)
-var KII_EXIT_OK    = 0;
-var KII_EXIT_RUN   = 1;
-var KII_EXIT_USAGE = 2;
+include "src/cli.cyr"
 
 # argv cap. kii takes one positional path arg at most; 256 is
 # absurdly more than any plausible invocation but matches the
@@ -115,19 +109,10 @@ fn main(): i64 {
     var argv_arr[2048];                     # 256 slots × 8 bytes
     build_argv_array(&argv_arr);
 
-    # M1 full flag surface. Short codes are ASCII byte values:
-    #   h = 104, V = 86 (capital — leaves lowercase v free for a
-    #   future --verbose if that ever surfaces),
-    #   w = 119, c = 99 (mirror chafa's `-w` / `-c` conventions).
-    # Defaults: --width 0 is the M6 sentinel for "match terminal"
-    # (and the M5-floor fallback to 80 cols); --color 16 picks the
-    # higher fidelity tier within v1.0 scope (matches the M5
-    # `chafa --colors 16` visual-review baseline).
+    # Flag registration lives in src/cli.cyr so kii.tcyr + kii.fcyr
+    # can wire the same flag set without including main.cyr.
     var fs = flags_new();
-    var f_help    = flags_add_bool(fs, 104, "help",    0,  "show this help and exit");
-    var f_version = flags_add_bool(fs,  86, "version", 0,  "print version and exit");
-    var f_width   = flags_add_int (fs, 119, "width",   0,  "output width in columns (0 = match terminal)");
-    var f_color   = flags_add_int (fs,  99, "color",   16, "color tier: 8 or 16 (tier-2 modes post-v1)");
+    kii_register_flags(fs);
 
     if (flags_parse(fs, ac, &argv_arr) != 0) {
         var err = flags_error(fs);
@@ -146,26 +131,24 @@ fn main(): i64 {
         return KII_EXIT_USAGE;
     }
 
-    if (flags_get_bool(fs, f_help) == 1) {
+    if (flags_get_bool(fs, KII_F_HELP) == 1) {
         print_usage(fs);
         return KII_EXIT_OK;
     }
-    if (flags_get_bool(fs, f_version) == 1) {
+    if (flags_get_bool(fs, KII_F_VERSION) == 1) {
         return print_version();
     }
 
-    # --color validation. Only 8 or 16 are valid within tier-1
-    # scope; 256 / truecolor are explicit post-v1 work (CLAUDE.md
-    # color-tier discipline). Run BEFORE the positional check so
+    # --color validation. Run BEFORE the positional check so
     # `kii --color 7` fails fast on the flag without first nagging
     # about the missing path.
-    var color = flags_get_int(fs, f_color);
-    if (color != 8 && color != 16) {
+    var color = flags_get_int(fs, KII_F_COLOR);
+    if (kii_validate_color(color) == 0) {
         _eprint("kii: --color must be 8 or 16\n");
         print_usage(fs);
         return KII_EXIT_USAGE;
     }
-    var width = flags_get_int(fs, f_width);
+    var width = flags_get_int(fs, KII_F_WIDTH);
 
     # Positional path arg. kii takes exactly one image path per
     # CLAUDE.md domain rule ("kii takes ONE file path. No glob, no

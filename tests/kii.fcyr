@@ -1,13 +1,145 @@
-# kii fuzz harness
+# kii fuzz harness — arg parser crash-safety.
+#
+# Sub-bite (d) of M1. Drives kii's flag set (registered via
+# kii_register_flags) with deterministic LCG-generated random
+# argv arrays. The contract is narrow: flags_parse must never
+# crash on malformed input, only return FLAG_ERR_* cleanly.
+#
+# Determinism: fixed seed (1) + Numerical Recipes LCG. Same byte
+# sequences every CI run; failures bisect cleanly. M2 will add a
+# separate harness (driven from kii.fcyr or a new tests/png_fuzz.fcyr)
+# for malformed PNG bytes — different surface entirely.
+#
+# Stdlib + flags + cli.cyr auto-included via cyrius.cyml + the
+# include below.
 
-fn fuzz_main(data, len) {
-    if (len == 0) { return 0; }
+include "src/cli.cyr"
+
+# Total iterations. 10_000 takes well under a second; raised at
+# M7 (security audit) to 10⁶ per the v1.0 acceptance criterion.
+var FUZZ_ITERS       = 10000;
+
+# Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
+# is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
+var FUZZ_MAX_ARGC    = 8;
+var FUZZ_MAX_ARG_LEN = 24;
+
+# ---- deterministic LCG ----------------------------------------------
+# Numerical Recipes constants. Seed is mutable module state so each
+# rand call advances it. Masked to 32 bits after multiply to keep
+# the modulus operand positive (avoids sign weirdness with `%`).
+var _fuzz_seed = 1;
+
+fn _fuzz_rand(): i64 {
+    _fuzz_seed = _fuzz_seed * 1664525 + 1013904223;
+    _fuzz_seed = _fuzz_seed & 0xFFFFFFFF;
+    return _fuzz_seed;
+}
+
+fn _fuzz_rand_range(n): i64 {
+    return _fuzz_rand() % n;
+}
+
+# Pick a printable-ASCII byte (0x21–0x7E). NUL is excluded because
+# argv entries are null-terminated cstrs; multi-byte UTF-8 leaders
+# are excluded so we focus pressure on the parser's flag-recognition
+# path (which is ASCII-only) rather than on string-handling
+# robustness (separate concern, separate fuzz at M2+).
+fn _fuzz_printable_byte(): i64 {
+    var span = 0x7E - 0x21 + 1;              # 94 printable bytes
+    return 0x21 + (_fuzz_rand() % span);
+}
+
+# Build one random arg in `buf`, null-terminated. Returns the
+# byte length excluding the terminator. The first 1–2 bytes are
+# biased to "-" / "--" 50% of the time so the parser actually
+# exercises its flag-recognition path (a uniform random byte
+# starts with '-' only ~1% of the time, far too rare to find
+# parser bugs in 10k iters).
+fn _fuzz_build_arg(buf, max_len): i64 {
+    var mode = _fuzz_rand_range(4);
+    var off  = 0;
+    if (mode == 0) {
+        # "--foo" / "--foo=bar" shape
+        store8(buf + 0, 0x2D);
+        store8(buf + 1, 0x2D);
+        off = 2;
+    } else { if (mode == 1) {
+        # "-x" / "-xy" shape (bundled rejection path is reachable)
+        store8(buf + 0, 0x2D);
+        off = 1;
+    } else {
+        # bare positional / weird bytes
+        off = 0;
+    } }
+    var body_len = 1 + _fuzz_rand_range(max_len - off - 1);
+    var i = 0;
+    while (i < body_len) {
+        store8(buf + off + i, _fuzz_printable_byte());
+        i = i + 1;
+    }
+    store8(buf + off + body_len, 0);
+    return off + body_len;
+}
+
+# One fuzz iteration. `scratch` holds the raw bytes of all args
+# packed back-to-back (each null-terminated). `argv_arr` holds
+# pointers into `scratch`, one per arg. argv[0] is always "kii"
+# — programs always have an argv[0] and the parser stores it as
+# prog_name; absent argv[0] would test a never-real path.
+fn fuzz_iter(scratch, argv_arr): i64 {
+    # Reset argv[0] = "kii"
+    store8(scratch + 0, 0x6B);               # 'k'
+    store8(scratch + 1, 0x69);               # 'i'
+    store8(scratch + 2, 0x69);               # 'i'
+    store8(scratch + 3, 0);
+    store64(argv_arr + 0, scratch + 0);
+    var off = 4;
+    var argc_val = 1 + _fuzz_rand_range(FUZZ_MAX_ARGC - 1);
+    var i = 1;
+    while (i < argc_val) {
+        var arg_len = _fuzz_build_arg(scratch + off, FUZZ_MAX_ARG_LEN);
+        store64(argv_arr + i * 8, scratch + off);
+        off = off + arg_len + 1;             # +1 for the null
+        i = i + 1;
+    }
+
+    # Drive kii's actual flag set. flags_new allocates from the
+    # bump allocator per iter; that's fine — 10k × ~few KB stays
+    # under 100 MB worst-case, well below the heap layout's brk
+    # ceiling (~77 MB final per the cyrius README, but the bump
+    # allocator grows on demand). The contract: return value is
+    # 0 or -1; never crash.
+    var fs = flags_new();
+    kii_register_flags(fs);
+    flags_parse(fs, argc_val, argv_arr);
     return 0;
 }
 
-fn main() {
+fn main(): i64 {
     alloc_init();
-    fuzz_main("test", 4);
+
+    # Per-iter scratch + argv. Function-scope `var buf[N]` = N
+    # bytes (cyrius semantics — CLAUDE.md hard rule). 1 KB scratch
+    # is comfortably larger than FUZZ_MAX_ARGC × (FUZZ_MAX_ARG_LEN
+    # + 1) = 8 × 25 = 200 bytes. argv_arr at 80 bytes = 10 slots,
+    # one more than FUZZ_MAX_ARGC for header alignment.
+    var scratch[1024];
+    var argv_arr[80];
+
+    var iter = 0;
+    while (iter < FUZZ_ITERS) {
+        fuzz_iter(&scratch, &argv_arr);
+        iter = iter + 1;
+    }
+
+    # Report. fmt_printf expects a vec for its varargs (per
+    # lib/fmt.cyr — vec_get walks args by index). The integer
+    # landing in the output is what CI greps for; "fuzz: ok" stays
+    # so the human-readable log is unambiguous.
+    var report_args = vec_new();
+    vec_push(report_args, iter);
+    fmt_printf("fuzz: %d iterations passed (arg-parser crash-safety)\n", report_args);
     println("fuzz: ok");
     return 0;
 }
