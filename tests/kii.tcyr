@@ -515,6 +515,49 @@ fn main() {
     assert_eq(png_decode_structure("/tmp/kii-test-trunc-mid.png", &pstr_trunc),
               PNG_ERR_CHUNK, "truncated mid-IEND-CRC → PNG_ERR_CHUNK");
 
+    # ---- M3(a) — sankoch zlib round-trip ---------------------------
+    # First sub-bite of M3 — confirms the sankoch stdlib dep wires
+    # up cleanly and that the exact API surface kii will consume at
+    # M3(c) (zlib_compress + zlib_decompress) round-trips byte-
+    # identical. PNG IDAT uses the zlib wrapper (not raw DEFLATE)
+    # per spec § 10.3, so we exercise zlib_* and not deflate_*.
+    test_group("M3(a) — sankoch zlib round-trip");
+
+    # Deterministic 16-byte input: ASCII 'A'..'P'.
+    var rt_in[16];
+    var rt_i = 0;
+    while (rt_i < 16) {
+        store8(&rt_in + rt_i, 0x41 + rt_i);
+        rt_i = rt_i + 1;
+    }
+
+    # Compress. Zlib overhead for 16 bytes of non-repeating ASCII is
+    # ~12 bytes of header/checksum/Huffman framing; 64-byte buf is
+    # plenty.
+    var rt_compressed[64];
+    var rt_clen = zlib_compress(&rt_in, 16, &rt_compressed, 64);
+    assert(rt_clen > 0,  "zlib_compress returns positive length");
+    assert(rt_clen < 64, "compressed fits in 64-byte buffer");
+
+    # Decompress back into a fresh buffer; should recover all 16 bytes.
+    var rt_decompressed[32];
+    var rt_dlen = zlib_decompress(&rt_compressed, rt_clen, &rt_decompressed, 32);
+    assert_eq(rt_dlen, 16, "zlib_decompress recovers original length");
+
+    # Byte-identical verification.
+    var rt_match = 1;
+    var rt_j = 0;
+    while (rt_j < 16) {
+        if (load8(&rt_in + rt_j) != load8(&rt_decompressed + rt_j)) { rt_match = 0; }
+        rt_j = rt_j + 1;
+    }
+    assert_eq(rt_match, 1, "decompressed bytes byte-identical to input");
+
+    # Buffer-too-small surfaces as negative.
+    var rt_dec_small[8];
+    var rt_dlen_neg = zlib_decompress(&rt_compressed, rt_clen, &rt_dec_small, 8);
+    assert(rt_dlen_neg < 0, "dst_cap too small → negative return");
+
     return assert_summary();
 }
 
