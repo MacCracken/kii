@@ -63,16 +63,19 @@ var IHDR_COLOR_TYPE_OFFSET = 24;
 var PNG_IHDR_CHUNK_LEN = 25;
 
 # ---- structural-decode struct (sub-bite (c)+) ----------------------
-# Caller passes a ≥64-byte buffer to png_decode_structure; on
-# PNG_OK we populate eight i64 slots:
+# Caller passes a ≥80-byte buffer to png_decode_structure; on
+# PNG_OK we populate ten i64 slots:
 #   +0   width             ┐
 #   +8   height            │ same layout as IHDR_*_OFFSET so
-#   +16  bit_depth         │ _eprint_ihdr_summary works on both
+#   +16  bit_depth         │ _print_ihdr_summary works on both
 #   +24  color_type        ┘
 #   +32  idat_count        — number of IDAT chunks seen
 #   +40  idat_total_size   — sum of IDAT data-section lengths (sankoch fodder at M3)
 #   +48  seen_iend         — 0/1; 0 means EOF before IEND (warning, not error)
-#   +56  (reserved)
+#   +56  interlace         — PNG spec § 11.2.2 byte 12 of IHDR data (0 = none, 1 = Adam7)
+#   +64  idat_buf          — alloc'd ptr (size = idat_total_size); concat'd IDAT data
+#                            for sankoch zlib_decompress at M3(c). 0 if no IDATs.
+#   +72  (reserved for future M3 fields)
 var STRUCT_WIDTH_OFFSET           = 0;
 var STRUCT_HEIGHT_OFFSET          = 8;
 var STRUCT_BIT_DEPTH_OFFSET       = 16;
@@ -80,6 +83,8 @@ var STRUCT_COLOR_TYPE_OFFSET      = 24;
 var STRUCT_IDAT_COUNT_OFFSET      = 32;
 var STRUCT_IDAT_TOTAL_SIZE_OFFSET = 40;
 var STRUCT_SEEN_IEND_OFFSET       = 48;
+var STRUCT_INTERLACE_OFFSET       = 56;
+var STRUCT_IDAT_BUF_OFFSET        = 64;
 
 # ---- CRC32 (PNG spec § 5.3) ----------------------------------------
 # Standard "Ethernet" CRC-32 reversed polynomial 0xEDB88320 (same
@@ -141,6 +146,100 @@ fn _png_crc_update(crc, buf, len): i64 {
 fn png_crc32(buf, len): i64 {
     if (_png_crc_table_inited == 0) { png_crc_init(); }
     return _png_crc_update(0xFFFFFFFF, buf, len) ^ 0xFFFFFFFF;
+}
+
+# ---- chunk-type predicates -----------------------------------------
+# 4-byte chunk type comparison. Chunk types are case-sensitive ASCII
+# per spec § 5.4 (case bit also carries ancillary/private/safe-to-copy
+# semantics; for IDAT/IEND the case is fixed). Helpers used by both
+# walker passes (phase 1 validates, phase 2 copies).
+fn _png_is_idat(type_buf): i64 {
+    if (load8(type_buf + 0) == 0x49 &&
+        load8(type_buf + 1) == 0x44 &&
+        load8(type_buf + 2) == 0x41 &&
+        load8(type_buf + 3) == 0x54) { return 1; }
+    return 0;
+}
+
+fn _png_is_iend(type_buf): i64 {
+    if (load8(type_buf + 0) == 0x49 &&
+        load8(type_buf + 1) == 0x45 &&
+        load8(type_buf + 2) == 0x4E &&
+        load8(type_buf + 3) == 0x44) { return 1; }
+    return 0;
+}
+
+# Phase-2 IDAT copier. Called after png_decode_structure's phase 1
+# walker has validated the file and computed idat_total_size.
+# Re-opens the file (no lseek to keep things portable), skips past
+# signature + IHDR, walks chunks again, copies IDAT data into
+# `idat_buf` at offset `bytes_copied`. Non-IDAT chunk data is
+# streamed past via a 4 KB scratch buf — we don't re-validate CRC
+# in phase 2 (phase 1 already did that).
+#
+# Returns bytes copied (should equal expected_total) or -1 on
+# I/O failure.
+fn _png_copy_idat(path, idat_buf, expected_total): i64 {
+    var fd_res = file_open_r(path, O_RDONLY, 0);
+    if (is_err_result(fd_res) == 1) { return 0 - 1; }
+    var fd = result_unwrap(fd_res);
+
+    # Skip 8-byte signature + 25-byte IHDR chunk in one read.
+    var skip[64];
+    var skip_res = file_read_r(fd, &skip, 33);
+    if (is_err_result(skip_res) == 1)         { file_close(fd); return 0 - 1; }
+    if (result_unwrap(skip_res) < 33)         { file_close(fd); return 0 - 1; }
+
+    var bytes_copied = 0;
+    var walking = 1;
+    while (walking == 1) {
+        var hdr[16];
+        var hdr_res = file_read_r(fd, &hdr, 8);
+        if (is_err_result(hdr_res) == 1) { file_close(fd); return 0 - 1; }
+        var n_hdr = result_unwrap(hdr_res);
+        if (n_hdr == 0) { walking = 0; }
+        else { if (n_hdr < 8)             { file_close(fd); return 0 - 1; }
+        else {
+
+        var chunk_len = png_read_u32_be(&hdr, 0);
+        var is_idat   = _png_is_idat(&hdr + 4);
+        var is_iend   = _png_is_iend(&hdr + 4);
+
+        if (is_idat == 1) {
+            # Read directly into idat_buf at the running offset.
+            # chunk_len can be 0 (degenerate but spec-legal); guard
+            # against negative dst pointer arithmetic.
+            if (chunk_len > 0) {
+                var rd = file_read_r(fd, idat_buf + bytes_copied, chunk_len);
+                if (is_err_result(rd) == 1)             { file_close(fd); return 0 - 1; }
+                if (result_unwrap(rd) < chunk_len)      { file_close(fd); return 0 - 1; }
+                bytes_copied = bytes_copied + chunk_len;
+            }
+        } else {
+            # Stream past non-IDAT chunk via scratch buf.
+            var scratch[4096];
+            var remaining = chunk_len;
+            while (remaining > 0) {
+                var to_read = remaining;
+                if (to_read > 4096) { to_read = 4096; }
+                var rd = file_read_r(fd, &scratch, to_read);
+                if (is_err_result(rd) == 1)         { file_close(fd); return 0 - 1; }
+                if (result_unwrap(rd) < to_read)    { file_close(fd); return 0 - 1; }
+                remaining = remaining - to_read;
+            }
+        }
+
+        # Skip 4-byte CRC (validated in phase 1). Read-and-discard
+        # to advance the fd position.
+        var crc_skip[8];
+        file_read_r(fd, &crc_skip, 4);
+
+        if (is_iend == 1) { walking = 0; }
+
+        } }
+    }
+    file_close(fd);
+    return bytes_copied;
 }
 
 # Pure in-memory signature check. Caller guarantees `buf` has at
@@ -299,6 +398,11 @@ fn png_decode_structure(path, out_struct): i64 {
     store64(out_struct + STRUCT_HEIGHT_OFFSET,     png_read_u32_be(&ihdr, 12));
     store64(out_struct + STRUCT_BIT_DEPTH_OFFSET,  load8(&ihdr + 16));
     store64(out_struct + STRUCT_COLOR_TYPE_OFFSET, load8(&ihdr + 17));
+    # Interlace byte: IHDR data offset 12 within the chunk's 13-
+    # byte data region, which is offset 20 in the 25-byte ihdr buf
+    # (4 length + 4 type + 12 = 20). 0 = no interlace, 1 = Adam7.
+    # M3(c) rejects interlace=1; (b) just captures.
+    store64(out_struct + STRUCT_INTERLACE_OFFSET,  load8(&ihdr + 20));
 
     # ---- chunk walk through IEND ----------------------------------
     var idat_count = 0;
@@ -318,26 +422,8 @@ fn png_decode_structure(path, out_struct): i64 {
         else {
 
         var chunk_len = png_read_u32_be(&hdr_buf, 0);
-
-        # Match chunk type against IDAT (0x49 44 41 54) + IEND
-        # (0x49 45 4E 44). Cheap byte-by-byte compare beats a
-        # streq + cstr round-trip; chunk types are exactly 4 bytes.
-        var is_idat = 0;
-        if (load8(&hdr_buf + 4) == 0x49) {
-            if (load8(&hdr_buf + 5) == 0x44) {
-                if (load8(&hdr_buf + 6) == 0x41) {
-                    if (load8(&hdr_buf + 7) == 0x54) { is_idat = 1; }
-                }
-            }
-        }
-        var is_iend = 0;
-        if (load8(&hdr_buf + 4) == 0x49) {
-            if (load8(&hdr_buf + 5) == 0x45) {
-                if (load8(&hdr_buf + 6) == 0x4E) {
-                    if (load8(&hdr_buf + 7) == 0x44) { is_iend = 1; }
-                }
-            }
-        }
+        var is_idat   = _png_is_idat(&hdr_buf + 4);
+        var is_iend   = _png_is_iend(&hdr_buf + 4);
 
         # Initialize streaming CRC; fold in type bytes.
         var crc = 0xFFFFFFFF;
@@ -383,5 +469,20 @@ fn png_decode_structure(path, out_struct): i64 {
     store64(out_struct + STRUCT_IDAT_COUNT_OFFSET,      idat_count);
     store64(out_struct + STRUCT_IDAT_TOTAL_SIZE_OFFSET, idat_total);
     store64(out_struct + STRUCT_SEEN_IEND_OFFSET,       seen_iend);
+
+    # ---- phase 2: alloc + copy IDAT data --------------------------
+    # Only allocate if there are IDATs. Phase 1 already validated
+    # CRCs and chunk structure; phase 2 trusts that and just
+    # streams bytes. Re-open the file (no lseek dependency) —
+    # cost is one extra open syscall per PNG decode, well under
+    # 100µs on a warm-cache tmpfs path.
+    var idat_buf = 0;
+    if (idat_total > 0) {
+        idat_buf = alloc(idat_total);
+        if (idat_buf == 0) { return PNG_ERR_CHUNK; }   # OOM repurposes ERR_CHUNK; rare in practice
+        var copied = _png_copy_idat(path, idat_buf, idat_total);
+        if (copied != idat_total) { return PNG_ERR_CHUNK; }
+    }
+    store64(out_struct + STRUCT_IDAT_BUF_OFFSET, idat_buf);
     return PNG_OK;
 }

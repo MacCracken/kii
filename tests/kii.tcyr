@@ -62,6 +62,47 @@ fn _ut_build_min_png(buf, w, h, bit_depth, color_type): i64 {
     return 45;
 }
 
+# Build a PNG with one IDAT chunk in between IHDR and IEND. Layout:
+#   signature (8) + IHDR (25) + IDAT (12 + idat_len) + IEND (12)
+# Interlace byte is parameterized so callers can craft Adam7
+# fixtures for the M3(c) rejection test. IDAT CRC is computed at
+# runtime; IEND CRC is the fixed constant. Returns total byte
+# count = 57 + idat_len.
+fn _ut_build_png_with_idat(buf, w, h, bit_depth, color_type, interlace,
+                            idat_data, idat_len): i64 {
+    # ---- signature ----
+    memcpy(buf + 0, PNG_MAGIC, PNG_MAGIC_LEN);
+    # ---- IHDR ----
+    _ut_put_u32_be(buf, 8, 13);
+    store8(buf + 12, 0x49); store8(buf + 13, 0x48);
+    store8(buf + 14, 0x44); store8(buf + 15, 0x52);      # "IHDR"
+    _ut_put_u32_be(buf, 16, w);
+    _ut_put_u32_be(buf, 20, h);
+    store8(buf + 24, bit_depth);
+    store8(buf + 25, color_type);
+    store8(buf + 26, 0);                                 # compression
+    store8(buf + 27, 0);                                 # filter
+    store8(buf + 28, interlace);                         # interlace (parameterized)
+    var ihdr_crc = png_crc32(buf + 12, 17);
+    _ut_put_u32_be(buf, 29, ihdr_crc);
+    # ---- IDAT ----
+    var idat_off = 33;
+    _ut_put_u32_be(buf, idat_off, idat_len);
+    store8(buf + idat_off + 4, 0x49); store8(buf + idat_off + 5, 0x44);
+    store8(buf + idat_off + 6, 0x41); store8(buf + idat_off + 7, 0x54);  # "IDAT"
+    if (idat_len > 0) { memcpy(buf + idat_off + 8, idat_data, idat_len); }
+    var idat_crc = png_crc32(buf + idat_off + 4, 4 + idat_len);
+    _ut_put_u32_be(buf, idat_off + 8 + idat_len, idat_crc);
+    # ---- IEND ----
+    var iend_off = idat_off + 12 + idat_len;
+    _ut_put_u32_be(buf, iend_off, 0);
+    store8(buf + iend_off + 4, 0x49); store8(buf + iend_off + 5, 0x45);
+    store8(buf + iend_off + 6, 0x4E); store8(buf + iend_off + 7, 0x44);  # "IEND"
+    store8(buf + iend_off + 8,  0xAE); store8(buf + iend_off + 9,  0x42);
+    store8(buf + iend_off + 10, 0x60); store8(buf + iend_off + 11, 0x82);
+    return iend_off + 12;
+}
+
 fn main() {
     alloc_init();
 
@@ -557,6 +598,62 @@ fn main() {
     var rt_dec_small[8];
     var rt_dlen_neg = zlib_decompress(&rt_compressed, rt_clen, &rt_dec_small, 8);
     assert(rt_dlen_neg < 0, "dst_cap too small → negative return");
+
+    # ---- M3(b) — interlace capture --------------------------------
+    # Existing min PNGs build with interlace=0; the new
+    # STRUCT_INTERLACE_OFFSET slot should reflect that.
+    test_group("M3(b) — png_decode_structure captures interlace byte");
+    var pbuf_ilace0[80];
+    var len_il0 = _ut_build_min_png(&pbuf_ilace0, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-ilace0.png", &pbuf_ilace0, len_il0);
+    var pstr_il0[80];
+    assert_eq(png_decode_structure("/tmp/kii-test-ilace0.png", &pstr_il0), PNG_OK,
+              "interlace=0 fixture parses");
+    assert_eq(load64(&pstr_il0 + STRUCT_INTERLACE_OFFSET), 0, "interlace = 0 captured");
+
+    # Adam7 fixture: build with interlace byte = 1. M3(c) will
+    # reject this in main.cyr's dispatch; (b) just confirms the
+    # capture path works.
+    var pbuf_ilace1[80];
+    var ilace1_len = _ut_build_png_with_idat(&pbuf_ilace1, 4, 2, 8, 2, 1, "\x00", 1);
+    file_write_all("/tmp/kii-test-ilace1.png", &pbuf_ilace1, ilace1_len);
+    var pstr_il1[80];
+    assert_eq(png_decode_structure("/tmp/kii-test-ilace1.png", &pstr_il1), PNG_OK,
+              "interlace=1 (Adam7) fixture parses at structural layer");
+    assert_eq(load64(&pstr_il1 + STRUCT_INTERLACE_OFFSET), 1, "interlace = 1 captured");
+
+    # ---- M3(b) — IDAT buffer accumulation -------------------------
+    # Build a PNG with a single IDAT chunk holding a known 4-byte
+    # payload. After png_decode_structure, idat_buf should point
+    # to a copy of those exact bytes; idat_total_size == 4.
+    test_group("M3(b) — png_decode_structure accumulates IDAT bytes");
+    var pbuf_idat[80];
+    var idat_payload = "\x78\x9c\x03\x00";   # zlib empty-stream bytes; arbitrary 4 bytes work
+    var pbuf_idat_len = _ut_build_png_with_idat(&pbuf_idat, 4, 2, 8, 2, 0,
+                                                  idat_payload, 4);
+    file_write_all("/tmp/kii-test-idat.png", &pbuf_idat, pbuf_idat_len);
+    var pstr_idat[80];
+    assert_eq(png_decode_structure("/tmp/kii-test-idat.png", &pstr_idat), PNG_OK,
+              "PNG-with-IDAT fixture → PNG_OK");
+    assert_eq(load64(&pstr_idat + STRUCT_IDAT_COUNT_OFFSET),      1, "1 IDAT chunk");
+    assert_eq(load64(&pstr_idat + STRUCT_IDAT_TOTAL_SIZE_OFFSET), 4, "IDAT total = 4 bytes");
+    var idat_buf_ptr = load64(&pstr_idat + STRUCT_IDAT_BUF_OFFSET);
+    assert(idat_buf_ptr != 0, "idat_buf is non-null when IDATs present");
+    # Byte-for-byte verify the copy.
+    assert_eq(load8(idat_buf_ptr + 0), 0x78, "idat_buf[0] = 0x78");
+    assert_eq(load8(idat_buf_ptr + 1), 0x9c, "idat_buf[1] = 0x9c");
+    assert_eq(load8(idat_buf_ptr + 2), 0x03, "idat_buf[2] = 0x03");
+    assert_eq(load8(idat_buf_ptr + 3), 0x00, "idat_buf[3] = 0x00");
+
+    # No-IDAT case: idat_buf stays 0 (no alloc).
+    test_group("M3(b) — no-IDAT case leaves idat_buf null");
+    var pbuf_noidat[80];
+    _ut_build_min_png(&pbuf_noidat, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-noidat.png", &pbuf_noidat, 45);
+    var pstr_noidat[80];
+    png_decode_structure("/tmp/kii-test-noidat.png", &pstr_noidat);
+    assert_eq(load64(&pstr_noidat + STRUCT_IDAT_COUNT_OFFSET), 0, "0 IDATs");
+    assert_eq(load64(&pstr_noidat + STRUCT_IDAT_BUF_OFFSET),   0, "idat_buf = 0 when no IDATs");
 
     return assert_summary();
 }

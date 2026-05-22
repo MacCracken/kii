@@ -195,9 +195,10 @@ fn main(): i64 {
     # M2(d); until then exit 1 with a parenthetical WIP marker.
     #
     # png_decode_structure handles png_crc_init internally; no
-    # need to call it here.
+    # need to call it here. pstruct is 80 bytes (10 i64 slots) to
+    # cover the M3(b)-extended layout (idat_buf + interlace).
     var path = flags_positional(fs, 0);
-    var pstruct[64];
+    var pstruct[80];
     var rc = png_decode_structure(path, &pstruct);
     if (rc == PNG_ERR_OPEN) {
         _eprint_path_msg(path, "cannot open file");
