@@ -40,6 +40,8 @@ var PNG_ERR_OPEN      = 1;  # File could not be opened (not found, perms, etc.)
 var PNG_ERR_TRUNCATED = 2;  # File read returned fewer than 8 bytes
 var PNG_ERR_NOT_PNG   = 3;  # First 8 bytes did not match PNG_MAGIC
 var PNG_ERR_HEADER    = 4;  # IHDR chunk truncated, wrong length, or wrong type
+var PNG_ERR_CRC       = 5;  # IHDR or post-IHDR chunk CRC32 mismatch
+var PNG_ERR_CHUNK     = 6;  # Non-IHDR chunk truncated mid-read (started but EOF before completing)
 
 # ---- IHDR struct layout (sub-bite (b)) -----------------------------
 # Caller passes a ≥32-byte buffer; png_decode_header populates four
@@ -58,8 +60,88 @@ var IHDR_COLOR_TYPE_OFFSET = 24;
 
 # IHDR chunk on disk: 4 (length) + 4 (type "IHDR") + 13 (data) +
 # 4 (CRC32) = 25 bytes immediately after the 8-byte signature.
-# CRC validation is sub-bite (c) work; (b) reads + parses only.
 var PNG_IHDR_CHUNK_LEN = 25;
+
+# ---- structural-decode struct (sub-bite (c)+) ----------------------
+# Caller passes a ≥64-byte buffer to png_decode_structure; on
+# PNG_OK we populate eight i64 slots:
+#   +0   width             ┐
+#   +8   height            │ same layout as IHDR_*_OFFSET so
+#   +16  bit_depth         │ _eprint_ihdr_summary works on both
+#   +24  color_type        ┘
+#   +32  idat_count        — number of IDAT chunks seen
+#   +40  idat_total_size   — sum of IDAT data-section lengths (sankoch fodder at M3)
+#   +48  seen_iend         — 0/1; 0 means EOF before IEND (warning, not error)
+#   +56  (reserved)
+var STRUCT_WIDTH_OFFSET           = 0;
+var STRUCT_HEIGHT_OFFSET          = 8;
+var STRUCT_BIT_DEPTH_OFFSET       = 16;
+var STRUCT_COLOR_TYPE_OFFSET      = 24;
+var STRUCT_IDAT_COUNT_OFFSET      = 32;
+var STRUCT_IDAT_TOTAL_SIZE_OFFSET = 40;
+var STRUCT_SEEN_IEND_OFFSET       = 48;
+
+# ---- CRC32 (PNG spec § 5.3) ----------------------------------------
+# Standard "Ethernet" CRC-32 reversed polynomial 0xEDB88320 (same
+# as zlib / gzip / Ethernet). Implementation: 256-entry lookup
+# table, built once at startup. Module-scope `var arr[256]` =
+# 256 × u64 slots per CLAUDE.md var-array convention; we use the
+# low 32 bits of each slot. Table is the first first-party CRC32
+# in the AGNOS ecosystem (grep showed no stdlib consumer) — if a
+# second consumer surfaces it extracts to stdlib per the
+# extract-on-2nd-consumer pattern.
+var _PNG_CRC_TABLE[256];
+var _png_crc_table_inited = 0;
+
+# Idempotent table builder. Cheap to over-call (first guard
+# returns immediately). Called from png_decode_*/png_crc32 so
+# callers never need to remember; main.cyr also calls it once at
+# startup for cache warmth.
+fn png_crc_init(): i64 {
+    if (_png_crc_table_inited == 1) { return 0; }
+    var i = 0;
+    while (i < 256) {
+        var c = i;
+        var k = 0;
+        while (k < 8) {
+            if ((c & 1) == 1) {
+                c = (c >> 1) ^ 0xEDB88320;
+            } else {
+                c = c >> 1;
+            }
+            k = k + 1;
+        }
+        store64(&_PNG_CRC_TABLE + i * 8, c);
+        i = i + 1;
+    }
+    _png_crc_table_inited = 1;
+    return 0;
+}
+
+# Streaming CRC update primitive. `crc` is the running register
+# (init to 0xFFFFFFFF for a fresh CRC). Returns the new register
+# value. Callers fold pieces of a chunk in sequence (type, data
+# stream), then xor-with-0xFFFFFFFF at the end to get the final.
+# Used by both png_crc32 (one-shot) and the chunk walker (which
+# streams chunk data through a 4 KB scratch buffer to bound
+# memory regardless of chunk size).
+fn _png_crc_update(crc, buf, len): i64 {
+    var c = crc;
+    var i = 0;
+    while (i < len) {
+        var idx = (c ^ load8(buf + i)) & 0xFF;
+        c = load64(&_PNG_CRC_TABLE + idx * 8) ^ (c >> 8);
+        i = i + 1;
+    }
+    return c;
+}
+
+# One-shot CRC32 over `len` bytes at `buf`. Lazy-inits the table
+# (defensive — png_decode_* also calls png_crc_init eagerly).
+fn png_crc32(buf, len): i64 {
+    if (_png_crc_table_inited == 0) { png_crc_init(); }
+    return _png_crc_update(0xFFFFFFFF, buf, len) ^ 0xFFFFFFFF;
+}
 
 # Pure in-memory signature check. Caller guarantees `buf` has at
 # least PNG_MAGIC_LEN bytes. Returns 1 if those bytes match the
@@ -152,6 +234,14 @@ fn png_decode_header(path, out_ihdr): i64 {
     if (load8(&ihdr + 6) != 0x44) { return PNG_ERR_HEADER; }
     if (load8(&ihdr + 7) != 0x52) { return PNG_ERR_HEADER; }
 
+    # CRC32 (sub-bite (c)). Validates bytes 4..20 (type + data, 17
+    # bytes) against the stored CRC at bytes 21..24. PNG spec § 5.3
+    # — the length field is NOT included in the CRC.
+    png_crc_init();
+    var ihdr_crc = png_crc32(&ihdr + 4, 17);
+    var stored_crc = png_read_u32_be(&ihdr, 21);
+    if (ihdr_crc != stored_crc) { return PNG_ERR_CRC; }
+
     # Data region starts at offset 8 within the chunk buffer.
     #   bytes 8..11   width  (u32 BE)
     #   bytes 12..15  height (u32 BE)
@@ -162,5 +252,136 @@ fn png_decode_header(path, out_ihdr): i64 {
     store64(out_ihdr + IHDR_HEIGHT_OFFSET,     png_read_u32_be(&ihdr, 12));
     store64(out_ihdr + IHDR_BIT_DEPTH_OFFSET,  load8(&ihdr + 16));
     store64(out_ihdr + IHDR_COLOR_TYPE_OFFSET, load8(&ihdr + 17));
+    return PNG_OK;
+}
+
+# Full structural decode: signature + IHDR + chunk walk through
+# IEND. Validates CRC on every chunk. Caller stack-allocates
+# `out_struct` (≥64 bytes); on PNG_OK we populate STRUCT_*
+# slots. Missing IEND is NOT an error per spec § 5.3
+# tolerance — we set seen_iend=0 and return PNG_OK so the
+# caller can warn but still emit the IHDR summary.
+#
+# Chunk data is streamed through a 4 KB scratch buffer (not
+# buffered whole) so the worst-case memory cost is bounded
+# regardless of input size. IDAT data isn't kept at M2; we
+# accumulate count + total size for M3's sankoch DEFLATE
+# consumer to allocate against.
+fn png_decode_structure(path, out_struct): i64 {
+    png_crc_init();
+
+    var fd_res = file_open_r(path, O_RDONLY, 0);
+    if (is_err_result(fd_res) == 1) { return PNG_ERR_OPEN; }
+    var fd = result_unwrap(fd_res);
+
+    # ---- signature (same logic as png_validate_file_signature) ----
+    var sig[16];
+    var sig_res = file_read_r(fd, &sig, PNG_MAGIC_LEN);
+    if (is_err_result(sig_res) == 1)                 { file_close(fd); return PNG_ERR_OPEN; }
+    if (result_unwrap(sig_res) < PNG_MAGIC_LEN)      { file_close(fd); return PNG_ERR_TRUNCATED; }
+    if (png_check_signature(&sig) == 0)              { file_close(fd); return PNG_ERR_NOT_PNG; }
+
+    # ---- IHDR chunk (same shape as png_decode_header) -------------
+    var ihdr[32];
+    var ihdr_res = file_read_r(fd, &ihdr, PNG_IHDR_CHUNK_LEN);
+    if (is_err_result(ihdr_res) == 1)                { file_close(fd); return PNG_ERR_HEADER; }
+    if (result_unwrap(ihdr_res) < PNG_IHDR_CHUNK_LEN){ file_close(fd); return PNG_ERR_HEADER; }
+    if (png_read_u32_be(&ihdr, 0) != 13)             { file_close(fd); return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 4) != 0x49)                    { file_close(fd); return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 5) != 0x48)                    { file_close(fd); return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 6) != 0x44)                    { file_close(fd); return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 7) != 0x52)                    { file_close(fd); return PNG_ERR_HEADER; }
+    var ihdr_crc   = png_crc32(&ihdr + 4, 17);
+    var stored_crc = png_read_u32_be(&ihdr, 21);
+    if (ihdr_crc != stored_crc)                      { file_close(fd); return PNG_ERR_CRC; }
+
+    store64(out_struct + STRUCT_WIDTH_OFFSET,      png_read_u32_be(&ihdr, 8));
+    store64(out_struct + STRUCT_HEIGHT_OFFSET,     png_read_u32_be(&ihdr, 12));
+    store64(out_struct + STRUCT_BIT_DEPTH_OFFSET,  load8(&ihdr + 16));
+    store64(out_struct + STRUCT_COLOR_TYPE_OFFSET, load8(&ihdr + 17));
+
+    # ---- chunk walk through IEND ----------------------------------
+    var idat_count = 0;
+    var idat_total = 0;
+    var seen_iend  = 0;
+    var walking    = 1;
+
+    while (walking == 1) {
+        # Try to read the 8-byte chunk header (length + type).
+        # Zero bytes = clean EOF without IEND (warning, not error).
+        var hdr_buf[16];
+        var hdr_rd = file_read_r(fd, &hdr_buf, 8);
+        if (is_err_result(hdr_rd) == 1) { file_close(fd); return PNG_ERR_CHUNK; }
+        var n_hdr = result_unwrap(hdr_rd);
+        if (n_hdr == 0) { walking = 0; }
+        else { if (n_hdr < 8) { file_close(fd); return PNG_ERR_CHUNK; }
+        else {
+
+        var chunk_len = png_read_u32_be(&hdr_buf, 0);
+
+        # Match chunk type against IDAT (0x49 44 41 54) + IEND
+        # (0x49 45 4E 44). Cheap byte-by-byte compare beats a
+        # streq + cstr round-trip; chunk types are exactly 4 bytes.
+        var is_idat = 0;
+        if (load8(&hdr_buf + 4) == 0x49) {
+            if (load8(&hdr_buf + 5) == 0x44) {
+                if (load8(&hdr_buf + 6) == 0x41) {
+                    if (load8(&hdr_buf + 7) == 0x54) { is_idat = 1; }
+                }
+            }
+        }
+        var is_iend = 0;
+        if (load8(&hdr_buf + 4) == 0x49) {
+            if (load8(&hdr_buf + 5) == 0x45) {
+                if (load8(&hdr_buf + 6) == 0x4E) {
+                    if (load8(&hdr_buf + 7) == 0x44) { is_iend = 1; }
+                }
+            }
+        }
+
+        # Initialize streaming CRC; fold in type bytes.
+        var crc = 0xFFFFFFFF;
+        crc = _png_crc_update(crc, &hdr_buf + 4, 4);
+
+        # Stream data through a 4 KB scratch buffer. Bounded
+        # memory regardless of chunk_len.
+        var scratch[4096];
+        var remaining = chunk_len;
+        while (remaining > 0) {
+            var to_read = remaining;
+            if (to_read > 4096) { to_read = 4096; }
+            var rd = file_read_r(fd, &scratch, to_read);
+            if (is_err_result(rd) == 1) { file_close(fd); return PNG_ERR_CHUNK; }
+            var n = result_unwrap(rd);
+            if (n < to_read) { file_close(fd); return PNG_ERR_CHUNK; }
+            crc = _png_crc_update(crc, &scratch, n);
+            remaining = remaining - n;
+        }
+        crc = crc ^ 0xFFFFFFFF;
+
+        # Read 4-byte stored CRC; compare against streamed.
+        var crc_buf[8];
+        var crc_rd = file_read_r(fd, &crc_buf, 4);
+        if (is_err_result(crc_rd) == 1) { file_close(fd); return PNG_ERR_CHUNK; }
+        if (result_unwrap(crc_rd) < 4)  { file_close(fd); return PNG_ERR_CHUNK; }
+        var stored = png_read_u32_be(&crc_buf, 0);
+        if (crc != stored) { file_close(fd); return PNG_ERR_CRC; }
+
+        if (is_idat == 1) {
+            idat_count = idat_count + 1;
+            idat_total = idat_total + chunk_len;
+        }
+        if (is_iend == 1) {
+            seen_iend = 1;
+            walking = 0;
+        }
+
+        } }
+    }
+
+    file_close(fd);
+    store64(out_struct + STRUCT_IDAT_COUNT_OFFSET,      idat_count);
+    store64(out_struct + STRUCT_IDAT_TOTAL_SIZE_OFFSET, idat_total);
+    store64(out_struct + STRUCT_SEEN_IEND_OFFSET,       seen_iend);
     return PNG_OK;
 }

@@ -10,15 +10,16 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 shipped at v0.2.0. M2 sub-bites (a) + (b) in progress —
-# PNG signature + IHDR parse land at the entry hop. Valid PNGs
-# print `<path>: <W>x<H> bit_depth=<N> color_type=<T> (structural
-# decode incomplete)` to stderr + exit 1. Malformed signature /
-# IHDR / open failure → distinct path-keyed errors + exit 1.
-# Sub-bite (c) adds the chunk walker + CRC32; sub-bite (d) flips
-# the success path to stdout + exit 0 once CRC validates the
-# IHDR. VERSION + CHANGELOG bump to 0.3.0 lands at end of M2,
-# not per sub-bite.
+# Status: M1 shipped at v0.2.0. M2 sub-bites (a)–(c) in progress —
+# PNG signature + IHDR parse + CRC32 + chunk walker through IEND
+# land at the entry hop. Valid + CRC-clean PNGs print
+# `<path>: <W>x<H> bit_depth=<N> color_type=<T> (structural decode
+# incomplete)` to stderr + exit 1; missing IEND adds a second
+# warning line but still emits the summary. CRC mismatch or
+# truncated post-IHDR chunk → distinct path-keyed errors + exit 1.
+# Sub-bite (d) flips the success path to stdout + exit 0 + drops
+# the parenthetical. VERSION + CHANGELOG bump to 0.3.0 lands at
+# end of M2, not per sub-bite.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -186,15 +187,18 @@ fn main(): i64 {
         return KII_EXIT_USAGE;
     }
 
-    # M2(a)+(b): PNG signature + IHDR parse. Distinct error paths
-    # so users see *what* went wrong (open vs not-PNG vs truncated
-    # vs malformed header) rather than a generic "decode failed".
-    # Full structural output flips to stdout/exit-0 at M2(d) once
-    # CRC validates the chunk; until then exit 1 with a parenthe-
-    # tical WIP marker on the diagnostic line.
+    # M2(a)+(b)+(c): PNG signature + IHDR + CRC32 + chunk walker.
+    # Distinct error paths so users see *what* went wrong (open
+    # vs not-PNG vs truncated vs malformed header vs CRC failure
+    # vs truncated mid-chunk) rather than a generic "decode
+    # failed". Full structural output flips to stdout/exit-0 at
+    # M2(d); until then exit 1 with a parenthetical WIP marker.
+    #
+    # png_decode_structure handles png_crc_init internally; no
+    # need to call it here.
     var path = flags_positional(fs, 0);
-    var ihdr[32];
-    var rc = png_decode_header(path, &ihdr);
+    var pstruct[64];
+    var rc = png_decode_structure(path, &pstruct);
     if (rc == PNG_ERR_OPEN) {
         _eprint_path_msg(path, "cannot open file");
         return KII_EXIT_RUN;
@@ -211,7 +215,24 @@ fn main(): i64 {
         _eprint_path_msg(path, "malformed PNG header");
         return KII_EXIT_RUN;
     }
-    _eprint_ihdr_summary(path, &ihdr);
+    if (rc == PNG_ERR_CRC) {
+        _eprint_path_msg(path, "CRC check failed");
+        return KII_EXIT_RUN;
+    }
+    if (rc == PNG_ERR_CHUNK) {
+        _eprint_path_msg(path, "malformed PNG (chunk truncated after IHDR)");
+        return KII_EXIT_RUN;
+    }
+
+    # PNG_OK. STRUCT_*_OFFSET aligns with IHDR_*_OFFSET for the
+    # first four slots, so _eprint_ihdr_summary works directly on
+    # the pstruct buffer. If IEND was missing, append a warning
+    # line per spec § 5.3 tolerance ("continues with what was
+    # read").
+    _eprint_ihdr_summary(path, &pstruct);
+    if (load64(&pstruct + STRUCT_SEEN_IEND_OFFSET) == 0) {
+        _eprint_path_msg(path, "warning: incomplete PNG (no IEND chunk seen)");
+    }
     return KII_EXIT_RUN;
 }
 

@@ -1,13 +1,15 @@
 # kii test suite
 # Stdlib + flags auto-included via cyrius.cyml.
 #
-# M1 coverage: kii_validate_color predicate + flag-parse wiring
-# (happy paths via the full kii flag set + error-variant dispatch).
-# M2(a) coverage: png_check_signature (pure, in-memory) +
-# png_validate_file_signature (file-level via /tmp fixtures).
-# M2(b) coverage: png_read_u32_be (pure big-endian decode) +
-# png_decode_header (signature + IHDR parse, file-level via /tmp
-# fixtures crafted to W3C PNG § 11.2.2).
+# M1 coverage: kii_validate_color predicate + flag-parse wiring.
+# M2(a) coverage: png_check_signature + png_validate_file_signature.
+# M2(b) coverage: png_read_u32_be + png_decode_header (IHDR parse
+# now ALSO validates CRC at sub-bite (c); the (b) fixtures here
+# use computed CRCs rather than the XXXX placeholders the pre-(c)
+# tests had).
+# M2(c) coverage: png_crc32 canonical values + png_decode_structure
+# (full chunk walk through IEND, CRC validation, missing-IEND
+# soft warning, truncated-chunk hard error).
 # The end-to-end binary smoke is exercised via the manual run
 # shell — Cyrius can't trivially subprocess itself inside a unit
 # test, so .tcyr owns the in-process pieces and the smoke shell
@@ -15,6 +17,50 @@
 
 include "src/cli.cyr"
 include "src/png.cyr"
+
+# ---- Test-only PNG fixture builders ---------------------------------
+# Module-scope helpers so they don't clutter main(). All write to
+# a caller-provided byte buffer + return the total byte count, so
+# callers can either `file_write_all(path, buf, len)` or pass the
+# buffer to in-memory tests.
+
+# Write a big-endian u32 into `buf` at byte offset `off`. PNG is
+# big-endian everywhere per spec § 7; same shape used by every
+# fixture builder below.
+fn _ut_put_u32_be(buf, off, val): i64 {
+    store8(buf + off + 0, (val >> 24) & 0xFF);
+    store8(buf + off + 1, (val >> 16) & 0xFF);
+    store8(buf + off + 2, (val >> 8) & 0xFF);
+    store8(buf + off + 3, val & 0xFF);
+    return 0;
+}
+
+# Build a minimal valid PNG (signature + IHDR + IEND, no IDAT)
+# into `buf`. Returns 45 — total byte count. IHDR CRC computed
+# via png_crc32; IEND CRC is the well-known constant 0xAE426082
+# (= crc32("IEND") — IEND carries no data so its CRC is constant
+# across every PNG ever).
+fn _ut_build_min_png(buf, w, h, bit_depth, color_type): i64 {
+    memcpy(buf + 0, PNG_MAGIC, PNG_MAGIC_LEN);
+    _ut_put_u32_be(buf, 8, 13);                          # IHDR length
+    store8(buf + 12, 0x49); store8(buf + 13, 0x48);      # "IH"
+    store8(buf + 14, 0x44); store8(buf + 15, 0x52);      # "DR"
+    _ut_put_u32_be(buf, 16, w);                          # width
+    _ut_put_u32_be(buf, 20, h);                          # height
+    store8(buf + 24, bit_depth);
+    store8(buf + 25, color_type);
+    store8(buf + 26, 0);                                 # compression
+    store8(buf + 27, 0);                                 # filter
+    store8(buf + 28, 0);                                 # interlace
+    var ihdr_crc = png_crc32(buf + 12, 17);              # type + 13 data bytes
+    _ut_put_u32_be(buf, 29, ihdr_crc);
+    _ut_put_u32_be(buf, 33, 0);                          # IEND length = 0
+    store8(buf + 37, 0x49); store8(buf + 38, 0x45);      # "IE"
+    store8(buf + 39, 0x4E); store8(buf + 40, 0x44);      # "ND"
+    store8(buf + 41, 0xAE); store8(buf + 42, 0x42);      # IEND CRC = 0xAE426082
+    store8(buf + 43, 0x60); store8(buf + 44, 0x82);
+    return 45;
+}
 
 fn main() {
     alloc_init();
@@ -285,16 +331,17 @@ fn main() {
     store8(&be4 + 5, 0x00);
     assert_eq(png_read_u32_be(&be4, 2), 256, "offset 2: 00 00 01 00 → 256");
 
-    # ---- M2(b) — png_decode_header (full IHDR parse) ---------------
-    # Each fixture is a hand-crafted 33-byte file: 8-byte signature
-    # + IHDR chunk (4-byte length + 4-byte type + 13-byte data +
-    # 4-byte CRC). CRC bytes are arbitrary (XXXX) — sub-bite (c)
-    # wires CRC validation; for (b) any 4-byte tail works.
+    # ---- M2(b) — png_decode_header (signature + IHDR + CRC) --------
+    # Fixtures are built via _ut_build_min_png — the IHDR CRC is
+    # computed at runtime via png_crc32 so the fixtures stay valid
+    # as long as the CRC implementation is correct. (The CRC32
+    # canonical-vector test below pins the implementation against
+    # the zlib reference value.)
     test_group("M2(b) — png_decode_header happy path (4x2 RGB)");
-    file_write_all(
-        "/tmp/kii-test-ihdr-4x2.png",
-        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x04\x00\x00\x00\x02\x08\x02\x00\x00\x00XXXX",
-        33);
+    png_crc_init();   # explicit; png_crc32 also lazy-inits but the eager call documents the dep
+    var pbuf_a[80];
+    var len_a = _ut_build_min_png(&pbuf_a, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-ihdr-4x2.png", &pbuf_a, len_a);
     var ihdr_a[32];
     assert_eq(png_decode_header("/tmp/kii-test-ihdr-4x2.png", &ihdr_a),
               PNG_OK,
@@ -305,12 +352,9 @@ fn main() {
     assert_eq(load64(&ihdr_a + IHDR_COLOR_TYPE_OFFSET), 2, "color_type = 2 (RGB)");
 
     test_group("M2(b) — png_decode_header (1024x768 16-bit RGBA)");
-    # color_type = 6 (RGBA), bit_depth = 16, w = 1024, h = 768.
-    # 1024 = 0x00 00 04 00 ; 768 = 0x00 00 03 00.
-    file_write_all(
-        "/tmp/kii-test-ihdr-1024.png",
-        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x04\x00\x00\x00\x03\x00\x10\x06\x00\x00\x00XXXX",
-        33);
+    var pbuf_b[80];
+    var len_b = _ut_build_min_png(&pbuf_b, 1024, 768, 16, 6);
+    file_write_all("/tmp/kii-test-ihdr-1024.png", &pbuf_b, len_b);
     var ihdr_b[32];
     assert_eq(png_decode_header("/tmp/kii-test-ihdr-1024.png", &ihdr_b),
               PNG_OK,
@@ -326,23 +370,27 @@ fn main() {
     # color_type compatibility matrix (M3 work; rejection of 1/2/4
     # bit depths + Adam7 lives there too per roadmap).
     var ihdr_c[32];
-    file_write_all("/tmp/kii-test-ihdr-grey.png",
-        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x00\x00\x00\x00YYYY", 33);
+    var pbuf_grey[80];
+    var len_grey = _ut_build_min_png(&pbuf_grey, 1, 1, 8, 0);
+    file_write_all("/tmp/kii-test-ihdr-grey.png", &pbuf_grey, len_grey);
     assert_eq(png_decode_header("/tmp/kii-test-ihdr-grey.png", &ihdr_c), PNG_OK, "greyscale parses");
     assert_eq(load64(&ihdr_c + IHDR_COLOR_TYPE_OFFSET), 0, "color_type = 0 (greyscale)");
 
-    file_write_all("/tmp/kii-test-ihdr-pal.png",
-        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x03\x00\x00\x00YYYY", 33);
+    var pbuf_pal[80];
+    var len_pal = _ut_build_min_png(&pbuf_pal, 1, 1, 8, 3);
+    file_write_all("/tmp/kii-test-ihdr-pal.png", &pbuf_pal, len_pal);
     assert_eq(png_decode_header("/tmp/kii-test-ihdr-pal.png", &ihdr_c), PNG_OK, "palette parses");
     assert_eq(load64(&ihdr_c + IHDR_COLOR_TYPE_OFFSET), 3, "color_type = 3 (palette)");
 
-    file_write_all("/tmp/kii-test-ihdr-ga.png",
-        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00YYYY", 33);
+    var pbuf_ga[80];
+    var len_ga = _ut_build_min_png(&pbuf_ga, 1, 1, 8, 4);
+    file_write_all("/tmp/kii-test-ihdr-ga.png", &pbuf_ga, len_ga);
     assert_eq(png_decode_header("/tmp/kii-test-ihdr-ga.png", &ihdr_c), PNG_OK, "grey+alpha parses");
     assert_eq(load64(&ihdr_c + IHDR_COLOR_TYPE_OFFSET), 4, "color_type = 4 (grey+alpha)");
 
     test_group("M2(b) — png_decode_header malformed cases");
     # Truncated mid-IHDR — signature ok but only 4 IHDR bytes follow.
+    # Built by hand because the helper only emits well-formed PNGs.
     file_write_all("/tmp/kii-test-ihdr-trunc.png",
         "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR", 12);
     var ihdr_d[32];
@@ -350,7 +398,10 @@ fn main() {
               PNG_ERR_HEADER,
               "truncated mid-IHDR → PNG_ERR_HEADER");
 
-    # Wrong chunk type ("NOPE" instead of "IHDR").
+    # Wrong chunk type ("NOPE" instead of "IHDR"). Length + type
+    # bytes lie before the IHDR-fields, so length=13 stays correct.
+    # CRC is junk — but PNG_ERR_HEADER fires on the type check
+    # before CRC is reached.
     file_write_all("/tmp/kii-test-ihdr-wrongtype.png",
         "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dNOPE\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00ZZZZ", 33);
     assert_eq(png_decode_header("/tmp/kii-test-ihdr-wrongtype.png", &ihdr_d),
@@ -377,6 +428,92 @@ fn main() {
     assert_eq(png_decode_header("/tmp/kii-noexist-ihdr-zzz.png", &ihdr_d),
               PNG_ERR_OPEN,
               "nonexistent path → PNG_ERR_OPEN");
+
+    # ---- M2(c) — png_crc32 canonical values ------------------------
+    # Pin the CRC32 impl against the zlib / RFC 3309 reference and
+    # the well-known IEND constant. Any regression in the table
+    # builder or the update primitive trips here first.
+    test_group("M2(c) — png_crc32 canonical");
+
+    # Zlib/RFC 3309 "check" string. Universal across CRC-32
+    # implementations of this polynomial.
+    assert_eq(png_crc32("123456789", 9), 0xCBF43926, "crc32('123456789') = 0xCBF43926");
+
+    # IEND chunk type: every valid PNG ends with the same 4 bytes
+    # of type + the same constant CRC. Used as the IEND CRC by
+    # _ut_build_min_png above; locks the constant in code.
+    assert_eq(png_crc32("IEND", 4), 0xAE426082, "crc32('IEND') = 0xAE426082");
+
+    # Empty buffer: register stays 0xFFFFFFFF, final xor → 0.
+    assert_eq(png_crc32("", 0), 0, "crc32 of empty buffer = 0");
+
+    # ---- M2(c) — png_decode_structure happy path -------------------
+    # Minimal valid PNG (signature + IHDR + IEND, no IDAT). The
+    # walker should: validate IHDR CRC, see IEND, validate its
+    # CRC, report seen_iend=1 with zero IDATs.
+    test_group("M2(c) — png_decode_structure (minimal valid)");
+    var pbuf_min[80];
+    var len_min = _ut_build_min_png(&pbuf_min, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-min.png", &pbuf_min, len_min);
+    var pstr_min[64];
+    assert_eq(png_decode_structure("/tmp/kii-test-min.png", &pstr_min),
+              PNG_OK, "min PNG → PNG_OK");
+    assert_eq(load64(&pstr_min + STRUCT_WIDTH_OFFSET),           4, "width = 4");
+    assert_eq(load64(&pstr_min + STRUCT_HEIGHT_OFFSET),          2, "height = 2");
+    assert_eq(load64(&pstr_min + STRUCT_BIT_DEPTH_OFFSET),       8, "bit_depth = 8");
+    assert_eq(load64(&pstr_min + STRUCT_COLOR_TYPE_OFFSET),      2, "color_type = 2");
+    assert_eq(load64(&pstr_min + STRUCT_IDAT_COUNT_OFFSET),      0, "no IDAT chunks");
+    assert_eq(load64(&pstr_min + STRUCT_IDAT_TOTAL_SIZE_OFFSET), 0, "IDAT total = 0");
+    assert_eq(load64(&pstr_min + STRUCT_SEEN_IEND_OFFSET),       1, "saw IEND");
+
+    # ---- M2(c) — missing-IEND soft warning -------------------------
+    # IHDR-only file: write the first 33 bytes of a valid PNG (sig
+    # + IHDR chunk) but no IEND chunk after. Per spec § 5.3
+    # tolerance, this is a warning, not an error — png_decode_structure
+    # returns PNG_OK with seen_iend = 0.
+    test_group("M2(c) — png_decode_structure (no IEND → soft warning)");
+    var pbuf_noiend[80];
+    _ut_build_min_png(&pbuf_noiend, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-noiend.png", &pbuf_noiend, 33);  # truncate at end of IHDR
+    var pstr_noiend[64];
+    assert_eq(png_decode_structure("/tmp/kii-test-noiend.png", &pstr_noiend),
+              PNG_OK, "IHDR only (no IEND) still PNG_OK");
+    assert_eq(load64(&pstr_noiend + STRUCT_SEEN_IEND_OFFSET), 0, "seen_iend = 0");
+    # IHDR fields are still populated (the IHDR chunk was valid).
+    assert_eq(load64(&pstr_noiend + STRUCT_WIDTH_OFFSET), 4, "IHDR fields preserved");
+
+    # ---- M2(c) — CRC failures --------------------------------------
+    test_group("M2(c) — png_decode_structure CRC failures");
+
+    # Bit-flip the IHDR CRC at byte 29 (first byte of the IHDR CRC).
+    var pbuf_bad_ihdr[80];
+    var len_bi = _ut_build_min_png(&pbuf_bad_ihdr, 4, 2, 8, 2);
+    store8(&pbuf_bad_ihdr + 29, load8(&pbuf_bad_ihdr + 29) ^ 0xFF);
+    file_write_all("/tmp/kii-test-badcrc-ihdr.png", &pbuf_bad_ihdr, len_bi);
+    var pstr_bi[64];
+    assert_eq(png_decode_structure("/tmp/kii-test-badcrc-ihdr.png", &pstr_bi),
+              PNG_ERR_CRC, "bit-flipped IHDR CRC → PNG_ERR_CRC");
+
+    # Bit-flip the IEND CRC at byte 41 (first byte of IEND CRC).
+    var pbuf_bad_iend[80];
+    var len_be = _ut_build_min_png(&pbuf_bad_iend, 4, 2, 8, 2);
+    store8(&pbuf_bad_iend + 41, load8(&pbuf_bad_iend + 41) ^ 0xFF);
+    file_write_all("/tmp/kii-test-badcrc-iend.png", &pbuf_bad_iend, len_be);
+    var pstr_be[64];
+    assert_eq(png_decode_structure("/tmp/kii-test-badcrc-iend.png", &pstr_be),
+              PNG_ERR_CRC, "bit-flipped IEND CRC → PNG_ERR_CRC");
+
+    # ---- M2(c) — truncated post-IHDR chunk -------------------------
+    # Truncate the file 4 bytes before the end (cuts off the IEND
+    # CRC). Walker reads IEND header ok (length=0, type=IEND), then
+    # tries to read 4 CRC bytes, gets 0 → PNG_ERR_CHUNK.
+    test_group("M2(c) — png_decode_structure (truncated mid-chunk)");
+    var pbuf_trunc[80];
+    _ut_build_min_png(&pbuf_trunc, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-trunc-mid.png", &pbuf_trunc, 41);  # 45 - 4 = no IEND CRC
+    var pstr_trunc[64];
+    assert_eq(png_decode_structure("/tmp/kii-test-trunc-mid.png", &pstr_trunc),
+              PNG_ERR_CHUNK, "truncated mid-IEND-CRC → PNG_ERR_CHUNK");
 
     return assert_summary();
 }
