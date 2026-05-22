@@ -33,8 +33,8 @@
 | `tests/kii.tcyr` | 2 | 2026-05-22 (v0.2.0 close) | 36 assertions: smoke + `kii_validate_color` + flag-parse happy/sad. Expand per milestone. |
 | `tests/kii.bcyr` | 2 | 2026-05-22 (cyrius init scaffold) | Stub. **Wire at M4** (first benchmark = quantization latency). |
 | `tests/kii.fcyr` | 2 | 2026-05-22 (v0.2.0 close) | Wired at M1(d): 10k-iter deterministic-LCG fuzz over kii's flag set. PNG-decoder fuzz comes at M2 (separate harness). |
-| `.github/workflows/ci.yml` | 1 | 2026-05-22 (v0.2.0 close) | `workflow_call:` enabled at v0.2.0 close. **Thorough CI pass deferred** (punch list in v0.2.0 CHANGELOG). |
-| `.github/workflows/release.yml` | 1 | 2026-05-22 | Default release scaffold. **Will trip if `workflow_call:` not present on ci.yml** — fixed at v0.2.0 close. CHANGELOG-extracted release notes + multi-arch builds pending. |
+| `.github/workflows/ci.yml` | 1 | 2026-05-22 (post-0.2.0) | `workflow_call:` + binary-name fix + version-drift smoke + fuzz step landed. **Still pending**: CHANGELOG-extracted release notes, aarch64 cross-build (tracked in `[Unreleased]` CHANGELOG). |
+| `.github/workflows/release.yml` | 1 | 2026-05-22 (post-0.2.0) | Binary-name fix landed. CHANGELOG-extracted release notes + multi-arch builds pending. |
 | `LICENSE` | 1 | 2026-05-22 | GPL-3.0-only header (parity with bannermanor/hapi/etc.). |
 | `.gitignore` | 2 | 2026-05-22 | Standard scaffold. |
 

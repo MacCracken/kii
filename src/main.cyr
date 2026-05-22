@@ -10,11 +10,15 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 SHIPPED at v0.2.0 — full CLI flag surface (`--help`,
-# `--version`, `--width N`, `--color N`, positional path) parses +
-# dispatches; flag registration + --color validation live in
-# src/cli.cyr so tests + fuzz drive them in-process. Placeholder
-# echoes captured values + exits 1 until M2 lands the PNG decoder.
+# Status: M1 shipped at v0.2.0. M2 sub-bite (a) in progress — PNG
+# signature validation lands at the entry hop. Valid path with
+# valid 8-byte signature → "<path>: signature ok; structural
+# decode not yet implemented" + exit 1. Invalid signature /
+# truncated file / open failure → distinct path-keyed errors +
+# exit 1. The full M2 structural-decode output (`<W>x<H>
+# bit_depth=<N> color_type=<T>` on stdout, exit 0) lands at
+# sub-bite (d). VERSION + CHANGELOG bump to 0.3.0 lands at end
+# of M2, not per sub-bite.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -23,6 +27,7 @@
 #   - Tier 1 = 8/16-color ANSI + half-block; tier 2 (256/truecolor) is post-v1
 
 include "src/cli.cyr"
+include "src/png.cyr"
 
 # argv cap. kii takes one positional path arg at most; 256 is
 # absurdly more than any plausible invocation but matches the
@@ -40,24 +45,17 @@ fn _eprint(s): i64 {
     return 0;
 }
 
-# Throwaway M1 placeholder. Writes
-#   <path>: decoder not yet implemented (width=N color=N)\n
-# to stderr. The width/color echo proves the flag values were
-# captured into module state — the only observable smoke for the
-# sub-bite (c) acceptance criteria short of a debugger. M2 replaces
-# this entire path with the structural-decode success line
-# (`image.png: <W>x<H> bit_depth=<N> color_type=<T>` on stdout).
-fn _eprint_placeholder(path, width, color): i64 {
+# Print "<path>: <msg>\n" to stderr. Path-keyed diagnostic format
+# matches chafa's `chafa: foo.png: image load failed` shape. All
+# M2-error and intermediate "ok but not yet implemented" lines
+# ride this. M2(d) will route the success line to stdout via a
+# parallel `_print_path_msg` (no leading `kii:` prefix, no error
+# semantic) once the full structural-decode output lands.
+fn _eprint_path_msg(path, msg): i64 {
     _eprint(path);
-    _eprint(": decoder not yet implemented (width=");
-    var wbuf[32];
-    var wlen = fmt_int_buf(width, &wbuf);
-    syscall(1, 2, &wbuf, wlen);
-    _eprint(" color=");
-    var cbuf[32];
-    var clen = fmt_int_buf(color, &cbuf);
-    syscall(1, 2, &cbuf, clen);
-    _eprint(")\n");
+    _eprint(": ");
+    _eprint(msg);
+    _eprint("\n");
     return 0;
 }
 
@@ -140,20 +138,20 @@ fn main(): i64 {
 
     # --color validation. Run BEFORE the positional check so
     # `kii --color 7` fails fast on the flag without first nagging
-    # about the missing path.
+    # about the missing path. --width is parsed but unused until
+    # M5; we don't extract it yet (no dead code per CLAUDE.md —
+    # M5 adds the extraction back when actually consumed).
     var color = flags_get_int(fs, KII_F_COLOR);
     if (kii_validate_color(color) == 0) {
         _eprint("kii: --color must be 8 or 16\n");
         print_usage(fs);
         return KII_EXIT_USAGE;
     }
-    var width = flags_get_int(fs, KII_F_WIDTH);
 
     # Positional path arg. kii takes exactly one image path per
     # CLAUDE.md domain rule ("kii takes ONE file path. No glob, no
     # recursive directory scan."). Zero = usage error; two-plus =
-    # usage error; exactly one = M1 placeholder until M2 wires the
-    # structural decoder.
+    # usage error.
     var pc = flags_positional_count(fs);
     if (pc == 0) {
         _eprint("kii: missing image path\n");
@@ -166,8 +164,26 @@ fn main(): i64 {
         return KII_EXIT_USAGE;
     }
 
+    # M2(a): PNG signature validation. Distinct error paths so
+    # users see *what* went wrong (open vs not-PNG vs truncated)
+    # rather than a generic "decode failed". Full structural
+    # output lands at M2(d) on stdout/exit-0; until then valid
+    # signatures still exit 1 with an "ok but incomplete" line.
     var path = flags_positional(fs, 0);
-    _eprint_placeholder(path, width, color);
+    var rc = png_validate_file_signature(path);
+    if (rc == PNG_ERR_OPEN) {
+        _eprint_path_msg(path, "cannot open file");
+        return KII_EXIT_RUN;
+    }
+    if (rc == PNG_ERR_TRUNCATED) {
+        _eprint_path_msg(path, "not a PNG (file shorter than 8 bytes)");
+        return KII_EXIT_RUN;
+    }
+    if (rc == PNG_ERR_NOT_PNG) {
+        _eprint_path_msg(path, "not a PNG");
+        return KII_EXIT_RUN;
+    }
+    _eprint_path_msg(path, "signature ok; structural decode not yet implemented");
     return KII_EXIT_RUN;
 }
 

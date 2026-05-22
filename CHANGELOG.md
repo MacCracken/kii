@@ -4,6 +4,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### CI / Release
+
+- `ci.yml` — added **version-drift smoke** (compares `./build/kii --version`'s first line against `VERSION` file; trips CI on mismatch). The M1 close-out cycle hit this drift class once locally — the smoke would have caught it before merge.
+- `ci.yml` — added **fuzz step** (`tests/kii.fcyr`, 10k iters, ~0.04 s). PNG-decoder fuzz lands separately at M2.
+- `ci.yml` + `release.yml` — fixed binary-name template default (`${{ github.event.repository.name }}` → hardcoded `kii`). The cyrius-init scaffold assumed repo-name = binary-name; kii's repo is `cyrius-kii` but the binary is `kii` per `cyrius.cyml [build].output` and CLAUDE.md Quick Start.
+
 ## [0.2.0] — 2026-05-22
 
 ### Added

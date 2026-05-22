@@ -1,0 +1,80 @@
+# png.cyr — kii's in-repo PNG decoder.
+#
+# Multi-source convergent port per CLAUDE.md hard rule: the
+# decoder shape comes from the W3C PNG Specification (1.3) +
+# `libpng` as reference impl + `stb_image.h` and `lodepng` as
+# minimal-port references. Not single-source from any one of
+# them — each contributes a different angle (spec = ground truth,
+# libpng = canonical impl, stb/lodepng = "what does this look
+# like as ~1k lines").
+#
+# v0.3.0 / M2 lands the structural layer (signature → IHDR →
+# chunk walk → CRC32 → IEND). Pixel decode (IDAT DEFLATE +
+# filter undo) is M3 (v0.4.0) once `sankoch` dep is wired.
+# Stdlib (incl. io, result) auto-included via cyrius.cyml.
+#
+# Sub-bite (a) — this file: signature validation only. The 8-byte
+# magic at file start is the cheapest possible "is this a PNG"
+# test; everything downstream gates on it.
+
+# ---- PNG signature (W3C PNG § 5.2) ---------------------------------
+# Bytes 0-7 of every PNG file. Designed to detect common file-
+# transfer corruption modes:
+#   0x89  — high-bit-set byte: detects 7-bit-stripping gateways
+#   P,N,G — ASCII identifier
+#   \r\n  — CRLF: detects DOS↔Unix line-ending mangling
+#   0x1A  — DOS EOF marker: stops a naive `type` cmd dead
+#   \n    — final LF: detects \r\n→\r conversion
+# String-literal storage because Cyrius cstrings are null-terminated
+# and byte 8 (the NUL) is never inspected — the loop bounds on
+# PNG_MAGIC_LEN.
+var PNG_MAGIC     = "\x89PNG\r\n\x1a\n";
+var PNG_MAGIC_LEN = 8;
+
+# ---- error codes ---------------------------------------------------
+# kii-namespaced rather than leaking IoError variants up to main.cyr.
+# Main dispatch translates these into user-facing `<path>: <msg>`
+# diagnostics; tests assert on the codes directly.
+var PNG_OK            = 0;
+var PNG_ERR_OPEN      = 1;  # File could not be opened (not found, perms, etc.)
+var PNG_ERR_TRUNCATED = 2;  # File read returned fewer than 8 bytes
+var PNG_ERR_NOT_PNG   = 3;  # First 8 bytes did not match PNG_MAGIC
+
+# Pure in-memory signature check. Caller guarantees `buf` has at
+# least PNG_MAGIC_LEN bytes. Returns 1 if those bytes match the
+# magic, 0 otherwise. Leans on lib/string.cyr's `memeq` rather
+# than rolling a byte-by-byte loop (same primitive, but memeq is
+# the shared idiom across the ecosystem — see anuenue/_compat,
+# bannermanor/font_block).
+fn png_check_signature(buf): i64 {
+    return memeq(buf, PNG_MAGIC, PNG_MAGIC_LEN);
+}
+
+# File-level signature validator. Opens `path`, reads 8 bytes,
+# closes, checks magic. Returns one of the PNG_* codes above.
+# Uses the Result-returning *_r io variants so each failure mode
+# (open vs read) is distinguishable; we collapse them into kii's
+# coarser error space at the boundary.
+fn png_validate_file_signature(path): i64 {
+    var fd_res = file_open_r(path, O_RDONLY, 0);
+    if (is_err_result(fd_res) == 1) {
+        return PNG_ERR_OPEN;
+    }
+    var fd = result_unwrap(fd_res);
+
+    var buf[16];                              # 16 ≥ PNG_MAGIC_LEN; rounded to nice multiple
+    var n_res = file_read_r(fd, &buf, PNG_MAGIC_LEN);
+    file_close(fd);                           # close even on partial read
+
+    if (is_err_result(n_res) == 1) {
+        return PNG_ERR_OPEN;
+    }
+    var n = result_unwrap(n_res);
+    if (n < PNG_MAGIC_LEN) {
+        return PNG_ERR_TRUNCATED;
+    }
+    if (png_check_signature(&buf) == 0) {
+        return PNG_ERR_NOT_PNG;
+    }
+    return PNG_OK;
+}

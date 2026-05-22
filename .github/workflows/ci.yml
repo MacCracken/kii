@@ -43,9 +43,26 @@ jobs:
         run: cyrius deps
 
       - name: Build
+        # Binary name is `kii` per cyrius.cyml [build].output, NOT the
+        # GitHub repo name (`cyrius-kii`). The cyrius-init template
+        # used ${{ github.event.repository.name }} as a default; kii's
+        # repo and binary names diverge, so hardcode the binary.
         run: |
           mkdir -p build
-          cyrius build src/main.cyr build/${{ github.event.repository.name }}
+          cyrius build src/main.cyr build/kii
+
+      - name: Version drift check
+        # The print_version literal in src/main.cyr is hand-edited at
+        # each milestone close. This step catches the class of drift
+        # where VERSION bumps but the literal doesn't (or vice versa)
+        # — locally hit once during the M1 close-out cycle. Compares
+        # the binary's `--version` first line against the VERSION
+        # file. Auto-generated literals are a v0.3.x follow-up
+        # (sibling pattern: anuenue's scripts/version-bump.sh).
+        run: |
+          EXPECTED="kii $(cat VERSION | tr -d '[:space:]')"
+          ACTUAL=$(./build/kii --version | head -1)
+          test "$ACTUAL" = "$EXPECTED" || { echo "version drift: binary says '$ACTUAL', VERSION says '$EXPECTED'"; exit 1; }
 
       - name: Test
         # v5.6.28: bare `cyrius test` picks up the [build].test entry
@@ -54,3 +71,13 @@ jobs:
         # stub didn't exist (Issue 1) and also wouldn't ever exercise
         # tests/${proj}.tcyr.
         run: cyrius test
+
+      - name: Fuzz (arg-parser crash-safety)
+        # tests/kii.fcyr wires a deterministic LCG-driven loop over
+        # kii's flag set. 10k iters runs in ~0.04 s — basically free
+        # in CI. M7 audit cycle raises iter count to 10⁶ per the
+        # v1.0 acceptance criterion. PNG-decoder fuzz lands as a
+        # separate harness at M2.
+        run: |
+          cyrius build tests/kii.fcyr build/kii-fuzz
+          ./build/kii-fuzz

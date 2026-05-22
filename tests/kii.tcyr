@@ -2,14 +2,16 @@
 # Stdlib + flags auto-included via cyrius.cyml.
 #
 # M1 coverage: kii_validate_color predicate + flag-parse wiring
-# (happy paths via the full kii flag set + error-variant
-# dispatch). The end-to-end binary smoke (exit codes for
-# `kii --version` / `kii image.png` / `kii --color 7 image.png`)
-# is exercised via the manual run shell — Cyrius can't trivially
-# subprocess itself inside a unit test, so the .tcyr layer owns
-# the in-process pieces and the smoke shell owns the I/O surface.
+# (happy paths via the full kii flag set + error-variant dispatch).
+# M2(a) coverage: png_check_signature (pure, in-memory) +
+# png_validate_file_signature (file-level via /tmp fixtures).
+# The end-to-end binary smoke is exercised via the manual run
+# shell — Cyrius can't trivially subprocess itself inside a unit
+# test, so .tcyr owns the in-process pieces and the smoke shell
+# owns the I/O surface.
 
 include "src/cli.cyr"
+include "src/png.cyr"
 
 fn main() {
     alloc_init();
@@ -159,6 +161,88 @@ fn main() {
     store64(&argv10 + 16, "b.png");
     assert_eq(flags_parse(fs10, 3, &argv10), 0, "a.png b.png parses clean");
     assert_eq(flags_positional_count(fs10), 2, "two positionals captured");
+
+    # ---- M2(a) — png_check_signature (pure in-memory) --------------
+    # Spec source: W3C PNG § 5.2 — 8 magic bytes detect 7-bit
+    # gateways, line-ending mangling, and naive `type` cmd. The
+    # check is a memeq; the tests below pin each "what if the
+    # transport corrupted byte N" failure mode.
+    test_group("M2(a) — png_check_signature");
+
+    # Happy path: exact magic.
+    var sig_ok[8];
+    store8(&sig_ok + 0, 0x89);
+    store8(&sig_ok + 1, 0x50);   # 'P'
+    store8(&sig_ok + 2, 0x4E);   # 'N'
+    store8(&sig_ok + 3, 0x47);   # 'G'
+    store8(&sig_ok + 4, 0x0D);   # \r
+    store8(&sig_ok + 5, 0x0A);   # \n
+    store8(&sig_ok + 6, 0x1A);   # DOS EOF
+    store8(&sig_ok + 7, 0x0A);   # \n
+    assert_eq(png_check_signature(&sig_ok), 1, "exact 8-byte magic → valid");
+
+    # Off-by-one on byte 0 — the high-bit-set sentinel. A 7-bit
+    # gateway would strip 0x89 → 0x09; we should reject.
+    var sig_stripped[8];
+    memcpy(&sig_stripped, &sig_ok, 8);
+    store8(&sig_stripped + 0, 0x09);
+    assert_eq(png_check_signature(&sig_stripped), 0, "byte 0 stripped 0x89→0x09 → reject");
+
+    # Last byte corrupted — \r\n→\r conversion would drop byte 7.
+    # Simulate the "byte 7 wrong" failure.
+    var sig_last_bad[8];
+    memcpy(&sig_last_bad, &sig_ok, 8);
+    store8(&sig_last_bad + 7, 0x0D);
+    assert_eq(png_check_signature(&sig_last_bad), 0, "byte 7 wrong → reject");
+
+    # Middle-of-magic byte wrong — the 'P' becomes 'p'.
+    var sig_lowered[8];
+    memcpy(&sig_lowered, &sig_ok, 8);
+    store8(&sig_lowered + 1, 0x70);   # 'p'
+    assert_eq(png_check_signature(&sig_lowered), 0, "byte 1 'P'→'p' → reject");
+
+    # All-zero buffer — the universally-wrong baseline.
+    var sig_zero[8];
+    var z = 0;
+    while (z < 8) { store8(&sig_zero + z, 0); z = z + 1; }
+    assert_eq(png_check_signature(&sig_zero), 0, "all-zero buf → reject");
+
+    # ---- M2(a) — png_validate_file_signature (file-level) ----------
+    # Writes test fixtures to /tmp/. file_write_all uses
+    # O_WRONLY|O_CREAT|O_TRUNC (per lib/io.cyr) so each run starts
+    # fresh; no cross-test contamination from stale files.
+    test_group("M2(a) — png_validate_file_signature");
+
+    # Happy path: write exactly the 8 magic bytes.
+    file_write_all("/tmp/kii-test-sig-ok.png", PNG_MAGIC, PNG_MAGIC_LEN);
+    assert_eq(png_validate_file_signature("/tmp/kii-test-sig-ok.png"),
+              PNG_OK,
+              "8-byte magic file → PNG_OK");
+
+    # Truncated: 4 bytes is short.
+    file_write_all("/tmp/kii-test-sig-trunc.bin", "JFIF", 4);
+    assert_eq(png_validate_file_signature("/tmp/kii-test-sig-trunc.bin"),
+              PNG_ERR_TRUNCATED,
+              "4-byte file → PNG_ERR_TRUNCATED");
+
+    # Empty file → also truncated (read returns 0).
+    file_write_all("/tmp/kii-test-sig-empty.bin", "", 0);
+    assert_eq(png_validate_file_signature("/tmp/kii-test-sig-empty.bin"),
+              PNG_ERR_TRUNCATED,
+              "empty file → PNG_ERR_TRUNCATED");
+
+    # Wrong magic but ≥ 8 bytes.
+    file_write_all("/tmp/kii-test-sig-notpng.bin", "JFIF\x00\x00\x00\x00\x00\x00", 10);
+    assert_eq(png_validate_file_signature("/tmp/kii-test-sig-notpng.bin"),
+              PNG_ERR_NOT_PNG,
+              "10-byte non-PNG file → PNG_ERR_NOT_PNG");
+
+    # Open failure: nonexistent path. The /tmp/kii-noexist- prefix
+    # plus a randomish suffix avoids collision with any sibling
+    # test that might run concurrently in CI.
+    assert_eq(png_validate_file_signature("/tmp/kii-noexist-zzy42.png"),
+              PNG_ERR_OPEN,
+              "nonexistent path → PNG_ERR_OPEN");
 
     return assert_summary();
 }
