@@ -655,6 +655,216 @@ fn main() {
     assert_eq(load64(&pstr_noidat + STRUCT_IDAT_COUNT_OFFSET), 0, "0 IDATs");
     assert_eq(load64(&pstr_noidat + STRUCT_IDAT_BUF_OFFSET),   0, "idat_buf = 0 when no IDATs");
 
+    # ---- M3(c) — _png_paeth predictor (spec § 9.4) -----------------
+    # Lock the tie-breaking + sign behavior. The Paeth predictor
+    # is the only filter type where naïve sign-extension or
+    # tie-break-order errors silently corrupt pixels; pin the
+    # canonical cases.
+    test_group("M3(c) — _png_paeth predictor");
+    # All-zero context → returns a (= 0). Tie pa=pb=pc=0; pa <= pb and pa <= pc.
+    assert_eq(_png_paeth(0, 0, 0), 0, "paeth(0,0,0) → a (tie-break order)");
+    # a closest: a=255, b=0, c=0. p=255+0-0=255, pa=|255-255|=0, pb=255, pc=255 → a.
+    assert_eq(_png_paeth(255, 0, 0), 255, "paeth(255,0,0) → a (pa=0 wins)");
+    # b closest: a=0, b=255, c=0. p=255, pa=255, pb=0, pc=255 → b.
+    assert_eq(_png_paeth(0, 255, 0), 255, "paeth(0,255,0) → b");
+    # c closest by elimination: a=0, b=0, c=255. p=-255, pa=255, pb=255, pc=510. pb<=pc → b.
+    # Wait pb=255 pc=510 so pb wins → b=0. That's the spec's left/up-priority.
+    assert_eq(_png_paeth(0, 0, 255), 0, "paeth(0,0,255) → b (up beats up-left on tie)");
+    # Real-world middle case: a=10, b=15, c=5. p=20, pa=10, pb=5, pc=15 → b.
+    assert_eq(_png_paeth(10, 15, 5), 15, "paeth(10,15,5) → b (closest predictor)");
+
+    # ---- M3(c) — _png_unfilter_row per filter type -----------------
+    # Each test crafts a known raw row + pre-filter-encoded row,
+    # runs the undo, asserts byte-identical recovery. bpp=1
+    # (greyscale-equiv) keeps the math simple; the algorithm is
+    # bpp-agnostic so this proves correctness for all bpps.
+    test_group("M3(c) — _png_unfilter_row filter 0 (None)");
+    # raw = encoded for filter type None. Any pattern works.
+    var raw0[4];      store8(&raw0 + 0, 10);   store8(&raw0 + 1, 20);
+                      store8(&raw0 + 2, 30);   store8(&raw0 + 3, 40);
+    var enc0[4];      memcpy(&enc0, &raw0, 4);
+    var prev0[4];     store8(&prev0 + 0, 0);   store8(&prev0 + 1, 0);
+                      store8(&prev0 + 2, 0);   store8(&prev0 + 3, 0);
+    var out0[4];
+    assert_eq(_png_unfilter_row(&prev0, &enc0, &out0, 4, 1, 0), 0, "filter 0 returns 0");
+    var k = 0; var ok0 = 1;
+    while (k < 4) { if (load8(&out0 + k) != load8(&raw0 + k)) { ok0 = 0; } k = k + 1; }
+    assert_eq(ok0, 1, "filter 0 (None) round-trips byte-identical");
+
+    test_group("M3(c) — _png_unfilter_row filter 1 (Sub)");
+    # raw = [10,20,30,40], bpp=1, prev=[0,0,0,0]:
+    # encoded[i] = raw[i] - (i==0 ? 0 : raw[i-1]) = [10, 10, 10, 10]
+    var enc1[4]; store8(&enc1 + 0, 10); store8(&enc1 + 1, 10);
+                 store8(&enc1 + 2, 10); store8(&enc1 + 3, 10);
+    var out1[4];
+    assert_eq(_png_unfilter_row(&prev0, &enc1, &out1, 4, 1, 1), 0, "filter 1 returns 0");
+    assert_eq(load8(&out1 + 0), 10, "Sub: pixel 0 = 10");
+    assert_eq(load8(&out1 + 1), 20, "Sub: pixel 1 = 20");
+    assert_eq(load8(&out1 + 2), 30, "Sub: pixel 2 = 30");
+    assert_eq(load8(&out1 + 3), 40, "Sub: pixel 3 = 40");
+
+    test_group("M3(c) — _png_unfilter_row filter 2 (Up)");
+    # raw = [10,20,30,40], prev = [5,15,25,35]:
+    # encoded[i] = raw[i] - prev[i] = [5, 5, 5, 5]
+    var prev2[4]; store8(&prev2 + 0, 5);  store8(&prev2 + 1, 15);
+                  store8(&prev2 + 2, 25); store8(&prev2 + 3, 35);
+    var enc2[4];  store8(&enc2 + 0, 5);   store8(&enc2 + 1, 5);
+                  store8(&enc2 + 2, 5);   store8(&enc2 + 3, 5);
+    var out2[4];
+    assert_eq(_png_unfilter_row(&prev2, &enc2, &out2, 4, 1, 2), 0, "filter 2 returns 0");
+    assert_eq(load8(&out2 + 0), 10, "Up: pixel 0 = 10");
+    assert_eq(load8(&out2 + 1), 20, "Up: pixel 1 = 20");
+    assert_eq(load8(&out2 + 2), 30, "Up: pixel 2 = 30");
+    assert_eq(load8(&out2 + 3), 40, "Up: pixel 3 = 40");
+
+    test_group("M3(c) — _png_unfilter_row filter 3 (Average)");
+    # raw = [10,20,30,40], prev = [5,15,25,35], bpp=1:
+    # encoded[i] = raw[i] - floor((left + up) / 2)
+    #   i=0: left=0,  up=5  → avg=2,  e[0]=10-2=8
+    #   i=1: left=10, up=15 → avg=12, e[1]=20-12=8
+    #   i=2: left=20, up=25 → avg=22, e[2]=30-22=8
+    #   i=3: left=30, up=35 → avg=32, e[3]=40-32=8
+    var enc3[4]; store8(&enc3 + 0, 8); store8(&enc3 + 1, 8);
+                 store8(&enc3 + 2, 8); store8(&enc3 + 3, 8);
+    var out3[4];
+    assert_eq(_png_unfilter_row(&prev2, &enc3, &out3, 4, 1, 3), 0, "filter 3 returns 0");
+    assert_eq(load8(&out3 + 0), 10, "Average: pixel 0 = 10");
+    assert_eq(load8(&out3 + 1), 20, "Average: pixel 1 = 20");
+    assert_eq(load8(&out3 + 2), 30, "Average: pixel 2 = 30");
+    assert_eq(load8(&out3 + 3), 40, "Average: pixel 3 = 40");
+
+    test_group("M3(c) — _png_unfilter_row filter 4 (Paeth)");
+    # raw = [10,20,30,40], prev = [5,15,25,35], bpp=1:
+    # paeth predictor + delta = encoded
+    #   i=0: a=0,  b=5,  c=0  → paeth=b=5,  e[0]=10-5=5
+    #   i=1: a=10, b=15, c=5  → paeth=b=15, e[1]=20-15=5
+    #   i=2: a=20, b=25, c=15 → paeth=b=25, e[2]=30-25=5
+    #   i=3: a=30, b=35, c=25 → paeth=b=35, e[3]=40-35=5
+    var enc4[4]; store8(&enc4 + 0, 5); store8(&enc4 + 1, 5);
+                 store8(&enc4 + 2, 5); store8(&enc4 + 3, 5);
+    var out4[4];
+    assert_eq(_png_unfilter_row(&prev2, &enc4, &out4, 4, 1, 4), 0, "filter 4 returns 0");
+    assert_eq(load8(&out4 + 0), 10, "Paeth: pixel 0 = 10");
+    assert_eq(load8(&out4 + 1), 20, "Paeth: pixel 1 = 20");
+    assert_eq(load8(&out4 + 2), 30, "Paeth: pixel 2 = 30");
+    assert_eq(load8(&out4 + 3), 40, "Paeth: pixel 3 = 40");
+
+    # Invalid filter byte: rejected.
+    test_group("M3(c) — _png_unfilter_row rejects unknown filter byte");
+    var out_bad[4];
+    assert_eq(_png_unfilter_row(&prev0, &enc0, &out_bad, 4, 1, 5),
+              0 - 1, "filter byte 5 → -1");
+    assert_eq(_png_unfilter_row(&prev0, &enc0, &out_bad, 4, 1, 0 - 1),
+              0 - 1, "filter byte -1 → -1");
+
+    # ---- M3(c) — _png_color_channels --------------------------------
+    test_group("M3(c) — _png_color_channels");
+    assert_eq(_png_color_channels(0), 1, "greyscale → 1 channel");
+    assert_eq(_png_color_channels(2), 3, "RGB → 3 channels");
+    assert_eq(_png_color_channels(3), 1, "palette → 1 channel (index)");
+    assert_eq(_png_color_channels(4), 2, "grey+alpha → 2 channels");
+    assert_eq(_png_color_channels(6), 4, "RGBA → 4 channels");
+    assert_eq(_png_color_channels(1), 0 - 1, "color_type 1 (unused/invalid) → -1");
+    assert_eq(_png_color_channels(5), 0 - 1, "color_type 5 (unused) → -1");
+    assert_eq(_png_color_channels(7), 0 - 1, "color_type 7 (unused) → -1");
+
+    # ---- M3(c) — png_decode_pixels end-to-end (2x2 RGB) -------------
+    # Build a 2x2 RGB image with known pixel values, filter byte 0
+    # (None) on each row, zlib-compress the row stream, embed in a
+    # PNG, run the full structure→pixels pipeline, verify the
+    # decoded buffer byte-for-byte.
+    test_group("M3(c) — png_decode_pixels end-to-end (2x2 RGB, filter 0)");
+    # Raw row stream: filter byte + 2 pixels × 3 bytes per row = 7 bytes/row × 2 rows = 14 bytes.
+    var raw_stream[14];
+    store8(&raw_stream + 0,  0);    # filter byte (None) for row 0
+    store8(&raw_stream + 1,  100);  # pixel (0,0) R
+    store8(&raw_stream + 2,  101);  # pixel (0,0) G
+    store8(&raw_stream + 3,  102);  # pixel (0,0) B
+    store8(&raw_stream + 4,  103);  # pixel (1,0) R
+    store8(&raw_stream + 5,  104);  # pixel (1,0) G
+    store8(&raw_stream + 6,  105);  # pixel (1,0) B
+    store8(&raw_stream + 7,  0);    # filter byte (None) for row 1
+    store8(&raw_stream + 8,  110);  # pixel (0,1) R
+    store8(&raw_stream + 9,  111);  # pixel (0,1) G
+    store8(&raw_stream + 10, 112);  # pixel (0,1) B
+    store8(&raw_stream + 11, 113);  # pixel (1,1) R
+    store8(&raw_stream + 12, 114);  # pixel (1,1) G
+    store8(&raw_stream + 13, 115);  # pixel (1,1) B
+    # zlib_compress the row stream into the IDAT payload.
+    var idat_payload_e2e[64];
+    var idat_clen = zlib_compress(&raw_stream, 14, &idat_payload_e2e, 64);
+    assert(idat_clen > 0, "row-stream compresses cleanly");
+    # Build the full PNG fixture.
+    var pbuf_e2e[128];
+    var fixture_len = _ut_build_png_with_idat(&pbuf_e2e, 2, 2, 8, 2, 0,
+                                                &idat_payload_e2e, idat_clen);
+    file_write_all("/tmp/kii-test-decode-2x2.png", &pbuf_e2e, fixture_len);
+    # Run the pipeline.
+    var pstr_e2e[96];
+    assert_eq(png_decode_structure("/tmp/kii-test-decode-2x2.png", &pstr_e2e),
+              PNG_OK, "2x2 RGB fixture → PNG_OK on structure");
+    assert_eq(png_decode_pixels(&pstr_e2e), PNG_OK, "2x2 RGB fixture → PNG_OK on pixels");
+    assert_eq(load64(&pstr_e2e + STRUCT_PIXELS_SIZE_OFFSET), 12,
+              "pixel size = 2 × 2 × 3 = 12 bytes");
+    var pix_ptr = load64(&pstr_e2e + STRUCT_PIXELS_BUF_OFFSET);
+    assert(pix_ptr != 0, "pixels_buf non-null on success");
+    # Byte-for-byte: 12 bytes of RGB sequence, no filter bytes.
+    assert_eq(load8(pix_ptr + 0),  100, "decoded pixel 0 R = 100");
+    assert_eq(load8(pix_ptr + 1),  101, "decoded pixel 0 G = 101");
+    assert_eq(load8(pix_ptr + 2),  102, "decoded pixel 0 B = 102");
+    assert_eq(load8(pix_ptr + 3),  103, "decoded pixel 1 R = 103");
+    assert_eq(load8(pix_ptr + 11), 115, "decoded pixel 3 B = 115");
+
+    # ---- M3(c) — rejection paths ------------------------------------
+    test_group("M3(c) — png_decode_pixels rejects Adam7 + sub-byte depth");
+    # Adam7: interlace=1, same compressed IDAT payload (won't be
+    # touched because we reject before inflate).
+    var pbuf_adam7[128];
+    var adam7_len = _ut_build_png_with_idat(&pbuf_adam7, 2, 2, 8, 2, 1,
+                                              &idat_payload_e2e, idat_clen);
+    file_write_all("/tmp/kii-test-adam7.png", &pbuf_adam7, adam7_len);
+    var pstr_adam7[96];
+    png_decode_structure("/tmp/kii-test-adam7.png", &pstr_adam7);
+    assert_eq(png_decode_pixels(&pstr_adam7), PNG_ERR_INTERLACE,
+              "interlace=1 → PNG_ERR_INTERLACE (no inflate attempted)");
+
+    # Sub-byte bit depth (4): the IDAT payload is meaningless but
+    # we reject at the M3 layer before reaching inflate.
+    var pbuf_d4[128];
+    var d4_len = _ut_build_png_with_idat(&pbuf_d4, 2, 2, 4, 0, 0,
+                                           &idat_payload_e2e, idat_clen);
+    file_write_all("/tmp/kii-test-d4.png", &pbuf_d4, d4_len);
+    var pstr_d4[96];
+    png_decode_structure("/tmp/kii-test-d4.png", &pstr_d4);
+    assert_eq(png_decode_pixels(&pstr_d4), PNG_ERR_BITDEPTH,
+              "bit_depth=4 → PNG_ERR_BITDEPTH (tier-1 scope rejects sub-byte)");
+
+    # No-IDAT case: png_decode_pixels has nothing to inflate.
+    var pstr_nopx[96];
+    _ut_build_min_png(&pbuf_noidat, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-noidat-px.png", &pbuf_noidat, 45);
+    png_decode_structure("/tmp/kii-test-noidat-px.png", &pstr_nopx);
+    assert_eq(png_decode_pixels(&pstr_nopx), PNG_ERR_NO_IDAT,
+              "no IDAT chunks → PNG_ERR_NO_IDAT");
+
+    # ---- M3(c) — real-world: RAMGON.png (1152×925 RGBA) -------------
+    # End-to-end against an actual PNG (committed at top level for
+    # this purpose). Asserts that the full pipeline — sankoch
+    # inflate + filter undo across whatever filter types the PNG
+    # uses — produces a pixel buffer of the spec-derived size.
+    test_group("M3(c) — png_decode_pixels real-world (RAMGON.png)");
+    var pstr_real[96];
+    assert_eq(png_decode_structure("RAMGON.png", &pstr_real), PNG_OK,
+              "RAMGON.png → PNG_OK on structure");
+    assert_eq(load64(&pstr_real + STRUCT_WIDTH_OFFSET),      1152, "RAMGON width = 1152");
+    assert_eq(load64(&pstr_real + STRUCT_HEIGHT_OFFSET),     925,  "RAMGON height = 925");
+    assert_eq(load64(&pstr_real + STRUCT_COLOR_TYPE_OFFSET), 6,    "RAMGON color_type = 6 (RGBA)");
+    assert_eq(png_decode_pixels(&pstr_real), PNG_OK,
+              "RAMGON.png → PNG_OK on pixels");
+    # Expected size = 1152 × 925 × 4 bytes/pixel = 4,262,400.
+    assert_eq(load64(&pstr_real + STRUCT_PIXELS_SIZE_OFFSET), 4262400,
+              "RAMGON decoded size = 1152 × 925 × 4 = 4,262,400");
+
     return assert_summary();
 }
 

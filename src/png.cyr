@@ -42,6 +42,11 @@ var PNG_ERR_NOT_PNG   = 3;  # First 8 bytes did not match PNG_MAGIC
 var PNG_ERR_HEADER    = 4;  # IHDR chunk truncated, wrong length, or wrong type
 var PNG_ERR_CRC       = 5;  # IHDR or post-IHDR chunk CRC32 mismatch
 var PNG_ERR_CHUNK     = 6;  # Non-IHDR chunk truncated mid-read (started but EOF before completing)
+var PNG_ERR_INTERLACE = 7;  # interlace == 1 (Adam7) — explicit M3 rejection per roadmap
+var PNG_ERR_BITDEPTH  = 8;  # bit_depth ∈ {1,2,4} or unsupported color_type — explicit M3 rejection
+var PNG_ERR_NO_IDAT   = 9;  # PNG had zero IDAT chunks (structurally valid but no pixel data)
+var PNG_ERR_INFLATE   = 10; # zlib_decompress failed or produced wrong size
+var PNG_ERR_FILTER    = 11; # Unknown filter byte (per-row filter ∈ {0,1,2,3,4} per spec § 9)
 
 # ---- IHDR struct layout (sub-bite (b)) -----------------------------
 # Caller passes a ≥32-byte buffer; png_decode_header populates four
@@ -85,6 +90,8 @@ var STRUCT_IDAT_TOTAL_SIZE_OFFSET = 40;
 var STRUCT_SEEN_IEND_OFFSET       = 48;
 var STRUCT_INTERLACE_OFFSET       = 56;
 var STRUCT_IDAT_BUF_OFFSET        = 64;
+var STRUCT_PIXELS_BUF_OFFSET      = 72;   # alloc'd, populated by png_decode_pixels (M3(c)+)
+var STRUCT_PIXELS_SIZE_OFFSET     = 80;   # decoded pixel-buf byte count (= height × width × bpp)
 
 # ---- CRC32 (PNG spec § 5.3) ----------------------------------------
 # Standard "Ethernet" CRC-32 reversed polynomial 0xEDB88320 (same
@@ -484,5 +491,173 @@ fn png_decode_structure(path, out_struct): i64 {
         if (copied != idat_total) { return PNG_ERR_CHUNK; }
     }
     store64(out_struct + STRUCT_IDAT_BUF_OFFSET, idat_buf);
+    return PNG_OK;
+}
+
+# ---- pixel decode (sub-bite (c)) -----------------------------------
+# Color-type → channels-per-pixel per spec § 11.2.2 / Table 11.1:
+#   0 greyscale    → 1
+#   2 RGB          → 3
+#   3 palette      → 1 (output is palette index; PLTE→RGB lookup is M4)
+#   4 grey+alpha   → 2
+#   6 RGBA         → 4
+# Returns -1 for unknown color_type. Used to derive bytes-per-pixel
+# for row-size + filter undo math.
+fn _png_color_channels(color_type): i64 {
+    if (color_type == 0) { return 1; }
+    if (color_type == 2) { return 3; }
+    if (color_type == 3) { return 1; }
+    if (color_type == 4) { return 2; }
+    if (color_type == 6) { return 4; }
+    return 0 - 1;
+}
+
+# PNG filter type 4 (Paeth) predictor — spec § 9.4. Given the
+# byte to the left (a), the byte above (b), and the byte above-
+# left (c), picks whichever of the three is "closest" to a+b-c
+# in absolute-value distance. Ties broken left → up → up-left,
+# matching the spec's order.
+fn _png_paeth(a, b, c): i64 {
+    var p = a + b - c;
+    var pa = p - a; if (pa < 0) { pa = 0 - pa; }
+    var pb = p - b; if (pb < 0) { pb = 0 - pb; }
+    var pc = p - c; if (pc < 0) { pc = 0 - pc; }
+    if (pa <= pb && pa <= pc) { return a; }
+    if (pb <= pc) { return b; }
+    return c;
+}
+
+# Apply a single row's filter undo. Spec § 9: each row in the
+# inflated IDAT stream is prefixed with a filter-type byte (0–4),
+# followed by `row_bytes` of filtered data. We reconstruct the
+# raw row into `out_row` using the previous row's RAW (post-undo)
+# bytes — caller is responsible for passing zero-row for row 0.
+# `bpp` is bytes-per-pixel (1/2/3/4/6/8 for tier-1 scope).
+# Returns 0 on success, -1 if filter_type ∉ {0,1,2,3,4}.
+fn _png_unfilter_row(prev_row, curr_in, out_row, row_bytes, bpp, filter_type): i64 {
+    var i = 0;
+    if (filter_type == 0) {
+        # None — passthrough.
+        while (i < row_bytes) {
+            store8(out_row + i, load8(curr_in + i));
+            i = i + 1;
+        }
+        return 0;
+    }
+    if (filter_type == 1) {
+        # Sub — out[i] = in[i] + (i<bpp ? 0 : out[i-bpp])
+        while (i < row_bytes) {
+            var left = 0;
+            if (i >= bpp) { left = load8(out_row + i - bpp); }
+            store8(out_row + i, (load8(curr_in + i) + left) & 0xFF);
+            i = i + 1;
+        }
+        return 0;
+    }
+    if (filter_type == 2) {
+        # Up — out[i] = in[i] + prev[i]
+        while (i < row_bytes) {
+            var up = load8(prev_row + i);
+            store8(out_row + i, (load8(curr_in + i) + up) & 0xFF);
+            i = i + 1;
+        }
+        return 0;
+    }
+    if (filter_type == 3) {
+        # Average — out[i] = in[i] + floor((left + up) / 2)
+        while (i < row_bytes) {
+            var left = 0;
+            if (i >= bpp) { left = load8(out_row + i - bpp); }
+            var up = load8(prev_row + i);
+            store8(out_row + i, (load8(curr_in + i) + ((left + up) / 2)) & 0xFF);
+            i = i + 1;
+        }
+        return 0;
+    }
+    if (filter_type == 4) {
+        # Paeth — out[i] = in[i] + paeth(left, up, up-left)
+        while (i < row_bytes) {
+            var left    = 0;
+            var up_left = 0;
+            if (i >= bpp) {
+                left    = load8(out_row + i - bpp);
+                up_left = load8(prev_row + i - bpp);
+            }
+            var up = load8(prev_row + i);
+            store8(out_row + i, (load8(curr_in + i) + _png_paeth(left, up, up_left)) & 0xFF);
+            i = i + 1;
+        }
+        return 0;
+    }
+    return 0 - 1;
+}
+
+# Decode IDAT bytes into raw pixels. Takes the populated pstruct
+# from png_decode_structure, applies M3 rejection rules (Adam7
+# + sub-byte bit-depths), inflates via sankoch's zlib_decompress,
+# walks rows applying filter undo per spec § 9. On success:
+#   - STRUCT_PIXELS_BUF_OFFSET  ← alloc'd ptr to raw pixel data
+#   - STRUCT_PIXELS_SIZE_OFFSET ← byte count (= h × w × bpp)
+# Palette-typed PNGs (color_type=3) emit palette INDICES at this
+# layer; PLTE → RGB lookup is M4+ scope.
+fn png_decode_pixels(pstruct): i64 {
+    var width      = load64(pstruct + STRUCT_WIDTH_OFFSET);
+    var height     = load64(pstruct + STRUCT_HEIGHT_OFFSET);
+    var bit_depth  = load64(pstruct + STRUCT_BIT_DEPTH_OFFSET);
+    var color_type = load64(pstruct + STRUCT_COLOR_TYPE_OFFSET);
+    var interlace  = load64(pstruct + STRUCT_INTERLACE_OFFSET);
+    var idat_buf   = load64(pstruct + STRUCT_IDAT_BUF_OFFSET);
+    var idat_total = load64(pstruct + STRUCT_IDAT_TOTAL_SIZE_OFFSET);
+
+    # ---- M3 rejection rules ----
+    # Adam7 interlacing is post-v1 scope per CLAUDE.md color-tier
+    # / format discipline. Defer-don't-half-implement.
+    if (interlace != 0) { return PNG_ERR_INTERLACE; }
+    # Sub-byte bit-depths (1/2/4) require bit-unpacking — also
+    # post-v1 scope. tier-1 = 8 and 16 only.
+    if (bit_depth != 8 && bit_depth != 16) { return PNG_ERR_BITDEPTH; }
+    var channels = _png_color_channels(color_type);
+    if (channels < 0) { return PNG_ERR_BITDEPTH; }
+    # No IDAT data at all — structurally valid PNG but nothing
+    # to decode.
+    if (idat_buf == 0 || idat_total == 0) { return PNG_ERR_NO_IDAT; }
+
+    # ---- size math ----
+    # bit_depth ∈ {8,16} ⇒ bytes-per-channel ∈ {1,2}. bpp is
+    # whole-byte at tier-1 (sub-byte unpacking deferred).
+    var bpp           = channels * (bit_depth / 8);
+    var row_bytes     = width * bpp;
+    var inflated_size = height * (1 + row_bytes);   # 1 filter byte per row
+    var pixel_size    = height * row_bytes;
+
+    # ---- inflate ----
+    var inflated = alloc(inflated_size);
+    if (inflated == 0) { return PNG_ERR_INFLATE; }
+    var n = zlib_decompress(idat_buf, idat_total, inflated, inflated_size);
+    if (n < 0)              { return PNG_ERR_INFLATE; }
+    if (n != inflated_size) { return PNG_ERR_INFLATE; }
+
+    # ---- filter undo ----
+    var pixels   = alloc(pixel_size);
+    var zero_row = alloc(row_bytes);
+    if (pixels == 0 || zero_row == 0) { return PNG_ERR_INFLATE; }
+    var z = 0;
+    while (z < row_bytes) { store8(zero_row + z, 0); z = z + 1; }
+
+    var prev = zero_row;
+    var r = 0;
+    while (r < height) {
+        var row_off     = r * (1 + row_bytes);
+        var filter_byte = load8(inflated + row_off);
+        var curr_in     = inflated + row_off + 1;
+        var out_row     = pixels + r * row_bytes;
+        var rc = _png_unfilter_row(prev, curr_in, out_row, row_bytes, bpp, filter_byte);
+        if (rc != 0) { return PNG_ERR_FILTER; }
+        prev = out_row;
+        r = r + 1;
+    }
+
+    store64(pstruct + STRUCT_PIXELS_BUF_OFFSET,  pixels);
+    store64(pstruct + STRUCT_PIXELS_SIZE_OFFSET, pixel_size);
     return PNG_OK;
 }
