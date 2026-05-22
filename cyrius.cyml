@@ -1,0 +1,16 @@
+[package]
+name = "kii"
+version = "0.1.0"
+description = "kii — TODO"
+license = "GPL-3.0-only"
+language = "cyrius"
+cyrius = "6.0.1"
+
+[build]
+entry = "src/main.cyr"
+test = "src/test.cyr"
+output = "kii"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
+---
