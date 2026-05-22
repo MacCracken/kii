@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # release.yml gates on this workflow via `uses: ./.github/workflows/ci.yml`.
+  # GitHub Actions requires the called workflow to opt in via `workflow_call:`
+  # — without this, the v0.2.0 release tag would trip on the CI-gate step.
+  # Wired in at v0.2.0 close-out (see CHANGELOG). A more thorough CI/release
+  # pass (fuzz step, --version smoke, aarch64 cross, CHANGELOG-extracted
+  # release notes) is captured in the v0.2.0 release notes and pending a
+  # dedicated cycle.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
