@@ -10,9 +10,10 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 sub-bite (a) in progress — `--help` + `--version` parse + exit.
-# Sub-bites (b)/(c)/(d) follow: positional path → --width/--color → fuzz.
-# VERSION + CHANGELOG bump to 0.2.0 lands at end of M1, not per sub-bite.
+# Status: M1 sub-bites (a) + (b) in progress — `--help` / `--version`
+# parse + exit; positional path arg routes to a placeholder. Sub-bites
+# (c)/(d) follow: --width/--color → fuzz. VERSION + CHANGELOG bump to
+# 0.2.0 lands at end of M1, not per sub-bite.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -42,6 +43,21 @@ var KII_ARGV_MAX = 256;
 fn _eprint(s): i64 {
     var len = strlen(s);
     syscall(1, 2, s, len);
+    return 0;
+}
+
+# Print "<path>: <msg>\n" to stderr. Path-keyed diagnostic format —
+# matches chafa's `chafa: foo.png: image load failed` shape and the
+# eventual M2+ structural-decode error strings. Placeholder
+# "decoder not yet implemented" rides this while M2/M3 are still
+# upstream.
+fn _eprint_path_msg(path, msg): i64 {
+    var plen = strlen(path);
+    var mlen = strlen(msg);
+    syscall(1, 2, path, plen);
+    syscall(1, 2, ": ", 2);
+    syscall(1, 2, msg, mlen);
+    syscall(1, 2, "\n", 1);
     return 0;
 }
 
@@ -125,16 +141,26 @@ fn main(): i64 {
         return print_version();
     }
 
-    # Fallback: no flags parsed. Sub-bite (b) wires the positional
-    # path to print "decoder not yet implemented" + exit 1; until
-    # then keep the scaffold banner so `./build/kii` (no args)
-    # stays a sensible smoke-test.
-    println("kii v0.1.0 — pre-alpha scaffold");
-    println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
-    println("");
-    println("status: no working features yet; see docs/development/roadmap.md");
-    println("        for the milestone path to v1.0.");
-    return KII_EXIT_OK;
+    # Positional path arg. kii takes exactly one image path per
+    # CLAUDE.md domain rule ("kii takes ONE file path. No glob, no
+    # recursive directory scan."). Zero = usage error; two-plus =
+    # usage error; exactly one = M1(b) placeholder until M2 wires
+    # the structural decoder.
+    var pc = flags_positional_count(fs);
+    if (pc == 0) {
+        _eprint("kii: missing image path\n");
+        print_usage(fs);
+        return KII_EXIT_USAGE;
+    }
+    if (pc > 1) {
+        _eprint("kii: too many arguments (expected one image path)\n");
+        print_usage(fs);
+        return KII_EXIT_USAGE;
+    }
+
+    var path = flags_positional(fs, 0);
+    _eprint_path_msg(path, "decoder not yet implemented");
+    return KII_EXIT_RUN;
 }
 
 var r = main();
