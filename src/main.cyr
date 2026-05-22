@@ -1,8 +1,5 @@
-# kii — main entry point
-# Stdlib auto-included via cyrius.cyml
-#
-# v0.1.0 SCAFFOLD: prints version + a placeholder usage message. No image
-# decoding, no ANSI output, no working features. Scaffolded 2026-05-22.
+# kii — main entry point.
+# Stdlib (incl. args, flags) auto-included via cyrius.cyml.
 #
 # Milestone path to v1.0 (see docs/development/roadmap.md):
 #   M1 v0.2.0  CLI arg parsing (--help / --version / positional path / --width / --color)
@@ -13,20 +10,131 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
+# Status: M1 sub-bite (a) in progress — `--help` + `--version` parse + exit.
+# Sub-bites (b)/(c)/(d) follow: positional path → --width/--color → fuzz.
+# VERSION + CHANGELOG bump to 0.2.0 lands at end of M1, not per sub-bite.
+#
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
 #   - CRC + signature validation on every input image
 #   - No file writes (stdin/args → stdout only)
 #   - Tier 1 = 8/16-color ANSI + half-block; tier 2 (256/truecolor) is post-v1
 
-fn main() {
+# ---- exit codes ---------------------------------------------------
+# Mirrors the AGNOS userland convention (anuenue, hapi, bannermanor):
+#   0 = normal exit (incl. --help / --version paths)
+#   1 = runtime error (decode fail, IO error) — used at M2+
+#   2 = usage error (unknown flag, missing value, bad int)
+var KII_EXIT_OK    = 0;
+var KII_EXIT_RUN   = 1;
+var KII_EXIT_USAGE = 2;
+
+# argv cap. kii takes one positional path arg at most; 256 is
+# absurdly more than any plausible invocation but matches the
+# anuenue cap so every AGNOS userland binary lands on the same
+# stack-buffer shape.
+var KII_ARGV_MAX = 256;
+
+# Write a null-terminated string to fd 2 (stderr). Usage / help
+# text rides this so the happy-path stdout pipe stays pure once
+# M5 lands ANSI emit — `kii image.png | tee out.ansi` mustn't get
+# help text mixed into the captured frame.
+fn _eprint(s): i64 {
+    var len = strlen(s);
+    syscall(1, 2, s, len);
+    return 0;
+}
+
+# --version → stdout. POSIX-conventional: machine-readable
+# version line first, etymology second. Scripts that grep for
+# the version line see exactly `kii X.Y.Z` on stdout's first
+# line; humans get the Hawaiian gloss on the second.
+fn print_version(): i64 {
+    println("kii 0.1.0");
+    println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
+    return 0;
+}
+
+fn print_usage(fs): i64 {
+    _eprint("kii — kiʻi (Hawaiian: image / picture / likeness). Image → ANSI art.\n\n");
+    _eprint("Usage:\n  kii [OPTIONS] <image.png>\n\n");
+    _eprint("Options:\n");
+    flags_print_help(fs);
+    _eprint("\nExamples:\n");
+    _eprint("  kii --version                              # version + etymology\n");
+    _eprint("  kii --help                                 # this text\n");
+    _eprint("  kii image.png                              # render to terminal (M5+)\n");
+    return 0;
+}
+
+# Pack argc()/argv(i) into a contiguous cstr* array. flags_parse
+# wants a raw pointer-array (it does `load64(argv + i*8)`), not
+# lib/args.cyr's byte-stream walker.
+fn build_argv_array(arr): i64 {
+    var ac = argc();
+    var i = 0;
+    while (i < ac) {
+        store64(arr + i * 8, argv(i));
+        i = i + 1;
+    }
+    return ac;
+}
+
+fn main(): i64 {
+    args_init();
     alloc_init();
+
+    var ac = argc();
+    if (ac > KII_ARGV_MAX) {
+        _eprint("kii: too many arguments\n");
+        return KII_EXIT_USAGE;
+    }
+    var argv_arr[2048];                     # 256 slots × 8 bytes
+    build_argv_array(&argv_arr);
+
+    # M1 sub-bite (a): --help + --version only. Short codes are
+    # ASCII byte values (h = 104, V = 86 — capital V for --version
+    # is the conventional choice, leaves lowercase v free for a
+    # future --verbose if that ever surfaces).
+    var fs = flags_new();
+    var f_help    = flags_add_bool(fs, 104, "help",    0, "show this help and exit");
+    var f_version = flags_add_bool(fs,  86, "version", 0, "print version and exit");
+
+    if (flags_parse(fs, ac, &argv_arr) != 0) {
+        var err = flags_error(fs);
+        if (err == FLAG_ERR_UNKNOWN) {
+            _eprint("kii: unknown flag\n");
+        } else { if (err == FLAG_ERR_MISSING_VALUE) {
+            _eprint("kii: flag missing value\n");
+        } else { if (err == FLAG_ERR_BAD_INT) {
+            _eprint("kii: bad integer value\n");
+        } else { if (err == FLAG_ERR_BUNDLED) {
+            _eprint("kii: bundled short flags not supported (use -x -y, not -xy)\n");
+        } else {
+            _eprint("kii: argument parse error\n");
+        } } } }
+        print_usage(fs);
+        return KII_EXIT_USAGE;
+    }
+
+    if (flags_get_bool(fs, f_help) == 1) {
+        print_usage(fs);
+        return KII_EXIT_OK;
+    }
+    if (flags_get_bool(fs, f_version) == 1) {
+        return print_version();
+    }
+
+    # Fallback: no flags parsed. Sub-bite (b) wires the positional
+    # path to print "decoder not yet implemented" + exit 1; until
+    # then keep the scaffold banner so `./build/kii` (no args)
+    # stays a sensible smoke-test.
     println("kii v0.1.0 — pre-alpha scaffold");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     println("");
     println("status: no working features yet; see docs/development/roadmap.md");
     println("        for the milestone path to v1.0.");
-    return 0;
+    return KII_EXIT_OK;
 }
 
 var r = main();

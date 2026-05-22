@@ -16,4 +16,4 @@ output = "kii"
 # Minimal stdlib at v0.1.0. darshana (ANSI primitives) + sankoch
 # (DEFLATE for PNG IDAT) get added at v0.6.0 + v0.4.0 respectively
 # per docs/development/roadmap.md milestones.
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args"]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags"]
