@@ -10,10 +10,11 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 sub-bites (a) + (b) in progress — `--help` / `--version`
-# parse + exit; positional path arg routes to a placeholder. Sub-bites
-# (c)/(d) follow: --width/--color → fuzz. VERSION + CHANGELOG bump to
-# 0.2.0 lands at end of M1, not per sub-bite.
+# Status: M1 sub-bites (a)–(c) in progress — full M1 flag surface
+# (`--help`, `--version`, `--width N`, `--color N`, positional path)
+# parses + dispatches; values are captured + echoed by the placeholder
+# but no decoder runs yet. Sub-bite (d) adds fuzz coverage. VERSION +
+# CHANGELOG bump to 0.2.0 lands at end of M1, not per sub-bite.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -46,18 +47,24 @@ fn _eprint(s): i64 {
     return 0;
 }
 
-# Print "<path>: <msg>\n" to stderr. Path-keyed diagnostic format —
-# matches chafa's `chafa: foo.png: image load failed` shape and the
-# eventual M2+ structural-decode error strings. Placeholder
-# "decoder not yet implemented" rides this while M2/M3 are still
-# upstream.
-fn _eprint_path_msg(path, msg): i64 {
-    var plen = strlen(path);
-    var mlen = strlen(msg);
-    syscall(1, 2, path, plen);
-    syscall(1, 2, ": ", 2);
-    syscall(1, 2, msg, mlen);
-    syscall(1, 2, "\n", 1);
+# Throwaway M1 placeholder. Writes
+#   <path>: decoder not yet implemented (width=N color=N)\n
+# to stderr. The width/color echo proves the flag values were
+# captured into module state — the only observable smoke for the
+# sub-bite (c) acceptance criteria short of a debugger. M2 replaces
+# this entire path with the structural-decode success line
+# (`image.png: <W>x<H> bit_depth=<N> color_type=<T>` on stdout).
+fn _eprint_placeholder(path, width, color): i64 {
+    _eprint(path);
+    _eprint(": decoder not yet implemented (width=");
+    var wbuf[32];
+    var wlen = fmt_int_buf(width, &wbuf);
+    syscall(1, 2, &wbuf, wlen);
+    _eprint(" color=");
+    var cbuf[32];
+    var clen = fmt_int_buf(color, &cbuf);
+    syscall(1, 2, &cbuf, clen);
+    _eprint(")\n");
     return 0;
 }
 
@@ -108,13 +115,19 @@ fn main(): i64 {
     var argv_arr[2048];                     # 256 slots × 8 bytes
     build_argv_array(&argv_arr);
 
-    # M1 sub-bite (a): --help + --version only. Short codes are
-    # ASCII byte values (h = 104, V = 86 — capital V for --version
-    # is the conventional choice, leaves lowercase v free for a
-    # future --verbose if that ever surfaces).
+    # M1 full flag surface. Short codes are ASCII byte values:
+    #   h = 104, V = 86 (capital — leaves lowercase v free for a
+    #   future --verbose if that ever surfaces),
+    #   w = 119, c = 99 (mirror chafa's `-w` / `-c` conventions).
+    # Defaults: --width 0 is the M6 sentinel for "match terminal"
+    # (and the M5-floor fallback to 80 cols); --color 16 picks the
+    # higher fidelity tier within v1.0 scope (matches the M5
+    # `chafa --colors 16` visual-review baseline).
     var fs = flags_new();
-    var f_help    = flags_add_bool(fs, 104, "help",    0, "show this help and exit");
-    var f_version = flags_add_bool(fs,  86, "version", 0, "print version and exit");
+    var f_help    = flags_add_bool(fs, 104, "help",    0,  "show this help and exit");
+    var f_version = flags_add_bool(fs,  86, "version", 0,  "print version and exit");
+    var f_width   = flags_add_int (fs, 119, "width",   0,  "output width in columns (0 = match terminal)");
+    var f_color   = flags_add_int (fs,  99, "color",   16, "color tier: 8 or 16 (tier-2 modes post-v1)");
 
     if (flags_parse(fs, ac, &argv_arr) != 0) {
         var err = flags_error(fs);
@@ -141,11 +154,24 @@ fn main(): i64 {
         return print_version();
     }
 
+    # --color validation. Only 8 or 16 are valid within tier-1
+    # scope; 256 / truecolor are explicit post-v1 work (CLAUDE.md
+    # color-tier discipline). Run BEFORE the positional check so
+    # `kii --color 7` fails fast on the flag without first nagging
+    # about the missing path.
+    var color = flags_get_int(fs, f_color);
+    if (color != 8 && color != 16) {
+        _eprint("kii: --color must be 8 or 16\n");
+        print_usage(fs);
+        return KII_EXIT_USAGE;
+    }
+    var width = flags_get_int(fs, f_width);
+
     # Positional path arg. kii takes exactly one image path per
     # CLAUDE.md domain rule ("kii takes ONE file path. No glob, no
     # recursive directory scan."). Zero = usage error; two-plus =
-    # usage error; exactly one = M1(b) placeholder until M2 wires
-    # the structural decoder.
+    # usage error; exactly one = M1 placeholder until M2 wires the
+    # structural decoder.
     var pc = flags_positional_count(fs);
     if (pc == 0) {
         _eprint("kii: missing image path\n");
@@ -159,7 +185,7 @@ fn main(): i64 {
     }
 
     var path = flags_positional(fs, 0);
-    _eprint_path_msg(path, "decoder not yet implemented");
+    _eprint_placeholder(path, width, color);
     return KII_EXIT_RUN;
 }
 
