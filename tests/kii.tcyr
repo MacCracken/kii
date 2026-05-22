@@ -5,6 +5,9 @@
 # (happy paths via the full kii flag set + error-variant dispatch).
 # M2(a) coverage: png_check_signature (pure, in-memory) +
 # png_validate_file_signature (file-level via /tmp fixtures).
+# M2(b) coverage: png_read_u32_be (pure big-endian decode) +
+# png_decode_header (signature + IHDR parse, file-level via /tmp
+# fixtures crafted to W3C PNG § 11.2.2).
 # The end-to-end binary smoke is exercised via the manual run
 # shell — Cyrius can't trivially subprocess itself inside a unit
 # test, so .tcyr owns the in-process pieces and the smoke shell
@@ -241,6 +244,137 @@ fn main() {
     # plus a randomish suffix avoids collision with any sibling
     # test that might run concurrently in CI.
     assert_eq(png_validate_file_signature("/tmp/kii-noexist-zzy42.png"),
+              PNG_ERR_OPEN,
+              "nonexistent path → PNG_ERR_OPEN");
+
+    # ---- M2(b) — png_read_u32_be (pure big-endian decode) ----------
+    # PNG is big-endian per spec § 7. Lock the byte-order at the
+    # primitive level so any future endian-confusion regression
+    # surfaces here rather than in IHDR / IDAT length parsing
+    # downstream.
+    test_group("M2(b) — png_read_u32_be");
+
+    var be1[8];
+    store8(&be1 + 0, 0x00);
+    store8(&be1 + 1, 0x00);
+    store8(&be1 + 2, 0x00);
+    store8(&be1 + 3, 0x0D);
+    assert_eq(png_read_u32_be(&be1, 0), 13, "00 00 00 0D → 13 (IHDR chunk length)");
+
+    var be2[8];
+    store8(&be2 + 0, 0x00);
+    store8(&be2 + 1, 0x00);
+    store8(&be2 + 2, 0x04);
+    store8(&be2 + 3, 0x00);
+    assert_eq(png_read_u32_be(&be2, 0), 1024, "00 00 04 00 → 1024 (width)");
+
+    var be3[8];
+    store8(&be3 + 0, 0xFF);
+    store8(&be3 + 1, 0xFF);
+    store8(&be3 + 2, 0xFF);
+    store8(&be3 + 3, 0xFF);
+    assert_eq(png_read_u32_be(&be3, 0), 4294967295, "FF FF FF FF → u32 max");
+
+    # Offset-aware read — bytes at offset 2 (the 'A' 'B' in payload).
+    var be4[8];
+    store8(&be4 + 0, 0xDE);
+    store8(&be4 + 1, 0xAD);
+    store8(&be4 + 2, 0x00);
+    store8(&be4 + 3, 0x00);
+    store8(&be4 + 4, 0x01);
+    store8(&be4 + 5, 0x00);
+    assert_eq(png_read_u32_be(&be4, 2), 256, "offset 2: 00 00 01 00 → 256");
+
+    # ---- M2(b) — png_decode_header (full IHDR parse) ---------------
+    # Each fixture is a hand-crafted 33-byte file: 8-byte signature
+    # + IHDR chunk (4-byte length + 4-byte type + 13-byte data +
+    # 4-byte CRC). CRC bytes are arbitrary (XXXX) — sub-bite (c)
+    # wires CRC validation; for (b) any 4-byte tail works.
+    test_group("M2(b) — png_decode_header happy path (4x2 RGB)");
+    file_write_all(
+        "/tmp/kii-test-ihdr-4x2.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x04\x00\x00\x00\x02\x08\x02\x00\x00\x00XXXX",
+        33);
+    var ihdr_a[32];
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-4x2.png", &ihdr_a),
+              PNG_OK,
+              "4x2 RGB fixture → PNG_OK");
+    assert_eq(load64(&ihdr_a + IHDR_WIDTH_OFFSET),      4, "width = 4");
+    assert_eq(load64(&ihdr_a + IHDR_HEIGHT_OFFSET),     2, "height = 2");
+    assert_eq(load64(&ihdr_a + IHDR_BIT_DEPTH_OFFSET),  8, "bit_depth = 8");
+    assert_eq(load64(&ihdr_a + IHDR_COLOR_TYPE_OFFSET), 2, "color_type = 2 (RGB)");
+
+    test_group("M2(b) — png_decode_header (1024x768 16-bit RGBA)");
+    # color_type = 6 (RGBA), bit_depth = 16, w = 1024, h = 768.
+    # 1024 = 0x00 00 04 00 ; 768 = 0x00 00 03 00.
+    file_write_all(
+        "/tmp/kii-test-ihdr-1024.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x04\x00\x00\x00\x03\x00\x10\x06\x00\x00\x00XXXX",
+        33);
+    var ihdr_b[32];
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-1024.png", &ihdr_b),
+              PNG_OK,
+              "1024x768 16-bit RGBA fixture → PNG_OK");
+    assert_eq(load64(&ihdr_b + IHDR_WIDTH_OFFSET),      1024, "width = 1024");
+    assert_eq(load64(&ihdr_b + IHDR_HEIGHT_OFFSET),     768,  "height = 768");
+    assert_eq(load64(&ihdr_b + IHDR_BIT_DEPTH_OFFSET),  16,   "bit_depth = 16");
+    assert_eq(load64(&ihdr_b + IHDR_COLOR_TYPE_OFFSET), 6,    "color_type = 6 (RGBA)");
+
+    test_group("M2(b) — png_decode_header all four color_types");
+    # Greyscale (0), RGB (2), palette (3), grey+alpha (4) all parse
+    # cleanly — the IHDR layer doesn't validate the bit_depth /
+    # color_type compatibility matrix (M3 work; rejection of 1/2/4
+    # bit depths + Adam7 lives there too per roadmap).
+    var ihdr_c[32];
+    file_write_all("/tmp/kii-test-ihdr-grey.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x00\x00\x00\x00YYYY", 33);
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-grey.png", &ihdr_c), PNG_OK, "greyscale parses");
+    assert_eq(load64(&ihdr_c + IHDR_COLOR_TYPE_OFFSET), 0, "color_type = 0 (greyscale)");
+
+    file_write_all("/tmp/kii-test-ihdr-pal.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x03\x00\x00\x00YYYY", 33);
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-pal.png", &ihdr_c), PNG_OK, "palette parses");
+    assert_eq(load64(&ihdr_c + IHDR_COLOR_TYPE_OFFSET), 3, "color_type = 3 (palette)");
+
+    file_write_all("/tmp/kii-test-ihdr-ga.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00YYYY", 33);
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-ga.png", &ihdr_c), PNG_OK, "grey+alpha parses");
+    assert_eq(load64(&ihdr_c + IHDR_COLOR_TYPE_OFFSET), 4, "color_type = 4 (grey+alpha)");
+
+    test_group("M2(b) — png_decode_header malformed cases");
+    # Truncated mid-IHDR — signature ok but only 4 IHDR bytes follow.
+    file_write_all("/tmp/kii-test-ihdr-trunc.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR", 12);
+    var ihdr_d[32];
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-trunc.png", &ihdr_d),
+              PNG_ERR_HEADER,
+              "truncated mid-IHDR → PNG_ERR_HEADER");
+
+    # Wrong chunk type ("NOPE" instead of "IHDR").
+    file_write_all("/tmp/kii-test-ihdr-wrongtype.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dNOPE\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00ZZZZ", 33);
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-wrongtype.png", &ihdr_d),
+              PNG_ERR_HEADER,
+              "first chunk type != IHDR → PNG_ERR_HEADER");
+
+    # Wrong chunk length (claims 0xff bytes instead of 13).
+    file_write_all("/tmp/kii-test-ihdr-wronglen.png",
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\xffIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00ZZZZ", 33);
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-wronglen.png", &ihdr_d),
+              PNG_ERR_HEADER,
+              "IHDR length != 13 → PNG_ERR_HEADER");
+
+    # Bad signature → still surfaces as the earlier-stage error,
+    # not PNG_ERR_HEADER. Ordering invariant: signature is checked
+    # first.
+    file_write_all("/tmp/kii-test-ihdr-badsig.png",
+        "JFIF\x00\x00\x00\x00\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00ZZZZ", 33);
+    assert_eq(png_decode_header("/tmp/kii-test-ihdr-badsig.png", &ihdr_d),
+              PNG_ERR_NOT_PNG,
+              "bad signature short-circuits before IHDR parse");
+
+    # Nonexistent path → PNG_ERR_OPEN, same as M2(a).
+    assert_eq(png_decode_header("/tmp/kii-noexist-ihdr-zzz.png", &ihdr_d),
               PNG_ERR_OPEN,
               "nonexistent path → PNG_ERR_OPEN");
 

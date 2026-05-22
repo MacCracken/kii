@@ -10,15 +10,15 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M1 shipped at v0.2.0. M2 sub-bite (a) in progress — PNG
-# signature validation lands at the entry hop. Valid path with
-# valid 8-byte signature → "<path>: signature ok; structural
-# decode not yet implemented" + exit 1. Invalid signature /
-# truncated file / open failure → distinct path-keyed errors +
-# exit 1. The full M2 structural-decode output (`<W>x<H>
-# bit_depth=<N> color_type=<T>` on stdout, exit 0) lands at
-# sub-bite (d). VERSION + CHANGELOG bump to 0.3.0 lands at end
-# of M2, not per sub-bite.
+# Status: M1 shipped at v0.2.0. M2 sub-bites (a) + (b) in progress —
+# PNG signature + IHDR parse land at the entry hop. Valid PNGs
+# print `<path>: <W>x<H> bit_depth=<N> color_type=<T> (structural
+# decode incomplete)` to stderr + exit 1. Malformed signature /
+# IHDR / open failure → distinct path-keyed errors + exit 1.
+# Sub-bite (c) adds the chunk walker + CRC32; sub-bite (d) flips
+# the success path to stdout + exit 0 once CRC validates the
+# IHDR. VERSION + CHANGELOG bump to 0.3.0 lands at end of M2,
+# not per sub-bite.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -56,6 +56,28 @@ fn _eprint_path_msg(path, msg): i64 {
     _eprint(": ");
     _eprint(msg);
     _eprint("\n");
+    return 0;
+}
+
+# Print "<path>: <W>x<H> bit_depth=<N> color_type=<N> (structural
+# decode incomplete)\n" to stderr. Matches the M2 acceptance
+# shape; the trailing parenthetical is the sub-bite-(b) WIP
+# marker. Sub-bite (d) drops the marker + flips to stdout/exit 0.
+fn _eprint_ihdr_summary(path, ihdr): i64 {
+    _eprint(path);
+    _eprint(": ");
+    var wbuf[16]; var wlen = fmt_int_buf(load64(ihdr + IHDR_WIDTH_OFFSET), &wbuf);
+    syscall(1, 2, &wbuf, wlen);
+    _eprint("x");
+    var hbuf[16]; var hlen = fmt_int_buf(load64(ihdr + IHDR_HEIGHT_OFFSET), &hbuf);
+    syscall(1, 2, &hbuf, hlen);
+    _eprint(" bit_depth=");
+    var dbuf[8];  var dlen = fmt_int_buf(load64(ihdr + IHDR_BIT_DEPTH_OFFSET), &dbuf);
+    syscall(1, 2, &dbuf, dlen);
+    _eprint(" color_type=");
+    var cbuf[8];  var clen = fmt_int_buf(load64(ihdr + IHDR_COLOR_TYPE_OFFSET), &cbuf);
+    syscall(1, 2, &cbuf, clen);
+    _eprint(" (structural decode incomplete)\n");
     return 0;
 }
 
@@ -164,13 +186,15 @@ fn main(): i64 {
         return KII_EXIT_USAGE;
     }
 
-    # M2(a): PNG signature validation. Distinct error paths so
-    # users see *what* went wrong (open vs not-PNG vs truncated)
-    # rather than a generic "decode failed". Full structural
-    # output lands at M2(d) on stdout/exit-0; until then valid
-    # signatures still exit 1 with an "ok but incomplete" line.
+    # M2(a)+(b): PNG signature + IHDR parse. Distinct error paths
+    # so users see *what* went wrong (open vs not-PNG vs truncated
+    # vs malformed header) rather than a generic "decode failed".
+    # Full structural output flips to stdout/exit-0 at M2(d) once
+    # CRC validates the chunk; until then exit 1 with a parenthe-
+    # tical WIP marker on the diagnostic line.
     var path = flags_positional(fs, 0);
-    var rc = png_validate_file_signature(path);
+    var ihdr[32];
+    var rc = png_decode_header(path, &ihdr);
     if (rc == PNG_ERR_OPEN) {
         _eprint_path_msg(path, "cannot open file");
         return KII_EXIT_RUN;
@@ -183,7 +207,11 @@ fn main(): i64 {
         _eprint_path_msg(path, "not a PNG");
         return KII_EXIT_RUN;
     }
-    _eprint_path_msg(path, "signature ok; structural decode not yet implemented");
+    if (rc == PNG_ERR_HEADER) {
+        _eprint_path_msg(path, "malformed PNG header");
+        return KII_EXIT_RUN;
+    }
+    _eprint_ihdr_summary(path, &ihdr);
     return KII_EXIT_RUN;
 }
 

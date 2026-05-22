@@ -39,6 +39,27 @@ var PNG_OK            = 0;
 var PNG_ERR_OPEN      = 1;  # File could not be opened (not found, perms, etc.)
 var PNG_ERR_TRUNCATED = 2;  # File read returned fewer than 8 bytes
 var PNG_ERR_NOT_PNG   = 3;  # First 8 bytes did not match PNG_MAGIC
+var PNG_ERR_HEADER    = 4;  # IHDR chunk truncated, wrong length, or wrong type
+
+# ---- IHDR struct layout (sub-bite (b)) -----------------------------
+# Caller passes a ≥32-byte buffer; png_decode_header populates four
+# i64 slots:
+#   +0   width
+#   +8   height
+#   +16  bit_depth
+#   +24  color_type
+# Compression / filter / interlace bytes per PNG spec § 11.2.2 are
+# always 0 for v0.4.0 scope (Adam7 + sub-byte depths rejected at
+# M3 per the roadmap); deferred until they actually mean something.
+var IHDR_WIDTH_OFFSET      = 0;
+var IHDR_HEIGHT_OFFSET     = 8;
+var IHDR_BIT_DEPTH_OFFSET  = 16;
+var IHDR_COLOR_TYPE_OFFSET = 24;
+
+# IHDR chunk on disk: 4 (length) + 4 (type "IHDR") + 13 (data) +
+# 4 (CRC32) = 25 bytes immediately after the 8-byte signature.
+# CRC validation is sub-bite (c) work; (b) reads + parses only.
+var PNG_IHDR_CHUNK_LEN = 25;
 
 # Pure in-memory signature check. Caller guarantees `buf` has at
 # least PNG_MAGIC_LEN bytes. Returns 1 if those bytes match the
@@ -50,11 +71,26 @@ fn png_check_signature(buf): i64 {
     return memeq(buf, PNG_MAGIC, PNG_MAGIC_LEN);
 }
 
+# Big-endian u32 read at byte offset `off` within `buf`. PNG is
+# big-endian throughout per spec § 7. Same pattern as
+# lib/sha1.cyr line 92 — keeps the ecosystem on one idiom rather
+# than scattering ad-hoc byte-reassembly across decoders.
+fn png_read_u32_be(buf, off): i64 {
+    var b0 = load8(buf + off + 0);
+    var b1 = load8(buf + off + 1);
+    var b2 = load8(buf + off + 2);
+    var b3 = load8(buf + off + 3);
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+}
+
 # File-level signature validator. Opens `path`, reads 8 bytes,
 # closes, checks magic. Returns one of the PNG_* codes above.
 # Uses the Result-returning *_r io variants so each failure mode
 # (open vs read) is distinguishable; we collapse them into kii's
-# coarser error space at the boundary.
+# coarser error space at the boundary. Used by M2(a) tests +
+# kept as a stable API surface; main.cyr's dispatch path went
+# through png_decode_header (which reads signature + IHDR in
+# one fd open) starting at M2(b).
 fn png_validate_file_signature(path): i64 {
     var fd_res = file_open_r(path, O_RDONLY, 0);
     if (is_err_result(fd_res) == 1) {
@@ -76,5 +112,55 @@ fn png_validate_file_signature(path): i64 {
     if (png_check_signature(&buf) == 0) {
         return PNG_ERR_NOT_PNG;
     }
+    return PNG_OK;
+}
+
+# Read + validate signature, then read + parse IHDR. Caller
+# stack-allocates `out_ihdr` (≥32 bytes); on PNG_OK it holds
+# width / height / bit_depth / color_type at the IHDR_*_OFFSET
+# slots. Single fd open across both reads — sub-bite (c)'s chunk
+# walker extends this same fd lifetime past IHDR through IDAT/
+# IEND. CRC32 validation lands at sub-bite (c); (b) skips it.
+fn png_decode_header(path, out_ihdr): i64 {
+    var fd_res = file_open_r(path, O_RDONLY, 0);
+    if (is_err_result(fd_res) == 1) { return PNG_ERR_OPEN; }
+    var fd = result_unwrap(fd_res);
+
+    # Signature read. Identical logic to png_validate_file_signature
+    # but inlined to keep the fd lifetime intact.
+    var sig[16];
+    var sig_res = file_read_r(fd, &sig, PNG_MAGIC_LEN);
+    if (is_err_result(sig_res) == 1) { file_close(fd); return PNG_ERR_OPEN; }
+    if (result_unwrap(sig_res) < PNG_MAGIC_LEN) { file_close(fd); return PNG_ERR_TRUNCATED; }
+    if (png_check_signature(&sig) == 0)         { file_close(fd); return PNG_ERR_NOT_PNG; }
+
+    # IHDR chunk read. 25 bytes total: 4-byte length, 4-byte type,
+    # 13-byte data, 4-byte CRC. Short read = truncated = malformed.
+    var ihdr[32];
+    var ihdr_res = file_read_r(fd, &ihdr, PNG_IHDR_CHUNK_LEN);
+    file_close(fd);
+    if (is_err_result(ihdr_res) == 1)                  { return PNG_ERR_HEADER; }
+    if (result_unwrap(ihdr_res) < PNG_IHDR_CHUNK_LEN)  { return PNG_ERR_HEADER; }
+
+    # Length field must be exactly 13 per spec § 11.2.2.
+    var chunk_len = png_read_u32_be(&ihdr, 0);
+    if (chunk_len != 13) { return PNG_ERR_HEADER; }
+
+    # Type field must be "IHDR" — bytes 'I' 'H' 'D' 'R' = 0x49 48 44 52.
+    if (load8(&ihdr + 4) != 0x49) { return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 5) != 0x48) { return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 6) != 0x44) { return PNG_ERR_HEADER; }
+    if (load8(&ihdr + 7) != 0x52) { return PNG_ERR_HEADER; }
+
+    # Data region starts at offset 8 within the chunk buffer.
+    #   bytes 8..11   width  (u32 BE)
+    #   bytes 12..15  height (u32 BE)
+    #   byte  16      bit_depth
+    #   byte  17      color_type
+    #   bytes 18..20  compression / filter / interlace  (deferred)
+    store64(out_ihdr + IHDR_WIDTH_OFFSET,      png_read_u32_be(&ihdr, 8));
+    store64(out_ihdr + IHDR_HEIGHT_OFFSET,     png_read_u32_be(&ihdr, 12));
+    store64(out_ihdr + IHDR_BIT_DEPTH_OFFSET,  load8(&ihdr + 16));
+    store64(out_ihdr + IHDR_COLOR_TYPE_OFFSET, load8(&ihdr + 17));
     return PNG_OK;
 }
