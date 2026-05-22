@@ -19,7 +19,12 @@
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-standards.md) · [First-Party Documentation](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-documentation.md)
 - **Shared crates**: [shared-crates.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/shared-crates.md)
-- **Naming lane**: Polynesian-direct (Hawaiian micro-cluster with `hapi`, `anuenue`)
+- **Naming lane**: **Triple-lane convergence** (rare in the AGNOS naming surface — typical names sit in one lane). Three language families fit the same name *because* each describes the same operation from a different angle:
+    - **Polynesian-direct** (Hawaiian micro-cluster with `hapi`, `anuenue`): kii = *image / picture / likeness* — what the tool produces.
+    - **East Asian metaphysical**: ki (気) / chi (氣) = *life-force / vital energy* — kii is the *ki of the terminal*, the animating force that brings the screen to life via images.
+    - **English-phonetic-wordplay**: kii = back-half of **a-scii** — what the tool emits.
+    - **Functional convergence**: produces images via ASCII to animate the terminal. All three language angles describe the same operation; the convergence is structurally meaningful, not decorative. See [[feedback_naming_lanes]] for the multi-lane-convergence pattern definition.
+    - **Keystone status**: kii is the keystone of the multi-lane convergence pattern — the load-bearing precedent in [[feedback_naming_lanes]] that holds the pattern definition in place. "Keystone" itself continues the wordplay (contains *key* = ASCII-pronunciation root), making the pattern's terminology self-recursive: the vocabulary that describes kii inherits the phonetic split that kii is named for.
 
 ## Goal
 
