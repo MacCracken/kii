@@ -4,6 +4,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-22
+
+### Added
+
+- **M3 — PNG pixel decode**. Valid PNGs now decode through the full DEFLATE → filter undo pipeline and print `<path>: <W>x<H> decoded <N> pixels (<color_type_name>)` to stdout + exit 0. The success line shape per the M3 acceptance contract; `<N>` is pixel count (W×H), `<color_type_name>` is one of `greyscale` / `RGB` / `palette` / `grey+alpha` / `RGBA`.
+- **`sankoch` + `thread` added to `[deps].stdlib`** in `cyrius.cyml`. The `thread` add is a transitive dep (sankoch's `_sankoch_lock`/`_sankoch_unlock` wrap `mutex_lock`/`mutex_unlock` from `lib/thread.cyr`).
+- **`src/png.cyr` extensions**:
+  - 5 new error codes (7–11): `PNG_ERR_INTERLACE`, `PNG_ERR_BITDEPTH`, `PNG_ERR_NO_IDAT`, `PNG_ERR_INFLATE`, `PNG_ERR_FILTER`.
+  - Struct grew from 7 to 11 slots (88 bytes): `STRUCT_INTERLACE_OFFSET` (56), `STRUCT_IDAT_BUF_OFFSET` (64), `STRUCT_PIXELS_BUF_OFFSET` (72), `STRUCT_PIXELS_SIZE_OFFSET` (80). Aligned at first four slots with `IHDR_*_OFFSET` so summary helpers work on either buf.
+  - `_png_is_idat(type_buf)` + `_png_is_iend(type_buf)` chunk-type predicates (refactored the existing nested-if walker).
+  - `_png_copy_idat(path, idat_buf, expected_total)` — phase-2 walker that re-opens the file, skips past sig + IHDR, walks chunks copying IDAT data directly into a pre-allocated buffer. No CRC re-validation (phase 1 already did it).
+  - `_png_color_channels(color_type)` — color-type → channels-per-pixel mapping.
+  - `png_color_type_name(color_type)` — color-type → short human-readable name.
+  - `_png_paeth(a, b, c)` — spec § 9.4 Paeth predictor.
+  - `_png_unfilter_row(prev, curr_in, out, row_bytes, bpp, filter_type)` — one-row filter undo for spec § 9 filter types 0 (None) / 1 (Sub) / 2 (Up) / 3 (Average) / 4 (Paeth). Returns -1 on unknown filter byte.
+  - `png_decode_pixels(pstruct)` — top-level pixel decode: M3 rejection rules (Adam7 + sub-byte) → `zlib_decompress` IDAT into a height × (1 + row_bytes) buffer → row-by-row filter undo into a height × row_bytes pixel buffer → stash in struct.
+  - `png_decode_structure` now captures the interlace byte + (when IDATs exist) allocates a contiguous IDAT buffer via the phase-2 walker.
+
+### Changed
+
+- `src/main.cyr`:
+  - Wired `png_decode_pixels` into the dispatch after `png_decode_structure`. Five new error-path branches for the new `PNG_ERR_*` codes; each gets a distinct user-facing message.
+  - Replaced `_print_ihdr_summary` (M2 structural shape) with `_print_pixel_summary` (M3 shape). Old helper deleted per no-dead-code rule.
+  - `pstruct[64]` → `pstruct[96]` (struct grew by 4 slots between M2 and M3).
+- `tests/kii.fcyr` — PNG fuzz harness now exercises the full inflate + filter-undo path when its random-byte payload happens to contain valid-ish IDAT data after the valid prefix.
+
+### Tests
+
+- `tests/kii.tcyr` — **163 assertions** (was 88 at v0.3.0).
+  - **M3(a)** sankoch round-trip: zlib_compress / zlib_decompress / dst-cap-too-small (5).
+  - **M3(b)** interlace capture (both 0 and 1) + IDAT buffer accumulation byte-identical to fixture + no-IDAT-leaves-idat_buf-null (14).
+  - **M3(c)** Paeth predictor canonical cases (5) + each filter type 0–4 round-trip + unknown-filter rejection (28) + color_channels mapping (8) + 2x2 RGB end-to-end decode (8) + Adam7/sub-byte/no-IDAT rejection (3) + **RAMGON.png** real-world decode → exact 4,262,400-byte buffer size (4).
+- **Real-world smoke** (manual, not in `cyrius test`):
+  - `RAMGON.png` (1152×925 RGBA) → `1065600 pixels (RGBA)`.
+  - `/usr/share/pixmaps/archlinux-logo.png` (256×256 palette) → `65536 pixels (palette)`.
+  - `/usr/share/pixmaps/kitty.png` (256×256 RGBA) → `65536 pixels (RGBA)`.
+
+### Dependencies
+
+- stdlib: **+ `sankoch`** (PNG IDAT zlib_decompress), **+ `thread`** (sankoch transitive). No external git deps yet — sankoch folded into Cyrius stdlib at v5.8.65, so this is a stdlib-list addition, not a `[deps.sankoch]` block. `darshana` (external) still lands at M5/v0.6.0.
+
+### Out of scope (deferred per M3 acceptance)
+
+- **Adam7 interlace** — rejected with `interlaced PNGs (Adam7) not supported in v0.x`. Defer-don't-half-implement per CLAUDE.md.
+- **1/2/4-bit sub-byte depths** — rejected with `unsupported bit depth or color type (tier-1: 8/16-bit only)`. Same rationale.
+- **PLTE → RGB lookup** — palette PNGs (color_type=3) emit palette INDICES at this layer. PLTE chunk handling lands at M4 alongside quantization.
+
 ## [0.3.0] — 2026-05-22
 
 ### Added

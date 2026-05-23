@@ -10,15 +10,16 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M2 SHIPPED at v0.3.0 — full PNG structural decoder
-# (signature + IHDR + CRC32 + chunk walker through IEND) at the
-# entry hop. Valid + CRC-clean PNGs print
-# `<path>: <W>x<H> bit_depth=<N> color_type=<T>` to STDOUT + exit 0;
-# missing IEND emits a stderr warning but still succeeds. Malformed
-# signature / IHDR / CRC / truncated post-IHDR chunk → distinct
-# path-keyed errors on stderr + exit 1. M3 (sankoch DEFLATE) lands
-# the actual pixel decode + replaces the structural-summary stdout
-# with a `<path>: <W>x<H> decoded <N> pixels` line.
+# Status: M3 SHIPPED at v0.4.0 — full PNG pixel decode (signature
+# + IHDR + CRC32 + chunk walker + sankoch zlib_decompress + filter
+# undo for spec § 9 filter types 0–4). Valid PNGs print
+# `<path>: <W>x<H> decoded <N> pixels (<color_type_name>)` to
+# STDOUT + exit 0; missing IEND still emits a stderr warning but
+# the pixel summary on stdout stays the success signal. Adam7
+# interlace + sub-byte bit-depths (1/2/4) explicitly rejected per
+# the v1.0 tier-1 scope — defer-don't-half-implement. M4 lands
+# 16-color ANSI palette + RGB→nearest quantization (replaces the
+# raw pixel summary with palette-index output).
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -59,26 +60,30 @@ fn _eprint_path_msg(path, msg): i64 {
     return 0;
 }
 
-# Print "<path>: <W>x<H> bit_depth=<N> color_type=<N>\n" to STDOUT.
-# This is the M2 acceptance success shape. Goes to fd 1 (not fd 2)
-# so consumers can `kii image.png | grep '^path:'`; missing-IEND
-# warnings ride stderr separately (pipe purity).
-fn _print_ihdr_summary(path, ihdr): i64 {
+# Print "<path>: <W>x<H> decoded <N> pixels (<color_type_name>)\n"
+# to STDOUT. This is the M3 acceptance success shape — replaces
+# the M2 structural-summary line that was `bit_depth=N color_type=T`.
+# Pixel count is W×H (not byte count); consumers wanting the byte
+# count can derive from color_type → channels × bit_depth.
+fn _print_pixel_summary(path, pstruct): i64 {
     var plen = strlen(path);
     syscall(1, 1, path, plen);
     syscall(1, 1, ": ", 2);
-    var wbuf[16]; var wlen = fmt_int_buf(load64(ihdr + IHDR_WIDTH_OFFSET), &wbuf);
+    var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
+    var h = load64(pstruct + STRUCT_HEIGHT_OFFSET);
+    var wbuf[16]; var wlen = fmt_int_buf(w, &wbuf);
     syscall(1, 1, &wbuf, wlen);
     syscall(1, 1, "x", 1);
-    var hbuf[16]; var hlen = fmt_int_buf(load64(ihdr + IHDR_HEIGHT_OFFSET), &hbuf);
+    var hbuf[16]; var hlen = fmt_int_buf(h, &hbuf);
     syscall(1, 1, &hbuf, hlen);
-    syscall(1, 1, " bit_depth=", 11);
-    var dbuf[8];  var dlen = fmt_int_buf(load64(ihdr + IHDR_BIT_DEPTH_OFFSET), &dbuf);
-    syscall(1, 1, &dbuf, dlen);
-    syscall(1, 1, " color_type=", 12);
-    var cbuf[8];  var clen = fmt_int_buf(load64(ihdr + IHDR_COLOR_TYPE_OFFSET), &cbuf);
-    syscall(1, 1, &cbuf, clen);
-    syscall(1, 1, "\n", 1);
+    syscall(1, 1, " decoded ", 9);
+    var pix_count = w * h;
+    var pbuf[24]; var pblen = fmt_int_buf(pix_count, &pbuf);
+    syscall(1, 1, &pbuf, pblen);
+    syscall(1, 1, " pixels (", 9);
+    var name = png_color_type_name(load64(pstruct + STRUCT_COLOR_TYPE_OFFSET));
+    syscall(1, 1, name, strlen(name));
+    syscall(1, 1, ")\n", 2);
     return 0;
 }
 
@@ -87,7 +92,7 @@ fn _print_ihdr_summary(path, ihdr): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 0.3.0");
+    println("kii 0.4.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -228,14 +233,39 @@ fn main(): i64 {
         return KII_EXIT_RUN;
     }
 
-    # PNG_OK. STRUCT_*_OFFSET aligns with IHDR_*_OFFSET for the
-    # first four slots, so _print_ihdr_summary works directly on
-    # the pstruct buffer. Summary goes to stdout + exit 0 per M2
-    # acceptance contract. If IEND was missing, append a warning
-    # line on STDERR per spec § 5.3 tolerance ("continues with
-    # what was read") — keeps stdout pipe-pure so consumers can
-    # pipe the structural summary into other tools.
-    _print_ihdr_summary(path, &pstruct);
+    # PNG_OK on structure → run the pixel decode pipeline. Errors
+    # at this layer are M3-scope rejections (interlace/sub-byte)
+    # or decode failures (inflate / filter). Each gets a distinct
+    # stderr line so users see *what* the decoder rejected, not a
+    # generic "decode failed".
+    var px_rc = png_decode_pixels(&pstruct);
+    if (px_rc == PNG_ERR_INTERLACE) {
+        _eprint_path_msg(path, "interlaced PNGs (Adam7) not supported in v0.x");
+        return KII_EXIT_RUN;
+    }
+    if (px_rc == PNG_ERR_BITDEPTH) {
+        _eprint_path_msg(path, "unsupported bit depth or color type (tier-1: 8/16-bit only)");
+        return KII_EXIT_RUN;
+    }
+    if (px_rc == PNG_ERR_NO_IDAT) {
+        _eprint_path_msg(path, "no IDAT chunks (nothing to decode)");
+        return KII_EXIT_RUN;
+    }
+    if (px_rc == PNG_ERR_INFLATE) {
+        _eprint_path_msg(path, "DEFLATE decompression failed (corrupt IDAT)");
+        return KII_EXIT_RUN;
+    }
+    if (px_rc == PNG_ERR_FILTER) {
+        _eprint_path_msg(path, "invalid PNG filter type (spec § 9 allows 0–4)");
+        return KII_EXIT_RUN;
+    }
+
+    # M3 success line goes to STDOUT (pipe-pure) + exit 0. STRUCT_*
+    # field layout aligns with IHDR_*_OFFSET on the first four slots
+    # so _print_pixel_summary just reads the pstruct directly. The
+    # missing-IEND warning still rides stderr per spec § 5.3
+    # tolerance — the summary on stdout stays the success signal.
+    _print_pixel_summary(path, &pstruct);
     if (load64(&pstruct + STRUCT_SEEN_IEND_OFFSET) == 0) {
         _eprint_path_msg(path, "warning: incomplete PNG (no IEND chunk seen)");
     }

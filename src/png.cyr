@@ -495,6 +495,21 @@ fn png_decode_structure(path, out_struct): i64 {
 }
 
 # ---- pixel decode (sub-bite (c)) -----------------------------------
+# Color-type → human-readable name. Used by the M3 success line
+# (`<path>: <W>x<H> decoded <N> pixels (<name>)`). Names are the
+# short forms used in the PNG spec § 11.2.2 prose; `?` is the
+# defensive fallback for unknown color types (png_decode_pixels
+# rejects those via PNG_ERR_BITDEPTH, so this branch shouldn't
+# normally fire in practice).
+fn png_color_type_name(color_type): i64 {
+    if (color_type == 0) { return "greyscale"; }
+    if (color_type == 2) { return "RGB"; }
+    if (color_type == 3) { return "palette"; }
+    if (color_type == 4) { return "grey+alpha"; }
+    if (color_type == 6) { return "RGBA"; }
+    return "?";
+}
+
 # Color-type → channels-per-pixel per spec § 11.2.2 / Table 11.1:
 #   0 greyscale    → 1
 #   2 RGB          → 3
