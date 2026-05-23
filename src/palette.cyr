@@ -1,0 +1,80 @@
+# palette.cyr — Linux-console 16-color ANSI palette.
+#
+# Source: Linux kernel drivers/tty/vt/vt.c default_color_table (the
+# CGA-derived 16-color set). This is the canonical floor every
+# terminal emulator on the planet inherits — xterm, urxvt,
+# Alacritty, kitty, tmux, gnome-terminal, the Linux VT itself.
+# Brighter 256-color cubes + 24-bit truecolor are post-v1 scope
+# per CLAUDE.md color-tier discipline.
+#
+# Entries 0..7: "normal" (also called dim / dark) — CGA originals.
+# Entries 8..15: "bright" — same hues at higher luminance.
+#
+# Nearest-neighbor RGB quantization at M4 searches all 16; the
+# brightness split is preserved so a pure-red pixel maps to entry
+# 1 (170,0,0) not entry 9 (255,85,85) because Euclidean distance²
+# favors the dim red when the input is fully saturated on one
+# channel only.
+#
+# Spec source: https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
+# Linux console table: drivers/tty/vt/vt.c (Linux kernel ~6.x).
+
+var ANSI_PALETTE_SIZE = 16;
+
+# Packed RGB: 16 entries × 3 bytes. Module-scope `var arr[N]`
+# reserves N × u64, so [16] gives us 128 bytes; we only populate
+# the first 48 (index i → bytes 3i, 3i+1, 3i+2). The extra 80
+# bytes are slack; bump-allocator cost is negligible.
+var _ANSI_PALETTE_RGB[16];
+var _palette_inited = 0;
+
+# Idempotent palette builder. Hand-coded constants per the Linux
+# console table — same numeric values you'd grep out of the
+# kernel's default_color_table. Lazy-init pattern matches the
+# png_crc_init / _png_fuzz_init_prefix idiom.
+fn palette_init(): i64 {
+    if (_palette_inited == 1) { return 0; }
+    var p = &_ANSI_PALETTE_RGB;
+    # ---- normal (entries 0–7) ----
+    store8(p + 0,  0);    store8(p + 1,  0);    store8(p + 2,  0);     # 0  black
+    store8(p + 3,  170);  store8(p + 4,  0);    store8(p + 5,  0);     # 1  red
+    store8(p + 6,  0);    store8(p + 7,  170);  store8(p + 8,  0);     # 2  green
+    store8(p + 9,  170);  store8(p + 10, 85);   store8(p + 11, 0);     # 3  yellow (brown)
+    store8(p + 12, 0);    store8(p + 13, 0);    store8(p + 14, 170);   # 4  blue
+    store8(p + 15, 170);  store8(p + 16, 0);    store8(p + 17, 170);   # 5  magenta
+    store8(p + 18, 0);    store8(p + 19, 170);  store8(p + 20, 170);   # 6  cyan
+    store8(p + 21, 170);  store8(p + 22, 170);  store8(p + 23, 170);   # 7  white (light gray)
+    # ---- bright (entries 8–15) ----
+    store8(p + 24, 85);   store8(p + 25, 85);   store8(p + 26, 85);    # 8  bright black (dark gray)
+    store8(p + 27, 255);  store8(p + 28, 85);   store8(p + 29, 85);    # 9  bright red
+    store8(p + 30, 85);   store8(p + 31, 255);  store8(p + 32, 85);    # 10 bright green
+    store8(p + 33, 255);  store8(p + 34, 255);  store8(p + 35, 85);    # 11 bright yellow
+    store8(p + 36, 85);   store8(p + 37, 85);   store8(p + 38, 255);   # 12 bright blue
+    store8(p + 39, 255);  store8(p + 40, 85);   store8(p + 41, 255);   # 13 bright magenta
+    store8(p + 42, 85);   store8(p + 43, 255);  store8(p + 44, 255);   # 14 bright cyan
+    store8(p + 45, 255);  store8(p + 46, 255);  store8(p + 47, 255);   # 15 bright white
+    _palette_inited = 1;
+    return 0;
+}
+
+# Per-channel accessors. Each lazy-inits the palette (defensive —
+# callers may also invoke palette_init() eagerly). Returns the
+# raw byte value (0..255). `idx` is caller's responsibility to
+# bound-check — out-of-range reads fall off the end of the 48-
+# byte payload into the slack region (zero bytes by definition
+# of bump alloc), producing unexpected (0,0,0) returns but no
+# crash.
+fn palette_r(idx): i64 {
+    if (_palette_inited == 0) { palette_init(); }
+    return load8(&_ANSI_PALETTE_RGB + idx * 3);
+}
+
+fn palette_g(idx): i64 {
+    if (_palette_inited == 0) { palette_init(); }
+    return load8(&_ANSI_PALETTE_RGB + idx * 3 + 1);
+}
+
+fn palette_b(idx): i64 {
+    if (_palette_inited == 0) { palette_init(); }
+    return load8(&_ANSI_PALETTE_RGB + idx * 3 + 2);
+}

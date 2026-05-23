@@ -17,6 +17,7 @@
 
 include "src/cli.cyr"
 include "src/png.cyr"
+include "src/palette.cyr"
 
 # ---- Test-only PNG fixture builders ---------------------------------
 # Module-scope helpers so they don't clutter main(). All write to
@@ -864,6 +865,67 @@ fn main() {
     # Expected size = 1152 × 925 × 4 bytes/pixel = 4,262,400.
     assert_eq(load64(&pstr_real + STRUCT_PIXELS_SIZE_OFFSET), 4262400,
               "RAMGON decoded size = 1152 × 925 × 4 = 4,262,400");
+
+    # ---- M4(a) — 16-color ANSI palette ----------------------------
+    # Canonical Linux-console table. Each entry's RGB triple is
+    # pinned here so any drift (typo in palette_init, off-by-one
+    # in indexing) regresses against the well-known constants.
+    # Source values: https://en.wikipedia.org/wiki/ANSI_escape_code#3-bit_and_4-bit
+    test_group("M4(a) — palette size + lazy init");
+    assert_eq(ANSI_PALETTE_SIZE, 16, "16-color palette");
+    # Lazy-init: read a color before any explicit palette_init().
+    # palette_r/g/b should still return the correct values.
+    assert_eq(palette_r(0), 0, "entry 0 (black) R = 0 (lazy-init works)");
+
+    test_group("M4(a) — palette entries 0–7 (normal)");
+    # 0: black (0, 0, 0)
+    assert_eq(palette_r(0), 0);   assert_eq(palette_g(0), 0);   assert_eq(palette_b(0), 0);
+    # 1: red (170, 0, 0)
+    assert_eq(palette_r(1), 170); assert_eq(palette_g(1), 0);   assert_eq(palette_b(1), 0);
+    # 2: green (0, 170, 0)
+    assert_eq(palette_r(2), 0);   assert_eq(palette_g(2), 170); assert_eq(palette_b(2), 0);
+    # 3: yellow/brown (170, 85, 0)
+    assert_eq(palette_r(3), 170); assert_eq(palette_g(3), 85);  assert_eq(palette_b(3), 0);
+    # 4: blue (0, 0, 170)
+    assert_eq(palette_r(4), 0);   assert_eq(palette_g(4), 0);   assert_eq(palette_b(4), 170);
+    # 5: magenta (170, 0, 170)
+    assert_eq(palette_r(5), 170); assert_eq(palette_g(5), 0);   assert_eq(palette_b(5), 170);
+    # 6: cyan (0, 170, 170)
+    assert_eq(palette_r(6), 0);   assert_eq(palette_g(6), 170); assert_eq(palette_b(6), 170);
+    # 7: white / light gray (170, 170, 170)
+    assert_eq(palette_r(7), 170); assert_eq(palette_g(7), 170); assert_eq(palette_b(7), 170);
+
+    test_group("M4(a) — palette entries 8–15 (bright)");
+    # 8: bright black / dark gray (85, 85, 85)
+    assert_eq(palette_r(8),  85);  assert_eq(palette_g(8),  85);  assert_eq(palette_b(8),  85);
+    # 9: bright red (255, 85, 85)
+    assert_eq(palette_r(9),  255); assert_eq(palette_g(9),  85);  assert_eq(palette_b(9),  85);
+    # 10: bright green (85, 255, 85)
+    assert_eq(palette_r(10), 85);  assert_eq(palette_g(10), 255); assert_eq(palette_b(10), 85);
+    # 11: bright yellow (255, 255, 85)
+    assert_eq(palette_r(11), 255); assert_eq(palette_g(11), 255); assert_eq(palette_b(11), 85);
+    # 12: bright blue (85, 85, 255)
+    assert_eq(palette_r(12), 85);  assert_eq(palette_g(12), 85);  assert_eq(palette_b(12), 255);
+    # 13: bright magenta (255, 85, 255)
+    assert_eq(palette_r(13), 255); assert_eq(palette_g(13), 85);  assert_eq(palette_b(13), 255);
+    # 14: bright cyan (85, 255, 255)
+    assert_eq(palette_r(14), 85);  assert_eq(palette_g(14), 255); assert_eq(palette_b(14), 255);
+    # 15: bright white (255, 255, 255)
+    assert_eq(palette_r(15), 255); assert_eq(palette_g(15), 255); assert_eq(palette_b(15), 255);
+
+    test_group("M4(a) — palette bounds (every byte ≤ 255)");
+    # Defensive — guard against accidentally writing > 0xFF
+    # (Cyrius store8 truncates, but a typo like 1700 would still
+    # be wrong even after truncation).
+    var i = 0;
+    var all_bounded = 1;
+    while (i < 16) {
+        if (palette_r(i) < 0 || palette_r(i) > 255) { all_bounded = 0; }
+        if (palette_g(i) < 0 || palette_g(i) > 255) { all_bounded = 0; }
+        if (palette_b(i) < 0 || palette_b(i) > 255) { all_bounded = 0; }
+        i = i + 1;
+    }
+    assert_eq(all_bounded, 1, "every palette byte ∈ [0, 255]");
 
     return assert_summary();
 }
