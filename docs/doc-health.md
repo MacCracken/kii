@@ -26,11 +26,11 @@
 | `docs/development/state.md` | 1 | 2026-05-22 (v0.5.0 close) | M4 close snapshot: 287 assertions, full PNG→16-color pipeline, first bench captured. **Bump per release.** |
 | `docs/benchmarks.md` | 1 | 2026-05-22 (v0.5.0 — first capture) | Wired at M4: `quantize_nearest_rgb @ 1024×1024 = 274 ns/op`. **Bump per release that lands perf-critical paths.** |
 | `docs/development/roadmap.md` | 1 | 2026-05-22 | M0-M7 milestones laid out to v1.0; acceptance criteria + dep gates per milestone. |
-| `docs/adr/README.md` | 2 | 2026-05-22 (cyrius init template) | No ADRs yet; first ADR likely at M3 (sankoch dep adoption). |
+| `docs/adr/README.md` | 2 | 2026-05-22 (cyrius init template) | No ADRs yet. **`0001-png-decoder-in-repo.md` overdue** — was M3-targeted; sankoch+png module structure now stable enough to capture. Land at M5 close-out. |
 | `docs/adr/template.md` | 2 | 2026-05-22 (cyrius init template) | Fresh. |
-| `docs/architecture/README.md` | 2 | 2026-05-22 (cyrius init template) | Empty placeholder. **Backfill at M2** when PNG decoder module structure crystallizes. |
-| `docs/guides/getting-started.md` | 2 | 2026-05-22 (cyrius init template) | Template-only. **Backfill at M5** when the binary actually does something visible. |
-| `docs/examples/.gitkeep` | 3 | 2026-05-22 (cyrius init template) | Empty. **Add at M5** (first image-in / ANSI-out example). |
+| `docs/architecture/README.md` | 2 | 2026-05-22 (cyrius init template) | **Empty placeholder; overdue** — was M2-flagged. Decoder + palette + quantizer module structure all settled at v0.5.0; backfill at M5 close-out. |
+| `docs/guides/getting-started.md` | 2 | 2026-05-22 (cyrius init template) | Template-only. Backfill at M5 close (was M5-flagged originally — keep the gate; visible-ANSI output is what makes a "getting started" guide meaningful). |
+| `docs/examples/.gitkeep` | 3 | 2026-05-22 (cyrius init template) | Empty. Add at M5 close (first image-in → terminal-ANSI-out transcript). |
 | `tests/kii.tcyr` | 2 | 2026-05-22 (v0.5.0 close) | 287 assertions: M1 + M2 + M3 + M4(a) palette + M4(b) quantizer + M4(c) PLTE + M4(d) E2E + archlinux-logo.png palette real-world. Expand per milestone. |
 | `tests/kii.bcyr` | 2 | 2026-05-22 (v0.5.0 close) | Wired at M4(d): `quantize_nearest_rgb` at 1,048,576 iterations → 274 ns/op. Future bench targets: full-image quantize, ANSI emit (M5), end-to-end PNG → 80×24 ANSI (M5+). |
 | `tests/kii.fcyr` | 2 | 2026-05-22 (v0.4.0 close) | Two fuzz surfaces: 10k arg-parser iters (M1(d)) + 2k PNG-decoder iters (M2(d)+(M3 inflate/filter through random-prefix path)). Both deterministic-LCG. |

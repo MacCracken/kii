@@ -30,8 +30,8 @@ PNG is the v1.0-required format. JPEG / GIF / BMP and friends are v1.x bites. Sa
 
 Per `CLAUDE.md`, deps are added **at the milestone gate that requires them**, not pre-emptively:
 
-- `sankoch` (DEFLATE) lands at M3 (v0.4.0)
-- `darshana` (ANSI primitives) lands at M5 (v0.6.0)
+- `sankoch` (DEFLATE) — landed at v0.4.0 / M3. Now a stdlib entry (folded into Cyrius stdlib at v5.8.65); not a `[deps.sankoch]` block.
+- `darshana` (ANSI primitives) — lands at v0.6.0 / M5 as the first external git dep.
 
 Other deps need a written rationale in the PR (what does it own that we can't do in-tree? does an AGNOS-family substrate already exist? has the substrate-extraction trigger fired?). See [`first-party-standards.md § Own the Stack`](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-standards.md#own-the-stack).
 
@@ -41,9 +41,10 @@ Every behavior change needs at least:
 
 - One happy-path test in `tests/kii.tcyr`
 - One error-path test (malformed input, out-of-range arg, etc.)
-- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr`
+- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` (the file hosts two surfaces — arg-parser fuzz + PNG-decoder fuzz; add to whichever the change touches)
+- For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`
 
-PRs without test coverage will be asked to add it.
+PRs without test coverage will be asked to add it. Current state: 287 unit assertions + 12k fuzz iters/run + 1 bench captured as of v0.5.0.
 
 ## Commits and PRs
 
