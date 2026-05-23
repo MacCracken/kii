@@ -92,6 +92,8 @@ var STRUCT_INTERLACE_OFFSET       = 56;
 var STRUCT_IDAT_BUF_OFFSET        = 64;
 var STRUCT_PIXELS_BUF_OFFSET      = 72;   # alloc'd, populated by png_decode_pixels (M3(c)+)
 var STRUCT_PIXELS_SIZE_OFFSET     = 80;   # decoded pixel-buf byte count (= height × width × bpp)
+var STRUCT_PLTE_BUF_OFFSET        = 88;   # alloc'd, populated by phase-1 walker on PLTE chunk (M4(c)+)
+var STRUCT_PLTE_SIZE_OFFSET       = 96;   # PLTE chunk data length (multiple of 3, max 768 per spec § 11.2.3)
 
 # ---- CRC32 (PNG spec § 5.3) ----------------------------------------
 # Standard "Ethernet" CRC-32 reversed polynomial 0xEDB88320 (same
@@ -173,6 +175,18 @@ fn _png_is_iend(type_buf): i64 {
         load8(type_buf + 1) == 0x45 &&
         load8(type_buf + 2) == 0x4E &&
         load8(type_buf + 3) == 0x44) { return 1; }
+    return 0;
+}
+
+# PLTE chunk type ("PLTE" = 0x50 0x4C 0x54 0x45). Mandatory for
+# color_type=3 (palette PNGs) and must precede the first IDAT
+# per spec § 5.5; M4(c) captures the bytes during phase 1 so
+# M4(d)'s quantizer can do RGB lookup for color_type=3 inputs.
+fn _png_is_plte(type_buf): i64 {
+    if (load8(type_buf + 0) == 0x50 &&
+        load8(type_buf + 1) == 0x4C &&
+        load8(type_buf + 2) == 0x54 &&
+        load8(type_buf + 3) == 0x45) { return 1; }
     return 0;
 }
 
@@ -431,15 +445,34 @@ fn png_decode_structure(path, out_struct): i64 {
         var chunk_len = png_read_u32_be(&hdr_buf, 0);
         var is_idat   = _png_is_idat(&hdr_buf + 4);
         var is_iend   = _png_is_iend(&hdr_buf + 4);
+        var is_plte   = _png_is_plte(&hdr_buf + 4);
+
+        # PLTE pre-alloc (M4(c)): the spec § 11.2.3 caps PLTE at
+        # 768 bytes (256 entries × 3) and requires length to be a
+        # multiple of 3. Reject malformed PLTE at the structural
+        # layer — quantizer downstream relies on the invariant.
+        var plte_chunk_buf = 0;
+        if (is_plte == 1) {
+            if (chunk_len > 768)    { file_close(fd); return PNG_ERR_HEADER; }
+            if (chunk_len % 3 != 0) { file_close(fd); return PNG_ERR_HEADER; }
+            if (chunk_len > 0) {
+                plte_chunk_buf = alloc(chunk_len);
+                if (plte_chunk_buf == 0) { file_close(fd); return PNG_ERR_CHUNK; }
+            }
+        }
 
         # Initialize streaming CRC; fold in type bytes.
         var crc = 0xFFFFFFFF;
         crc = _png_crc_update(crc, &hdr_buf + 4, 4);
 
         # Stream data through a 4 KB scratch buffer. Bounded
-        # memory regardless of chunk_len.
+        # memory regardless of chunk_len. For PLTE chunks (max
+        # 768 B) we ALSO memcpy each scratch read into the pre-
+        # allocated plte_chunk_buf so the bytes survive past the
+        # walker; the loop body runs once for PLTE in practice.
         var scratch[4096];
         var remaining = chunk_len;
+        var plte_off  = 0;
         while (remaining > 0) {
             var to_read = remaining;
             if (to_read > 4096) { to_read = 4096; }
@@ -448,6 +481,10 @@ fn png_decode_structure(path, out_struct): i64 {
             var n = result_unwrap(rd);
             if (n < to_read) { file_close(fd); return PNG_ERR_CHUNK; }
             crc = _png_crc_update(crc, &scratch, n);
+            if (is_plte == 1) {
+                memcpy(plte_chunk_buf + plte_off, &scratch, n);
+                plte_off = plte_off + n;
+            }
             remaining = remaining - n;
         }
         crc = crc ^ 0xFFFFFFFF;
@@ -467,6 +504,13 @@ fn png_decode_structure(path, out_struct): i64 {
         if (is_iend == 1) {
             seen_iend = 1;
             walking = 0;
+        }
+        if (is_plte == 1) {
+            # Only commit to the struct after CRC validates —
+            # otherwise corrupt PLTE could leak un-validated
+            # bytes to the quantizer.
+            store64(out_struct + STRUCT_PLTE_BUF_OFFSET,  plte_chunk_buf);
+            store64(out_struct + STRUCT_PLTE_SIZE_OFFSET, chunk_len);
         }
 
         } }

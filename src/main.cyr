@@ -200,13 +200,12 @@ fn main(): i64 {
     # M2(d); until then exit 1 with a parenthetical WIP marker.
     #
     # png_decode_structure handles png_crc_init internally; no
-    # need to call it here. pstruct is 96 bytes (12 i64 slots) to
-    # cover the M3(c)-extended layout (idat_buf + interlace +
-    # pixels_buf + pixels_size). M3(d) wires the pixel decode
-    # into the main dispatch + flips the success line to the
-    # `decoded <N> pixels` shape.
+    # need to call it here. pstruct is 112 bytes (14 i64 slots)
+    # to cover the M4(c)-extended layout (M3 fields + plte_buf
+    # + plte_size). M4(d) wires palette PNGs through PLTE-RGB
+    # lookup before quantization.
     var path = flags_positional(fs, 0);
-    var pstruct[96];
+    var pstruct[112];
     var rc = png_decode_structure(path, &pstruct);
     if (rc == PNG_ERR_OPEN) {
         _eprint_path_msg(path, "cannot open file");

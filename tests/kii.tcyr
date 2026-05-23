@@ -64,6 +64,41 @@ fn _ut_build_min_png(buf, w, h, bit_depth, color_type): i64 {
     return 45;
 }
 
+# Build a PNG with one PLTE chunk between IHDR and IEND. Layout:
+#   signature (8) + IHDR (25) + PLTE (12 + plte_len) + IEND (12)
+# Used by M4(c) tests to verify the walker captures PLTE bytes.
+# `plte_data` is a packed-RGB byte buffer (3 bytes per palette
+# entry); `plte_len` must be a multiple of 3 (per spec § 11.2.3)
+# unless the test is deliberately crafting a malformed PLTE.
+fn _ut_build_png_with_plte(buf, w, h, bit_depth, color_type, interlace,
+                            plte_data, plte_len): i64 {
+    memcpy(buf + 0, PNG_MAGIC, PNG_MAGIC_LEN);
+    _ut_put_u32_be(buf, 8, 13);
+    store8(buf + 12, 0x49); store8(buf + 13, 0x48);
+    store8(buf + 14, 0x44); store8(buf + 15, 0x52);      # "IHDR"
+    _ut_put_u32_be(buf, 16, w);
+    _ut_put_u32_be(buf, 20, h);
+    store8(buf + 24, bit_depth);
+    store8(buf + 25, color_type);
+    store8(buf + 26, 0); store8(buf + 27, 0); store8(buf + 28, interlace);
+    var ihdr_crc = png_crc32(buf + 12, 17);
+    _ut_put_u32_be(buf, 29, ihdr_crc);
+    var plte_off = 33;
+    _ut_put_u32_be(buf, plte_off, plte_len);
+    store8(buf + plte_off + 4, 0x50); store8(buf + plte_off + 5, 0x4C);
+    store8(buf + plte_off + 6, 0x54); store8(buf + plte_off + 7, 0x45);  # "PLTE"
+    if (plte_len > 0) { memcpy(buf + plte_off + 8, plte_data, plte_len); }
+    var plte_crc = png_crc32(buf + plte_off + 4, 4 + plte_len);
+    _ut_put_u32_be(buf, plte_off + 8 + plte_len, plte_crc);
+    var iend_off = plte_off + 12 + plte_len;
+    _ut_put_u32_be(buf, iend_off, 0);
+    store8(buf + iend_off + 4, 0x49); store8(buf + iend_off + 5, 0x45);
+    store8(buf + iend_off + 6, 0x4E); store8(buf + iend_off + 7, 0x44);  # "IEND"
+    store8(buf + iend_off + 8,  0xAE); store8(buf + iend_off + 9,  0x42);
+    store8(buf + iend_off + 10, 0x60); store8(buf + iend_off + 11, 0x82);
+    return iend_off + 12;
+}
+
 # Build a PNG with one IDAT chunk in between IHDR and IEND. Layout:
 #   signature (8) + IHDR (25) + IDAT (12 + idat_len) + IEND (12)
 # Interlace byte is parameterized so callers can craft Adam7
@@ -995,6 +1030,102 @@ fn main() {
     assert_eq(_color_dist2(255, 0,   0,   0,   255, 0  ), 130050, "dist²(pure-red, pure-green) = 2 × 255²");
     # Negative deltas square cleanly — the (r1 - r2) can go negative.
     assert_eq(_color_dist2(0,   0,   0,   255, 255, 255), 195075, "dist²(black, white) = 3 × 255²");
+
+    # ---- M4(c) — PLTE chunk capture --------------------------------
+    # The walker's PLTE branch allocates a heap buffer and memcpy's
+    # the chunk data through during the CRC-streaming pass. After
+    # decode, STRUCT_PLTE_BUF_OFFSET points to those bytes and
+    # STRUCT_PLTE_SIZE_OFFSET holds the count. (b)'s quantizer
+    # consumes this for color_type=3 inputs at (d).
+    test_group("M4(c) — png_decode_structure captures PLTE bytes");
+    # Build a 3-entry palette: red, green, blue (9 bytes RGB).
+    var palette_data[9];
+    store8(&palette_data + 0, 255); store8(&palette_data + 1, 0);   store8(&palette_data + 2, 0);   # red
+    store8(&palette_data + 3, 0);   store8(&palette_data + 4, 255); store8(&palette_data + 5, 0);   # green
+    store8(&palette_data + 6, 0);   store8(&palette_data + 7, 0);   store8(&palette_data + 8, 255); # blue
+
+    var pbuf_plte[128];
+    var plte_fix_len = _ut_build_png_with_plte(&pbuf_plte, 4, 2, 8, 3, 0,
+                                                  &palette_data, 9);
+    file_write_all("/tmp/kii-test-plte.png", &pbuf_plte, plte_fix_len);
+    var pstr_plte[112];
+    assert_eq(png_decode_structure("/tmp/kii-test-plte.png", &pstr_plte),
+              PNG_OK, "PLTE PNG → PNG_OK");
+    assert_eq(load64(&pstr_plte + STRUCT_PLTE_SIZE_OFFSET), 9,
+              "PLTE size = 9 bytes (3 entries × 3 channels)");
+    var plte_ptr = load64(&pstr_plte + STRUCT_PLTE_BUF_OFFSET);
+    assert(plte_ptr != 0, "plte_buf non-null when PLTE chunk present");
+    # Byte-for-byte verify the copy.
+    assert_eq(load8(plte_ptr + 0), 255, "PLTE[0].R = 255");
+    assert_eq(load8(plte_ptr + 1), 0,   "PLTE[0].G = 0");
+    assert_eq(load8(plte_ptr + 2), 0,   "PLTE[0].B = 0");
+    assert_eq(load8(plte_ptr + 3), 0,   "PLTE[1].R = 0");
+    assert_eq(load8(plte_ptr + 4), 255, "PLTE[1].G = 255");
+    assert_eq(load8(plte_ptr + 5), 0,   "PLTE[1].B = 0");
+    assert_eq(load8(plte_ptr + 6), 0,   "PLTE[2].R = 0");
+    assert_eq(load8(plte_ptr + 7), 0,   "PLTE[2].G = 0");
+    assert_eq(load8(plte_ptr + 8), 255, "PLTE[2].B = 255");
+
+    test_group("M4(c) — non-PLTE PNG leaves plte_buf = 0");
+    var pbuf_noplte[80];
+    _ut_build_min_png(&pbuf_noplte, 4, 2, 8, 2);
+    file_write_all("/tmp/kii-test-noplte.png", &pbuf_noplte, 45);
+    var pstr_noplte[112];
+    png_decode_structure("/tmp/kii-test-noplte.png", &pstr_noplte);
+    assert_eq(load64(&pstr_noplte + STRUCT_PLTE_BUF_OFFSET),  0,
+              "plte_buf = 0 when no PLTE chunk");
+    assert_eq(load64(&pstr_noplte + STRUCT_PLTE_SIZE_OFFSET), 0,
+              "plte_size = 0 when no PLTE chunk");
+
+    test_group("M4(c) — malformed PLTE rejected");
+    # PLTE length not a multiple of 3 → spec § 11.2.3 violation,
+    # PNG_ERR_HEADER. Use 7-byte payload (not divisible by 3).
+    var bad_palette[7];
+    var bp = 0;
+    while (bp < 7) { store8(&bad_palette + bp, 0xAA); bp = bp + 1; }
+    var pbuf_bad_plte[128];
+    var bad_len = _ut_build_png_with_plte(&pbuf_bad_plte, 4, 2, 8, 3, 0,
+                                            &bad_palette, 7);
+    file_write_all("/tmp/kii-test-bad-plte.png", &pbuf_bad_plte, bad_len);
+    var pstr_bp[112];
+    assert_eq(png_decode_structure("/tmp/kii-test-bad-plte.png", &pstr_bp),
+              PNG_ERR_HEADER, "PLTE length not multiple of 3 → PNG_ERR_HEADER");
+
+    # PLTE > 768 bytes → spec violation (max 256 entries × 3).
+    # Build a 771-byte PLTE; we don't actually need a meaningful
+    # buffer since the walker rejects before reading the bytes.
+    var big_palette[771];
+    var bp2 = 0;
+    while (bp2 < 771) { store8(&big_palette + bp2, 0); bp2 = bp2 + 1; }
+    var pbuf_big_plte[1024];
+    var big_len = _ut_build_png_with_plte(&pbuf_big_plte, 4, 2, 8, 3, 0,
+                                            &big_palette, 771);
+    file_write_all("/tmp/kii-test-big-plte.png", &pbuf_big_plte, big_len);
+    var pstr_bg[112];
+    assert_eq(png_decode_structure("/tmp/kii-test-big-plte.png", &pstr_bg),
+              PNG_ERR_HEADER, "PLTE > 768 bytes → PNG_ERR_HEADER");
+
+    test_group("M4(c) — real-world palette PNG (archlinux-logo.png)");
+    # The archlinux-logo.png on a stock Arch system is palette PNG
+    # (color_type=3) with a real PLTE chunk. We can't pin exact
+    # bytes (different distros may install different versions) but
+    # we CAN assert structural invariants: PLTE present, size > 0,
+    # size ≤ 768, size multiple of 3.
+    var pstr_arch[112];
+    var arch_rc = png_decode_structure("/usr/share/pixmaps/archlinux-logo.png",
+                                         &pstr_arch);
+    if (arch_rc == PNG_OK) {
+        # Only assert if the fixture exists on this machine; CI
+        # might be on a non-Arch image where the path is empty.
+        var arch_plte_size = load64(&pstr_arch + STRUCT_PLTE_SIZE_OFFSET);
+        var arch_plte_ptr  = load64(&pstr_arch + STRUCT_PLTE_BUF_OFFSET);
+        assert_eq(load64(&pstr_arch + STRUCT_COLOR_TYPE_OFFSET), 3,
+                  "archlinux-logo.png is palette (color_type=3)");
+        assert(arch_plte_size > 0,           "real palette PNG has non-empty PLTE");
+        assert(arch_plte_size <= 768,        "real PLTE size fits spec cap");
+        assert(arch_plte_size % 3 == 0,      "real PLTE size is multiple of 3");
+        assert(arch_plte_ptr != 0,           "real PLTE buf alloc'd");
+    }
 
     return assert_summary();
 }
