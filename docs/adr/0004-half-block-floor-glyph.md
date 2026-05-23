@@ -122,8 +122,23 @@ or 1-bit imagery, not 16-color photographic).
 
 ## Trigger for revisit
 
-- A consumer asks for quarter-block density (likely a TUI app that
-  wants finer image previews than half-block provides).
+- **Scheduled**: **v2.0.0 — full Block Elements glyph vocab**
+  (U+2580..U+259F). Captured in
+  [`../development/roadmap.md`](../development/roadmap.md) §
+  Post-v1 considerations. Closes the bytewise + visual-detail gap
+  with chafa documented in
+  [`../audit/chafa-comparison.md`](../audit/chafa-comparison.md)
+  (kii's 5.9×–69× byte verbosity vs chafa is driven by
+  half-block-only + per-cell SGR pair; richer vocab lets each cell
+  encode more visual information per byte). When scoped, this ADR
+  will be superseded by the v2 glyph-vocab ADR and ADR 0003
+  (color-tier-discipline / byte-stability) will need amendment
+  because per-cell glyph variation breaks the fixed-shape per-cell
+  contract.
+- A consumer asks for quarter-block density before v2.0 ship —
+  candidate for accelerating into a v1.x bite if the demand surfaces
+  (likely a TUI app that wants finer image previews than half-block
+  provides).
 - Cross-terminal verification at M8 close uncovers a font that
   fails on `▀` or `▄` — would force a fallback path through space +
   bg-color (full-block aesthetic). No known target terminal does

@@ -155,6 +155,16 @@ visual content.** This is captured in:
   byte-stability by coalescing, or (b) switching to a different SGR
   encoding (e.g. SGR-30-37 for the basic colors instead of
   SGR-38;5;N).
+- **v2.0 — Full Block Elements glyph vocab**
+  ([`../development/roadmap.md`](../development/roadmap.md) §
+  Post-v1 considerations). The bytewise gap with chafa is the
+  load-bearing evidence for scheduling this goal: each kii cell
+  currently encodes 2 colors via a fixed `▀` glyph. The full
+  Block Elements range lets a cell encode 4 colors (quarter-blocks
+  `▘▝▖▗`) or sub-cell vertical/horizontal partials
+  (`▁▂▃▄▅▆▇▏▎▍▌▋▊▉`), trading byte-stability (ADR 0003) for
+  visual information density. The vocab expansion is the structural
+  fix; SGR-encoding choice is a separate secondary optimization.
 
 ❌ **Not run**: per-terminal rendering verification across
 `TERM=linux`, xterm-256color, Alacritty, kitty, tmux. Carried to
