@@ -1,0 +1,11 @@
+stderr:
+  /etc/hostname: not a PNG
+
+stdout:
+  exit code: 1
+
+The `not a PNG` diagnostic fires when the first 8 bytes of the file
+don't match the PNG signature (89 50 4E 47 0D 0A 1A 0A). Per
+`docs/guides/getting-started.md` § When kii rejects an image, this
+is one of ~12 distinct error paths kii can take; each produces a
+specific diagnostic so users can tell what failed.

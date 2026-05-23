@@ -4,6 +4,45 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-05-23
+
+### v1.0 freeze cycle (M8)
+
+The freeze ships kii at v1.0 with the production PNG → terminal-ANSI pipeline locked in, all ADRs written, the security model committed (per ADR 0002), and the W3C PNG test-suite walked. Consumer integration is OFF the v1.0 acceptance set — BBS / MUD apps are downstream cycles, not v1.0 blockers.
+
+### Added
+
+- **`tests/fixtures/`** directory — RAMGON.png moved from top level (`git mv`); references in `kii.tcyr` / `kii.fcyr` / `kii.bcyr` updated to `tests/fixtures/RAMGON.png`. Sets up the curated-fixtures dir per M8 acceptance.
+- **Per-chunk-type length cap** (`src/png.cyr`) — IEND must be exactly 0 bytes per PNG spec § 11.2.5; any chunk exceeding the absolute 256 MB ceiling rejected as `PNG_ERR_HEADER`. Closes the audit-doc Finding 6 (libpng CVE-2017-12652 class). +1 test assertion (471 total).
+- **`docs/adr/0003-color-tier-discipline.md`** — captures the tier-1 (8/16-color) v1.0 scope rationale; tier-2 / tier-3 deferral.
+- **`docs/adr/0004-half-block-floor-glyph.md`** — captures the `▀`/`▄` glyph-pair-as-floor choice; quarter-blocks + braille post-v1 rationale.
+- **`docs/adr/0005-nearest-neighbor-downscale.md`** — captures the nearest-neighbor algorithm choice; bilinear/Lanczos defer to tier-2 alongside dithering.
+- **`docs/guides/getting-started.md`** backfilled — first runnable user guide (overdue since M5). Install / first render / CLI surface / common pipelines / error reference / deferred-features list / where-to-next.
+- **`docs/examples/`** populated with three runnable transcripts:
+  - `01-ramgon-fixed-width/` — happy path, RGBA color_type=6
+  - `02-archlinux-logo-palette/` — palette color_type=3 code path
+  - `03-not-a-png-rejection/` — error-path diagnostic + exit code
+- **W3C PngSuite walk** appended to `docs/audit/2026-05-22-audit.md` § Appendix A. Results: **14/14 broken-set PNGs rejected cleanly with explicit diagnostics; 82/162 valid-set PNGs decoded OK; remaining 80 rejected as deferred features (45 sub-byte depths + 35 Adam7 interlaced). Zero crashes, zero hangs, zero silent corruptions.**
+- **chafa visual review** (M8(b3)) — once chafa was installed mid-cycle. Curated 6-fixture comparison (PngSuite basics + RAMGON + archlinux-logo + starfield) in `docs/audit/chafa-comparison.md`. **kii is 5.9×–69× bytewise larger than chafa** for equivalent visual content — direct consequence of the per-cell byte-stable encoding (ADR 0003) + half-block-only glyph vocab (ADR 0004) + 256-color SGR over compact SGR-30-37. Validates the kii design tradeoffs against chafa as reference impl; closes the v1.0 acceptance criterion.
+- **`tests/fixtures/visual-review/`** dir with 3 W3C PngSuite basic-set PNGs (RGB / palette / RGBA) for the comparison.
+
+### Changed
+
+- `print_version` literal bumped to `kii 1.0.0`.
+- `README.md` example invocation updated to `kii tests/fixtures/RAMGON.png`.
+- `docs/development/state.md` refreshed with v1.0 snapshot.
+
+### Deferred to v1.x (not v1.0 blockers)
+
+- **First BBS / MUD consumer integration** — those apps are downstream cycles (only ideated, not built); v1.0 ships as substrate.
+- **Cross-terminal verification** (Linux console / xterm / Alacritty / kitty / tmux) — needs human eyes per terminal. v1.0 ships byte-stable; downstream verification can land any time.
+- **Marketplace recipe in zugot** — depends on zugot tooling; v1.x.
+- **Three sankoch upstream items** filed during the M7 audit (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers) remain open — kii's pre-inflate caps cover the impact, but sankoch-internal Huffman-table-construction validation is the proper fix.
+
+### Deps
+
+- No deltas. `darshana 0.5.3` and stdlib unchanged.
+
 ## [0.8.0] — 2026-05-23
 
 ### Security

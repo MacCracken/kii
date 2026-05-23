@@ -14,18 +14,18 @@ The contract for tagging v1.0:
 - [x] Half-block glyph emission at terminal-detected geometry works (half-block emit at v0.6.0 / M5; terminal-detection at v0.7.0 / M6)
 - [x] Test coverage: 100+ assertions across all modules (426 as of v0.7.0)
 - [x] **Security audit pass** — external CVE / 0-day research compiled into [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md); PNG fuzz harness clean at 10⁶ iterations; ANSI-escape-injection paths reviewed (Finding 6 — closed via `_eprint_path_safe`); decode-latency matrix at 256² / 1024² / 2048² for DoS-bound validation captured at v0.8.0 / M7
-- [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (M7(a) deferred → M8)
-- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (M8 freeze work)
-- [ ] At least one downstream consumer (BBS or MUD app) integrated and green (M8 freeze work)
-- [ ] Cross-terminal verification — Linux console, xterm, Alacritty, kitty, tmux (M8 freeze work)
-- [ ] CHANGELOG complete from v0.1.0 onward — rolling per release (currently v0.1.0–v0.7.0 entered)
-- [ ] All ADRs written for design decisions made during M0-M6 (0001 PNG-in-repo landed at M6; 0002 security-model + any others land at M7 / M8)
-- [ ] Docs / guides / examples all current per `docs/doc-health.md` (M8 freeze work)
-- [ ] Marketplace recipe in zugot (M8 freeze work)
+- [x] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set — closed at M8(b4); 14/14 broken rejected, 82/162 valid OK, 0 crashes (see [audit § Appendix A](../audit/2026-05-22-audit.md))
+- [x] 16-color quantization output passes visual review against `chafa --colors 16` — closed at M8(b3-redo) with a 6-fixture curated set; results captured in [`docs/audit/chafa-comparison.md`](../audit/chafa-comparison.md)
+- [ ] At least one downstream consumer (BBS or MUD app) integrated and green — **explicitly OFF the v1.0 acceptance set**; BBS/MUD apps are downstream cycles (ideated, not built)
+- [ ] Cross-terminal verification — Linux console, xterm, Alacritty, kitty, tmux — **deferred to v1.x** (needs human-eye per-terminal pass; kii ships byte-stable so verification can land any time)
+- [x] CHANGELOG complete from v0.1.0 onward — rolling per release (v0.1.0 through v1.0.0 entered)
+- [x] All ADRs written for design decisions made during M0–M6 — 0001 PNG-in-repo (M6), 0002 security-model (M7), 0003 color-tier-discipline (M8), 0004 half-block-floor-glyph (M8), 0005 nearest-neighbor-downscale (M8)
+- [x] Docs / guides / examples all current per `docs/doc-health.md` — getting-started backfilled at M8(c4); examples/ populated at M8(c5)
+- [ ] Marketplace recipe in zugot — **deferred to v1.x** (depends on zugot tooling)
 
-## Shipped milestones (M0 → M7, v0.1.0 → v0.8.0)
+## Shipped milestones (M0 → M8, v0.1.0 → v1.0.0)
 
-M0–M6 shipped 2026-05-22; M7 shipped 2026-05-23. Per-milestone delivered lists, sub-bite cadences, deferrals, and deps added live in [`../../CHANGELOG.md`](../../CHANGELOG.md) — this table is the index.
+M0–M6 shipped 2026-05-22; M7 + M8 shipped 2026-05-23. Per-milestone delivered lists, sub-bite cadences, deferrals, and deps added live in [`../../CHANGELOG.md`](../../CHANGELOG.md) — this table is the index.
 
 | Milestone | Version | Headline | Deps added |
 |---|---|---|---|
@@ -37,8 +37,9 @@ M0–M6 shipped 2026-05-22; M7 shipped 2026-05-23. Per-milestone delivered lists
 | M5 — Half-block ANSI emit | [v0.6.0](../../CHANGELOG.md#060--2026-05-22) | ▀ glyph + per-row 256-color escapes; downscale.cyr + emit.cyr; `--verbose` activated | external `darshana 0.5.3` (first git dep) |
 | M6 — Terminal-size detect | [v0.7.0](../../CHANGELOG.md#070--2026-05-22) | `tty_winsize` auto-detect + `--width N` honored; aspect-preserving fit; multi-resolution bench; ADR 0001 + architecture/README backfill | — |
 | M7 — Security audit cycle | [v0.8.0](../../CHANGELOG.md#080--2026-05-23) | External CVE/0-day audit (140 rows); hardening commits C1–C4 (path-sanitize + IHDR caps + IDAT/ratio caps + chunk-order FSM); fuzz 2k → 3M+; decode-latency matrix; ADR 0002 | — |
+| M8 — v1.0 freeze | [v1.0.0](../../CHANGELOG.md#100--2026-05-23) | Per-chunk length cap (audit Finding 6); ADRs 0003/0004/0005; getting-started backfill; examples/; tests/fixtures/; W3C PngSuite walk (14/14 broken rejected, 82/162 valid OK, 0 crashes) | — |
 
-**At v0.8.0**: 470 assertions all pass (44 new); 3M+ fuzz iters across 5 surfaces clean; seven benches (incl. M7(d) decode-latency matrix); audit doc with 10 kii-specific findings (8 fixed / 2 deferred to M8). Threat model + commitments captured in ADR 0002.
+**At v1.0.0**: 471 assertions all pass (+1 from v0.8.0); 3M+ fuzz iters across 5 surfaces clean; seven benches (incl. M7(d) decode-latency matrix); 5 ADRs landed; W3C PngSuite walked cleanly. Threat model + commitments captured in ADR 0002.
 
 ## In-flight + remaining milestones
 
@@ -85,31 +86,27 @@ Deferred to M8: W3C broken-set walk, per-chunk-type length cap table.
 
 **Deps gates**: none expected. May add stdlib `bounds` if not already in (for size-cap helpers); confirmed during sub-bite (a).
 
-### M8 — v1.0 freeze cycle (v1.0.0)
+### M8 — v1.0 freeze cycle (v1.0.0) — SHIPPED 2026-05-23
 
-**Goal**: socialize, harden the integration story, ship the marketplace listing. No new code paths; no security work (M7 owned that). The signaling milestone — "kii is done, you can build on it."
+Closed out 2026-05-23. Per-bite outcomes:
 
-**Acceptance criteria**:
+- **(b1)** RAMGON.png moved to `tests/fixtures/`; test/bench/fuzz references updated.
+- **(b2)** Per-chunk-type length cap (audit Finding 6, carry-forward) — IEND-length-zero + generic 256 MB per-chunk cap.
+- **(b3)** chafa visual review — initially deferred; re-run after chafa installed. Closed at v1.0 with 6-fixture comparison + byte-stream metrics + qualitative findings in `docs/audit/chafa-comparison.md`. Validates ADRs 0003 / 0004 / 0005 against chafa as reference impl.
+- **(b4)** W3C PngSuite walk — 14/14 broken rejected, 82/162 valid OK, 0 crashes (audit doc § Appendix A).
+- **(c1)** ADR 0003 — color-tier discipline (8/16-color v1.0).
+- **(c2)** ADR 0004 — half-block (▀/▄) as the floor glyph.
+- **(c3)** ADR 0005 — nearest-neighbor downscale (no Lanczos at v1).
+- **(c4)** `docs/guides/getting-started.md` backfilled.
+- **(c5)** `docs/examples/` populated with 3 runnable transcripts (happy path / palette code path / error path).
+- **(d)** Close-out: VERSION 0.8.0 → 1.0.0, CHANGELOG v1.0.0 entry, state.md refreshed, doc-health walked, roadmap collapsed.
 
-- [ ] First BBS / MUD downstream consumer integrated and green (likely `bannermanor`'s MOTD path — `kii motd.png | bnrmr` style pipeline)
-- [ ] Cross-terminal verification: Linux console (`TERM=linux`), xterm-256color, Alacritty, kitty, tmux. The 256-color escape codes are widely compatible, but `TERM=linux` may need a fallback path through named SGR 30–37 / 40–47 / 90–97 / 100–107.
-- [ ] Visual review against `chafa --colors 16 --size 80x24 image.png` on a curated 5-image fixtures dir (`tests/fixtures/`) — RAMGON.png migrates from the top level into the fixtures dir as part of this
-- [ ] `docs/guides/getting-started.md` backfilled — first runnable user-facing guide (overdue since M5)
-- [ ] `docs/examples/` populated — first image-in → terminal-ANSI-out transcript (overdue since M5)
-- [ ] All ADRs written for design decisions made during M0–M6 (0001 PNG-in-repo at M6, 0002 security-model at M7; M8 lands any others — color-tier discipline, nearest-neighbor downscale, half-block-as-floor are candidates if not already covered in CLAUDE.md + architecture/README)
-- [ ] Marketplace recipe in zugot
-- [ ] Doc-health ledger walks every Tier-1 row; all fresh
-- [ ] CHANGELOG complete from v0.1.0 onward
-- [ ] VERSION → 1.0.0; git tag
+**Deferred to v1.x** (none block v1.0 tag):
 
-**Sub-bite cadence**:
-
-- **(a)** First-consumer integration (bannermanor or chosen alternative) — kii substrate consumed at runtime; integration tests in the consumer's repo, not kii's.
-- **(b)** Cross-terminal verification + curated fixtures dir; visual review captured as screenshots or text comparisons in `docs/audit/` or `docs/examples/`.
-- **(c)** Docs backfill — getting-started, examples, remaining ADRs.
-- **(d)** Marketplace + VERSION 1.0.0 + git tag + final CHANGELOG pass.
-
-**Deps gates**: none expected.
+- First BBS / MUD downstream consumer integrated — **explicitly OFF the v1.0 acceptance set** (downstream apps ideated, not built; integration is a downstream-cycle deliverable).
+- Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux).
+<!-- chafa visual review: CLOSED at v1.0 (chafa installed; comparison shipped) -->
+- Marketplace recipe in zugot.
 
 ## Out of scope (for v1.0)
 

@@ -352,7 +352,7 @@ fn main(): i64 {
     var emit_iter = 0;
     var emit_bad  = 0;
     var emit_pstr[160];
-    if (png_decode_structure("RAMGON.png", &emit_pstr) == PNG_OK) {
+    if (png_decode_structure("tests/fixtures/RAMGON.png", &emit_pstr) == PNG_OK) {
         if (png_decode_pixels(&emit_pstr) == PNG_OK) {
             # ANSI escape can produce up to ~25 bytes per cell at
             # 200 cols; 8 KB scratch is well above worst-case.

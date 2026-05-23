@@ -1,0 +1,10 @@
+Frame is ~54 KB of ANSI escape sequences. First bytes (first cell):
+
+  \x1b[38;5;0m\x1b[48;5;0m▀\x1b[38;5;0m\x1b[48;5;8m▀\x1b[38;5;8m\x1b[48;5;8m▀...
+
+Format: per-cell `SGR foreground; SGR background; ▀` (U+2580 half-block).
+Background carries the bottom-pixel color, foreground carries the
+top-pixel color. Frame ends with implicit terminal reset; stdout has
+no trailing escape (so the next shell prompt isn't tinted).
+
+Run produces exit code 0, no stderr output (unless --verbose).

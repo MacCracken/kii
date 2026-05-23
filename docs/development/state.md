@@ -5,7 +5,7 @@
 
 ## Version
 
-**0.8.0** — M7 (security audit cycle) closeout — 2026-05-23.
+**1.0.0** — M8 (v1.0 freeze cycle) closeout — 2026-05-23.
 
 ## Toolchain
 
@@ -37,10 +37,10 @@ Module map:
 - `src/quant.cyr` — Two surfaces: M4 image-wide `quantize_nearest_image` (kept for test coverage of per-color_type extraction) + M5+ `quantize_rgb_buf` / `quantize_downscaled` (production pipeline).
 - `src/downscale.cyr` — Nearest-neighbor RGB resampler with per-color_type extraction. Variable target size (called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`).
 - `src/emit.cyr` — Half-block ANSI emit + geometry primitives (`_kii_compute_target_geometry` for explicit-width, `_kii_compute_fit_geometry` for terminal-fit). Default constants `EMIT_DEFAULT_COLS = 80` / `EMIT_DEFAULT_ROWS = 24`. Local `_emit_bg_256_buf` while darshana's BG-256 twin isn't shipped.
-- `tests/kii.tcyr` — **470 assertions** (+44 from v0.7.0: 24 path-sanitizer, 16 dimension/cross-product caps, 2 ratio, 2 chunk-ordering FSM).
+- `tests/kii.tcyr` — **471 assertions** (+45 from v0.7.0: 24 path-sanitizer, 16 dimension/cross-product caps, 2 ratio, 2 chunk-ordering FSM, 1 IEND-length-zero per-chunk cap).
 - `tests/kii.fcyr` — **five fuzz surfaces** at **3,011,000 total iters**: arg-parser (10k), path-sanitizer (1M), geometry (1M), emit-pipeline (1k), png-decoder (1M, scaled from 2k).
 - `tests/kii.bcyr` — **seven benches**: M4 quantize + M5/M6 end-to-end RAMGON (3 sizes) + M7 decode-latency matrix (3 source resolutions).
-- `RAMGON.png` — top-level fixture (1152×925 RGBA, ~2 MB).
+- `tests/fixtures/RAMGON.png` — real-world fixture (1152×925 RGBA, ~2 MB). Moved from top level to curated fixtures dir at M8(b1).
 
 ## Binary size
 
@@ -48,7 +48,7 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 
 ## Tests + bench
 
-- `cyrius test` → **470 assertions, all pass** (was 426 at v0.7.0; +44: 24 path-sanitizer, 16 dimension/cross-product caps, 2 compression-ratio, 2 chunk-ordering FSM).
+- `cyrius test` → **471 assertions, all pass** (was 426 at v0.7.0; +45: 24 path-sanitizer, 16 dimension/cross-product caps, 2 compression-ratio, 2 chunk-ordering FSM, 1 IEND-length-zero per-chunk cap from M8(b2)).
 - Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → **3,011,000 iters in ~16.4 s, all clean**. Surfaces: 10k arg-parser + 1M path-sanitizer + 1M geometry + 1k emit-pipeline + 1M PNG-decoder.
 - Bench (see [`docs/benchmarks.md`](../benchmarks.md)):
   - `quantize_nearest_rgb @ 1024×1024`: **268 ns/op** (v0.7.0: 269 ns; noise)
@@ -68,19 +68,20 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 
 ## Cycle context
 
-v0.8.0 close lands during agnos kernel cycle **1.32.x networking-arc**. BBS/MUD apps that will consume kii are out-of-cycle parallel deliverables for that cycle.
+v1.0.0 ships during agnos kernel cycle **1.32.x networking-arc**. kii lands as substrate for the BBS / MUD apps that are downstream cycles (ideated but not yet built); v1.0 freeze is explicit about NOT bundling consumer integration with the substrate ship.
 
 ## Next
 
-**M8 — v1.0 freeze (v1.0.0)**. Sub-bites:
+**v1.x — Tier-2 (post-v1)**. Sub-bites (not yet scoped to milestones):
 
-- First BBS / MUD downstream consumer integrated and green (likely `bannermanor`'s MOTD path — `kii motd.png | bnrmr` style pipeline).
-- Cross-terminal verification: Linux console (`TERM=linux`), xterm-256color, Alacritty, kitty, tmux.
-- W3C PNG test-suite "broken" set walked through kii — confirms clean rejection on every malformed-input case from the spec test corpus (carried over from M7(a) deferral).
-- Visual review against `chafa --colors 16 --size 80x24 image.png` on a curated 5-image fixtures dir.
-- `docs/guides/getting-started.md` + `docs/examples/` backfill (overdue since M5).
-- Per-chunk-type length cap table (M7 Finding 6, deferred — libpng CVE-2017-12652 class).
-- Three sankoch upstream items filed during M7 — close out as v1.0 release gates.
-- Marketplace recipe in zugot; VERSION → 1.0.0; git tag.
+- `--color 256` and `--color tc` modes (truecolor SGR emit).
+- Floyd-Steinberg + ordered-Bayer dithering as `--dither` choices.
+- `--filter {nearest,bilinear,box}` selection.
+- JPEG decoder (likely v1.2.0).
+- Re-render the chafa visual-review fixture set (deferred from M8) once chafa is installed in the dev environment.
+- Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux) on a wider terminal set.
+- Three sankoch upstream items (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers) — file as sankoch issues; track impact.
 
-**Carry-forward debt cleared at M7**: M7(a) audit doc + M7(b) fuzz coverage + M7(c) hardening + M7(d) bench matrix + ADR 0002. Doc-currency ledger walked at M7(d) close.
+**Carry-forward debt at v1.0**: chafa visual review (`docs/audit/chafa-comparison-deferred.md`), cross-terminal verification, marketplace recipe in zugot, three sankoch upstream items. None block the v1.0 tag; documented for v1.x pickup.
+
+**v2.0 horizon**: Tier-3 — Sixel / Kitty / iTerm2 inline-image protocols. Major-version cut depending on CLI surface impact.

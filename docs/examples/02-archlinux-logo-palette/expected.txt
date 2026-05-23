@@ -1,0 +1,12 @@
+Frame: 80 cells wide × ~40 terminal rows (square source → tall when
+half-block-doubled).
+
+Per-cell escape format identical to example 01 — the palette-vs-RGBA
+distinction is internal (PLTE-lookup happens inside the M5 pipeline
+before SGR emission), so the emitted byte stream is the same shape.
+
+Run produces exit code 0.
+
+If `/usr/share/pixmaps/archlinux-logo.png` doesn't exist:
+  /usr/share/pixmaps/archlinux-logo.png: cannot open file
+  (exit code 1)

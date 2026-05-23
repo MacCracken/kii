@@ -475,6 +475,17 @@ fn png_decode_structure(path, out_struct): i64 {
         var is_iend   = _png_is_iend(&hdr_buf + 4);
         var is_plte   = _png_is_plte(&hdr_buf + 4);
 
+        # M8(b2) — per-chunk-type length cap. Closes libpng CVE-2017-12652
+        # class (chunk length unbounded → I/O-bound loop / OOM-on-alloc).
+        # IEND must be exactly 0 bytes per PNG spec § 11.2.5; any chunk
+        # exceeding the kii absolute ceiling (256 MB, same as IDAT
+        # cumulative cap and inflate-output ceiling) is rejected.
+        # IHDR length pre-validated at line 414 (must equal 13); PLTE
+        # capped at 768 below. IDAT per-chunk cap is implicit via the
+        # cumulative idat_total cap downstream.
+        if (is_iend == 1 && chunk_len != 0) { file_close(fd); return PNG_ERR_HEADER; }
+        if (chunk_len > KII_MAX_RAW_BYTES)  { file_close(fd); return PNG_ERR_HEADER; }
+
         # PLTE pre-alloc (M4(c)): the spec § 11.2.3 caps PLTE at
         # 768 bytes (256 entries × 3) and requires length to be a
         # multiple of 3. Reject malformed PLTE at the structural

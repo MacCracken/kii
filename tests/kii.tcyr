@@ -893,7 +893,7 @@ fn main() {
     # uses — produces a pixel buffer of the spec-derived size.
     test_group("M3(c) — png_decode_pixels real-world (RAMGON.png)");
     var pstr_real[96];
-    assert_eq(png_decode_structure("RAMGON.png", &pstr_real), PNG_OK,
+    assert_eq(png_decode_structure("tests/fixtures/RAMGON.png", &pstr_real), PNG_OK,
               "RAMGON.png → PNG_OK on structure");
     assert_eq(load64(&pstr_real + STRUCT_WIDTH_OFFSET),      1152, "RAMGON width = 1152");
     assert_eq(load64(&pstr_real + STRUCT_HEIGHT_OFFSET),     925,  "RAMGON height = 925");
@@ -1291,7 +1291,7 @@ fn main() {
     # buffer. Asserts non-null buf, correct dimensions, expected
     # byte count (80 × 48 × 3 = 11,520).
     var pstr_d_ram[160];
-    assert_eq(png_decode_structure("RAMGON.png", &pstr_d_ram), PNG_OK,
+    assert_eq(png_decode_structure("tests/fixtures/RAMGON.png", &pstr_d_ram), PNG_OK,
               "RAMGON.png → PNG_OK on structure (downscale)");
     assert_eq(png_decode_pixels(&pstr_d_ram), PNG_OK,
               "RAMGON.png → PNG_OK on pixels (downscale)");
@@ -1889,6 +1889,37 @@ fn main() {
     var pstr_pa[160];
     assert_eq(png_decode_structure("/tmp/kii-test-plte-after.png", &pstr_pa), PNG_ERR_HEADER,
               "PLTE after IDAT rejected (spec § 5.6 — PLTE must precede IDAT)");
+
+    # ---- M8(b2): per-chunk-type length cap (audit Finding 6) ----
+    # IEND must be exactly 0 bytes per PNG spec § 11.2.5. A non-zero
+    # IEND length is malformed; reject at the walker.
+    test_group("M8(b2) — IEND length-zero enforcement");
+    var pbuf_bad_iend_len[128];
+    memcpy(&pbuf_bad_iend_len + 0, PNG_MAGIC, PNG_MAGIC_LEN);
+    _ut_put_u32_be(&pbuf_bad_iend_len, 8, 13);
+    store8(&pbuf_bad_iend_len + 12, 0x49); store8(&pbuf_bad_iend_len + 13, 0x48);
+    store8(&pbuf_bad_iend_len + 14, 0x44); store8(&pbuf_bad_iend_len + 15, 0x52);
+    _ut_put_u32_be(&pbuf_bad_iend_len, 16, 4);
+    _ut_put_u32_be(&pbuf_bad_iend_len, 20, 4);
+    store8(&pbuf_bad_iend_len + 24, 8);
+    store8(&pbuf_bad_iend_len + 25, 2);
+    store8(&pbuf_bad_iend_len + 26, 0);
+    store8(&pbuf_bad_iend_len + 27, 0);
+    store8(&pbuf_bad_iend_len + 28, 0);
+    var ihdr_crc_bi = png_crc32(&pbuf_bad_iend_len + 12, 17);
+    _ut_put_u32_be(&pbuf_bad_iend_len, 29, ihdr_crc_bi);
+    # IEND with length=1 (spec violation; must be 0). Add one data
+    # byte + CRC over type + 1 data byte.
+    _ut_put_u32_be(&pbuf_bad_iend_len, 33, 1);
+    store8(&pbuf_bad_iend_len + 37, 0x49); store8(&pbuf_bad_iend_len + 38, 0x45);
+    store8(&pbuf_bad_iend_len + 39, 0x4E); store8(&pbuf_bad_iend_len + 40, 0x44);
+    store8(&pbuf_bad_iend_len + 41, 0x00);
+    var iend_crc_bi = png_crc32(&pbuf_bad_iend_len + 37, 5);
+    _ut_put_u32_be(&pbuf_bad_iend_len, 42, iend_crc_bi);
+    file_write_all("/tmp/kii-test-bad-iend-len.png", &pbuf_bad_iend_len, 46);
+    var pstr_bi[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-bad-iend-len.png", &pstr_bi), PNG_ERR_HEADER,
+              "IEND with non-zero length rejected (spec § 11.2.5)");
 
     test_group("M5(b) — downscale per-color_type normalization (palette PNG)");
     # archlinux-logo.png is palette (color_type=3). Downscale must

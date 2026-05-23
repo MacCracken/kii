@@ -22,3 +22,7 @@ Decisions about kii — what we chose, the context, and the consequences we acce
 | ADR | Status | Subject |
 |---|---|---|
 | [0001](0001-png-decoder-in-repo.md) | Accepted | PNG decoder lives in-repo (not as a substrate library) until a second consumer surfaces |
+| [0002](0002-security-model.md) | Accepted | Security model: untrusted-image input + restricted-emit posture (M7 audit cycle) |
+| [0003](0003-color-tier-discipline.md) | Accepted | Color-tier discipline: tier-1 (8/16-color) only at v1.0 |
+| [0004](0004-half-block-floor-glyph.md) | Accepted | Half-block (`▀`/`▄`) as the floor glyph |
+| [0005](0005-nearest-neighbor-downscale.md) | Accepted | Nearest-neighbor downscale (no Lanczos / bilinear at v1.0) |

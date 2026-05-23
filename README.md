@@ -11,8 +11,8 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 Today `kii image.png` decodes any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA at bit-depth 8 or 16, non-interlaced) all the way through:
 
 ```
-$ kii RAMGON.png
-RAMGON.png: 1152x925 1065600 pixels (RGBA) → 16-color
+$ kii tests/fixtures/RAMGON.png
+tests/fixtures/RAMGON.png: 1152x925 1065600 pixels (RGBA) → 16-color
 ```
 
 What's NOT yet visible: actual half-block (`▀`) glyphs to stdout. That's M5 — the quantized indices live internally, but darshana (the ANSI primitives dep) is the M5 gate.

@@ -64,7 +64,7 @@ fn main(): i64 {
     var j80 = 0;
     while (j80 < n_80) {
         var pstr_80[160];
-        png_decode_structure("RAMGON.png", &pstr_80);
+        png_decode_structure("tests/fixtures/RAMGON.png", &pstr_80);
         png_decode_pixels(&pstr_80);
         downscale_to_rgb(&pstr_80, 80, 48);
         quantize_downscaled(&pstr_80);
@@ -85,7 +85,7 @@ fn main(): i64 {
     var j120 = 0;
     while (j120 < n_120) {
         var pstr_120[160];
-        png_decode_structure("RAMGON.png", &pstr_120);
+        png_decode_structure("tests/fixtures/RAMGON.png", &pstr_120);
         png_decode_pixels(&pstr_120);
         downscale_to_rgb(&pstr_120, 120, 80);
         quantize_downscaled(&pstr_120);
@@ -106,7 +106,7 @@ fn main(): i64 {
     var j200 = 0;
     while (j200 < n_200) {
         var pstr_200[160];
-        png_decode_structure("RAMGON.png", &pstr_200);
+        png_decode_structure("tests/fixtures/RAMGON.png", &pstr_200);
         png_decode_pixels(&pstr_200);
         downscale_to_rgb(&pstr_200, 200, 120);
         quantize_downscaled(&pstr_200);
