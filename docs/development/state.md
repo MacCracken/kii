@@ -32,7 +32,7 @@ Module map:
 - `src/downscale.cyr` — Nearest-neighbor RGB resampler with per-color_type extraction. Variable target size (called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`).
 - `src/emit.cyr` — Half-block ANSI emit + geometry primitives (`_kii_compute_target_geometry` for explicit-width, `_kii_compute_fit_geometry` for terminal-fit). Default constants `EMIT_DEFAULT_COLS = 80` / `EMIT_DEFAULT_ROWS = 24`. Local `_emit_bg_256_buf` while darshana's BG-256 twin isn't shipped.
 - `tests/kii.tcyr` — 426 assertions.
-- `tests/kii.fcyr` — two fuzz surfaces (10k arg + 2k PNG); downscale/emit/geometry fuzz deferred to M7.
+- `tests/kii.fcyr` — two fuzz surfaces (10k arg + 2k PNG); downscale/emit/geometry fuzz surfaces + 2k → 10⁶ iteration scale deferred to M7 (security audit).
 - `tests/kii.bcyr` — four benches: `quantize_nearest_rgb @ 1024×1024` (269 ns) + end-to-end RAMGON at 80×24 / 120×40 / 200×60.
 - `RAMGON.png` — top-level fixture (1152×925 RGBA, ~2 MB).
 
@@ -62,6 +62,17 @@ v0.7.0 close lands during agnos kernel cycle **1.32.x networking-arc**. BBS/MUD 
 
 ## Next
 
-M7 — v1.0 freeze cycle (v1.0.0). No new features. Harden: fuzz harness scales to 10⁶ iterations (downscale/quant/emit fuzz surfaces added against valid-PNG fixtures), end-to-end decode-latency captured at 256² / 1024² / 2048² to complete the bench matrix, security audit pass on ANSI-escape-injection vectors, at least one BBS or MUD downstream consumer integrated and green, doc-health ledger walks Tier-1 rows for currency, CHANGELOG complete from v0.1.0 onward, `VERSION` → 1.0.0 + git tag.
+**M7 — Security audit cycle (v0.8.0)**. Roadmap restructured: the original "M7 = v1.0 freeze" was split into M7 (security) and M8 (freeze), so security work gets a dedicated cycle. Deliverables:
+
+- External CVE / 0-day research compiled into `docs/audit/2026-MM-DD-audit.md` — libpng / lodepng / stb_image / zlib advisories walked, kii-applicability assessed per class.
+- PNG fuzz harness scales 2k → 10⁶ iterations clean.
+- New fuzz surfaces: random valid-PNG → random downscale dims; random target-geometry inputs into the M6 helpers.
+- Integer-overflow review on every size-derivation multiplication.
+- Decompression-amplification cap on inflate output (defends against malformed-IDAT OOM-DoS).
+- ANSI escape injection review on the path → stderr surface.
+- Decode-latency matrix at 256² / 1024² / 2048² source resolutions.
+- ADR 0002 (security-model) + CHANGELOG + VERSION → 0.8.0.
+
+Then **M8 — v1.0 freeze (v1.0.0)** lands the first BBS/MUD consumer, cross-terminal verification, visual review vs `chafa --colors 16`, getting-started + examples doc backfill, marketplace recipe, and the v1.0 tag.
 
 **Carry-forward debt cleared at M6**: `docs/architecture/README.md` backfilled (was overdue M2 → M6); `docs/adr/0001-png-decoder-in-repo.md` written (was overdue M3 → M6).

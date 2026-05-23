@@ -10,158 +10,98 @@ The roadmap is **smallest-first** per AGNOS bite-discipline. Each milestone is s
 
 The contract for tagging v1.0:
 
-- [x] CLI surface frozen — `--help`, `--version`, `--width N`, positional path arg, `--color N` (8 or 16) all stable (shipped at v0.2.0 / M1)
-- [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (PNG decoder shipped at v0.4.0 / M3; W3C-suite acceptance pass still future)
-- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (quantizer shipped at v0.5.0 / M4; visual review carried forward to M7 audit alongside the wider acceptance fixtures)
-- [x] Half-block glyph emission at terminal-detected geometry works (half-block emit at v0.6.0 / M5; terminal-detection at v0.7.0 / M6; cross-terminal verification — Linux console, xterm, Alacritty, kitty, tmux — is M7 audit work)
-- [ ] At least one downstream consumer (BBS or MUD app) integrated and green
-- [x] CHANGELOG complete from v0.1.0 onward (rolling per release; v0.1.0–v0.5.0 all entered)
-- [ ] Security audit pass — PNG fuzz harness clean, ANSI-escape-injection paths reviewed (`docs/audit/YYYY-MM-DD-audit.md`)
+- [x] CLI surface frozen — `--help`, `--version`, `--width N`, positional path arg, `--color N` (8 or 16), `--verbose` all stable (shipped at v0.2.0 / M1; `--verbose` activated at v0.6.0 / M5)
+- [x] Half-block glyph emission at terminal-detected geometry works (half-block emit at v0.6.0 / M5; terminal-detection at v0.7.0 / M6)
 - [x] Test coverage: 100+ assertions across all modules (426 as of v0.7.0)
-- [ ] Benchmarks captured in `docs/benchmarks.md` — image-decode latency at 256×256 / 1024×1024 / 2048×2048; quantization latency at terminal-sized output (quantization bench at 1024×1024 + end-to-end RAMGON at 80×24 / 120×40 / 200×60 captured at v0.7.0 / M6; the decode-latency matrix at three SOURCE resolutions is M7 audit work)
+- [ ] **Security audit pass** — external CVE / 0-day research compiled into `docs/audit/YYYY-MM-DD-audit.md`; PNG fuzz harness clean at 10⁶ iterations; ANSI-escape-injection paths reviewed; decode-latency matrix at 256² / 1024² / 2048² for DoS-bound validation (M7 / v0.8.0)
+- [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (M7 audit work)
+- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (M8 freeze work)
+- [ ] At least one downstream consumer (BBS or MUD app) integrated and green (M8 freeze work)
+- [ ] Cross-terminal verification — Linux console, xterm, Alacritty, kitty, tmux (M8 freeze work)
+- [ ] CHANGELOG complete from v0.1.0 onward — rolling per release (currently v0.1.0–v0.7.0 entered)
+- [ ] All ADRs written for design decisions made during M0-M6 (0001 PNG-in-repo landed at M6; 0002 security-model + any others land at M7 / M8)
+- [ ] Docs / guides / examples all current per `docs/doc-health.md` (M8 freeze work)
+- [ ] Marketplace recipe in zugot (M8 freeze work)
 
-## Milestones
+## Shipped milestones (M0 → M6, v0.1.0 → v0.7.0)
 
-### M0 — Scaffold (v0.1.0) — ✅ shipped 2026-05-22
+All shipped 2026-05-22. Per-milestone delivered lists, sub-bite cadences, deferrals, and deps added live in [`../../CHANGELOG.md`](../../CHANGELOG.md) — this table is the index.
 
-- `cyrius init` scaffold landed
-- Doc-tree per first-party-documentation
-- ADRs / architecture notes / guides / examples folders ready
-- `main.cyr` prints version banner; `cyrius test` runs the 2-assertion smoke suite green
-- CLAUDE.md, README, CHANGELOG, LICENSE, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY all populated
+| Milestone | Version | Headline | Deps added |
+|---|---|---|---|
+| M0 — Scaffold | [v0.1.0](../../CHANGELOG.md#010--2026-05-22) | `cyrius init` + doc tree + smoke test (2 assertions) | stdlib baseline (string/fmt/alloc/io/vec/str/syscalls/assert/bench/args) |
+| M1 — CLI flag surface | [v0.2.0](../../CHANGELOG.md#020--2026-05-22) | `--help` / `--version` / positional path / `--width N` / `--color N` parsed + frozen; arg-parser fuzz | stdlib `flags` |
+| M2 — PNG structural decoder | [v0.3.0](../../CHANGELOG.md#030--2026-05-22) | Signature + IHDR + CRC32 + chunk walker + IEND; PNG-decoder fuzz | — |
+| M3 — sankoch DEFLATE → pixels | [v0.4.0](../../CHANGELOG.md#040--2026-05-22) | sankoch zlib_decompress + spec § 9 filter undo (None/Sub/Up/Avg/Paeth) | stdlib `sankoch`, `thread` |
+| M4 — 16-color quantization | [v0.5.0](../../CHANGELOG.md#050--2026-05-22) | Linux-console palette + Euclidean-RGB nearest-neighbor + PLTE capture; first bench | — |
+| M5 — Half-block ANSI emit | [v0.6.0](../../CHANGELOG.md#060--2026-05-22) | ▀ glyph + per-row 256-color escapes; downscale.cyr + emit.cyr; `--verbose` activated | external `darshana 0.5.3` (first git dep) |
+| M6 — Terminal-size detect | [v0.7.0](../../CHANGELOG.md#070--2026-05-22) | `tty_winsize` auto-detect + `--width N` honored; aspect-preserving fit; multi-resolution bench; ADR 0001 + architecture/README backfill | — |
 
-### M1 — CLI arg parsing (v0.2.0) — ✅ shipped 2026-05-22
+**At v0.7.0**: 426 assertions all pass; four benches captured; CLI surface feature-complete for v1.0; production pipeline (structure → pixels → downscale → quantize → emit) is the path through all five v0.x cycles.
 
-CLI surface frozen at the syntactic level. The binary parses `--help` / `--version` / positional path / `--width N` / `--color N` and dispatches accordingly. Path + width + color are captured into module state for downstream milestones to consume.
+## In-flight + remaining milestones
 
-**Delivered**:
-- ✅ `kii --help` / `-h` prints usage to stderr (pipe-pure stdout); exits 0
-- ✅ `kii --version` / `-V` prints `kii X.Y.Z` + Hawaiian etymology to stdout; exits 0
-- ✅ `kii image.png` parses path; placeholder "decoder not yet implemented" emitted at M1, exit 1 (the placeholder is now superseded by the M4 success line on stdout, exit 0)
-- ✅ `kii --width N image.png` parses width override (default 0 = "match terminal" sentinel for M6)
-- ✅ `kii --color N image.png` parses color override; 8 or 16 valid; anything else rejects with `kii: --color must be 8 or 16` + exit 2
-- ✅ `kii --width abc image.png` rejects with `kii: bad integer value` + exit 2 (no crash)
-- ✅ Tests cover happy path + every `FLAG_ERR_*` variant + multi-positional capture
-- ✅ Fuzz harness wired (`tests/kii.fcyr`) — deterministic LCG, 10k iters of random argv against kii's flag set; never crashes
+### M7 — Security audit cycle (v0.8.0)
 
-**Deps added at M1**: stdlib `flags` (consumer: CLI parser).
+**Goal**: External-source-informed security audit of kii's threat surface. No new user-facing features; output is a comprehensive audit document + hardening commits + scaled fuzz coverage. This is the work the original "M7 = v1.0 freeze" lumped together with socialization — separated here because the security audit is its own dedicated cycle with **external web research for 0-days and CVEs against the substrate libraries kii draws on**.
 
-**Sub-bite cadence** (smallest-first): (a) `--help` + `--version` only → (b) positional path → (c) `--width` + `--color` → (d) fuzz harness.
+**Threat surfaces** (per [`../../SECURITY.md`](../../SECURITY.md)):
 
-### M2 — PNG structural decoder (v0.3.0) — ✅ shipped 2026-05-22
+1. **PNG decoder surface** — malformed / malicious PNG input. `src/png.cyr` parses untrusted bytes; integer overflows on dimension multiplication, IHDR / PLTE / IDAT ordering tricks, CRC bypass attempts, and chunk-truncation edge cases are all in scope.
+2. **DEFLATE / zlib surface** — decompression amplification ("zip bombs"). sankoch is the Cyrius-native DEFLATE impl, but the algorithm has the same attack surface as zlib regardless of language; bugs in the underlying spec mechanics transfer.
+3. **ANSI escape injection** — path argument + filename flow through `_eprint*` family to stderr; a maliciously-named file is the kii-controlled stdout/stderr injection vector. Terminal-emulator escape sequence parsing bugs are out of scope but worth surveying for context.
 
-PNG file parsed structurally — signature validated, IHDR decoded, all chunks walked through IEND, CRC32 validated on every chunk. No pixel decoding yet (M3 work); IDAT bytes are concatenated into a buffer but not inflated.
+**Acceptance criteria**:
 
-**Delivered**:
-- ✅ `kii image.png` prints structural summary (M2 shape: `bit_depth=N color_type=T`; superseded at M3+M4)
-- ✅ Malformed signature → `not a PNG` error; exits 1
-- ✅ Truncated IHDR → `malformed PNG header` error; exits 1
-- ✅ Missing IEND → `warning: incomplete PNG (no IEND chunk seen)` soft warning + still emits summary; exits 0 (M3+)
-- ✅ CRC32 validation on every chunk per spec § 5.3; CRC failure → `CRC check failed` + exit 1
-- ✅ Truncated mid-chunk → `malformed PNG (chunk truncated after IHDR)` + exit 1
-- ✅ All four pixel color types parse cleanly (greyscale / RGB / palette / RGBA + grey+alpha)
-- ✅ PNG-decoder fuzz harness wired (`tests/kii.fcyr` second surface) — 2k iters of random byte sequences, sometimes with valid sig+IHDR prefix; never crashes
+- [ ] **External CVE/0-day research compiled into `docs/audit/2026-MM-DD-audit.md`**:
+  - libpng CVEs from 2010+ — every advisory walked, kii-applicability assessed per class
+  - lodepng + stb_image bug histories — same treatment
+  - zlib CVEs (CVE-2018-25032 / CVE-2022-37434 / CVE-2023-45853 + any later) — kii uses sankoch (stdlib), but cross-impl bug-class transfer
+  - Terminal emulator escape sequence CVEs (CVE-2022-31202 / CVE-2003-0859 / etc.) — context only; out of kii's bug-fix scope
+  - W3C PNG test suite "broken" set — each broken-case PoC fed through `kii` to confirm clean rejection or document the gap
+- [ ] PNG fuzz harness scales from 2k → **10⁶ iterations clean** in `tests/kii.fcyr`
+- [ ] **New fuzz surfaces** added: random valid-PNG fixture → random downscale dims → emit_halfblock_row_buf; random target-geometry inputs into `_kii_compute_target_geometry` + `_kii_compute_fit_geometry`. Covers the M5+M6 modules previously fuzz-untested.
+- [ ] Integer-overflow review on every size-derivation multiplication (`width × height × bpp`, `dst_w × dst_src_rows × 3`, `idat_total_size`); add explicit caps where the kernel allows attacker-controlled inputs to overflow i64
+- [ ] **Decompression-amplification cap**: cap `idat_total_size` and the inflate output buffer to a configurable max (e.g. 256 MB) so a malformed IDAT claiming pathological dimensions can't OOM-DoS the host
+- [ ] ANSI escape injection review: enumerate every byte path from user input (path argument) to stderr; document constraints + add defenses (path-sanitization or refusal to emit non-printable bytes in `_eprint_path_msg`)
+- [ ] **Decode-latency matrix** at 256² / 1024² / 2048² source resolutions captured in `docs/benchmarks.md` — establishes the DoS-relevant worst-case timing envelope
+- [ ] `docs/adr/0002-security-model.md` (or similar) — captures kii's threat model + audit findings + accepted residual risks
+- [ ] CHANGELOG + VERSION → 0.8.0
 
-**Deps added at M2**: none new.
+**Sub-bite cadence**:
 
-**Sub-bite cadence**: (a) signature only → (b) IHDR parse → (c) CRC32 + chunk walker → (d) close-out (stdout/exit 0 + fuzz).
+- **(a)** External research compilation — WebSearch + WebFetch across the CVE databases (NVD / CVE.org / Mitre / GitHub Security Advisories), libpng release notes, zlib changelogs, and any AGNOS first-party security-review playbook. Audit doc shape: per-CVE row with date / severity / class / kii-applicable? / remediation. Ship the doc before any code lands so the rest of the cycle is informed by the research.
+- **(b)** Fuzz scaling (2k → 10⁶) + new fuzz surfaces (downscale + quant + emit + geometry). Iteration count change is small; the new surfaces are the real work.
+- **(c)** Hardening commits for any vulnerabilities found in (a) + integer-overflow / bounds review + decompression-amplification cap.
+- **(d)** Decode-latency bench matrix at three source resolutions + ADR 0002 + close-out (CHANGELOG, state.md, doc-health, version bump).
 
-### M3 — sankoch DEFLATE → raw pixels (v0.4.0) — ✅ shipped 2026-05-22
+**Deps gates**: none expected. May add stdlib `bounds` if not already in (for size-cap helpers); confirmed during sub-bite (a).
 
-IDAT bytes inflated via `sankoch`'s `zlib_decompress`; resulting row stream undone per PNG spec § 9 filter types 0–4; output is a contiguous pixel buffer.
+### M8 — v1.0 freeze cycle (v1.0.0)
 
-**Delivered**:
-- ✅ `kii image.png` prints `<path>: <W>x<H> decoded <N> pixels (<color_type_name>)` for valid PNGs (M3 shape; superseded at M4)
-- ✅ Greyscale + RGB + palette + grey+alpha + RGBA all decode correctly (all five PNG color types, including palette PNGs at the index-output level)
-- ✅ Interlaced (Adam7) PNGs → `interlaced PNGs (Adam7) not supported in v0.x` + exit 1
-- ✅ 1/2/4-bit-depth PNGs → `unsupported bit depth or color type` + exit 1
-- ✅ Filter types 0 (None) / 1 (Sub) / 2 (Up) / 3 (Average) / 4 (Paeth) all unfiltered correctly; unknown filter byte → `invalid PNG filter type` + exit 1
-- ✅ Memory: chunk walk streams through 4 KB scratch buffer; IDAT accumulation allocates exactly `idat_total_size` bytes (single bump-alloc) plus inflate output sized to `height × (1 + row_bytes)` + pixel buffer sized to `height × row_bytes`
-- ✅ Real-world: RAMGON.png (1152×925 RGBA) decodes to exactly 4,262,400 bytes
+**Goal**: socialize, harden the integration story, ship the marketplace listing. No new code paths; no security work (M7 owned that). The signaling milestone — "kii is done, you can build on it."
 
-**Deps added at M3**: stdlib `sankoch` (zlib_decompress) + stdlib `thread` (sankoch's mutex transitive). NB: sankoch was folded into Cyrius stdlib at v5.8.65; the roadmap originally anticipated it as an external git dep, but the fold-in changed it to a stdlib-list entry.
+**Acceptance criteria**:
 
-**Sub-bite cadence**: (a) sankoch round-trip + dep wiring → (b) IDAT buffer accumulation + interlace capture → (c) inflate + filter undo + Adam7/sub-byte rejection → (d) close-out (stdout/exit 0 + PNG fuzz surface in `kii.fcyr`).
-
-### M4 — 16-color ANSI palette + RGB→nearest quantization (v0.5.0) — ✅ shipped 2026-05-22
-
-Decoded pixels mapped to the Linux-console 16-color ANSI palette via Euclidean-RGB nearest-neighbor. Internal output: 1 byte per pixel (palette index 0–15). Still no ANSI emit (M5 gate); just the quantized buffer ready for half-block emission.
-
-**Delivered**:
-- ✅ `src/palette.cyr` defines the 16-color ANSI palette (Linux-console / CGA-derived RGB triples; matches xterm 0–15)
-- ✅ `src/quant.cyr` exposes `quantize_nearest_rgb(r, g, b) → idx` (scalar) and `quantize_nearest_image(pstruct)` (image-wide; per-color_type dispatch including PLTE lookup for color_type=3)
-- ✅ Pure-red pixel → palette index 1, pure-blue → 4, white → 15, black → 0 (all roadmap acceptance pixels)
-- ✅ Brightness gradient maps to monotonically-non-decreasing palette-luminance
-- ✅ PLTE chunk captured during phase-1 walker with spec § 11.2.3 validation (length ≤ 768, multiple of 3)
-- ✅ Bench: `quantize_nearest_rgb @ 1024×1024 = 274 ns/op`; captured in [`docs/benchmarks.md`](../benchmarks.md)
-- ✅ Output line: `<path>: <W>x<H> <N> pixels (<color_type_name>) → 16-color` to stdout, exit 0
-
-**Deps added at M4**: none new.
-
-**Sub-bite cadence**: (a) palette table + accessors → (b) scalar quantizer → (c) PLTE capture → (d) image-wide quantizer + close-out (bench + version bump).
-
-### M5 — Half-block glyph emit + per-row ANSI color (v0.6.0) — ✅ shipped 2026-05-22
-
-The working CLI. `kii image.png` reads a PNG, decodes it, downscales to 80×48 RGB triples (nearest-neighbor), quantizes to 16 colors, and emits half-block glyphs (`▀`) to stdout with per-character FG/BG ANSI color escapes. Each terminal character represents two source pixels stacked vertically (top half color = FG, bottom half = BG). Output is hardcoded 80×24 at v0.6.0 (terminal-size detection at M6).
-
-**Delivered**:
-- ✅ `kii image.png` produces visible ANSI art on stdout (~40 KB for RAMGON.png at 80×24, exit 0, pipe-pure)
-- ✅ Output is exactly 80 chars wide × 24 rows tall (each row = `▀` glyphs with paired FG/BG colors + `\x1b[0m\n` terminator)
-- ✅ Source PNG is downscaled (nearest-neighbor — picked for tier-1 floor; bilinear is post-v1) to 80×48 source pixels before quantization
-- ✅ ANSI escape format: `\x1b[38;5;<fg>m\x1b[48;5;<bg>m▀` per character via darshana's `tty_fg_256_buf` + kii-local `_emit_bg_256_buf` (background twin not yet in darshana); `\x1b[0m` reset at end of each row
-- ✅ Test: `emit_halfblock_row_buf` shape verified at single-char / 2-col checkerboard / 4-col solid (57 M5(c) assertions cover exact byte sequences + bounds rejection)
-- ✅ Test: `downscale_to_rgb` exercised at identity / upscale / shrink / 80×48 RAMGON / palette-PNG normalization (38 M5(b) assertions)
-- ✅ `--verbose` flag activated (was reserved in M1's flag indices) — moves the M4 summary line to stderr after the frame; pipe-pure by default
-- ✅ Bench: `end-to-end RAMGON.png → 80×24 frame = 747 ms/iter` (50 iters; ~98% in `png_decode_pixels`) — captured in [`docs/benchmarks.md`](../benchmarks.md)
-- ✅ CHANGELOG + VERSION → 0.6.0
-
-**Deferred** (per acceptance — captured as M6 carry-forward):
-- Visual review against `chafa --colors 16 --size 80x24 image.png` on 5-image curated set — needs `chafa` installed + a stable terminal-size story; deferred to alongside M6 since M6 lands the geometry that makes the comparison reproducible.
-- Render-a-real-checkerboard-PNG end-to-end (vs. the in-process `emit_halfblock_row_buf` shape tests) — adds a fixture PNG builder for PLTE-driven checkerboard; the existing M5(c) coverage already pins the emit shape and quant outputs.
-
-**Deps added at M5**: `darshana 0.5.3` — first external git dep (was only stdlib deps before). Pinned via `cyrius.cyml [deps.darshana].tag`.
-
-**Sub-bite cadence**: (a) darshana dep + `emit.cyr` scaffold → (b) `downscale.cyr` (nearest-neighbor + per-color_type RGB normalize + new struct slots) → (c) `quantize_rgb_buf` + `quantize_downscaled` + `emit_halfblock` + pipeline restructure + `--verbose` flag → (d) close-out (bench + state.md + CHANGELOG + version bump).
-
-### M6 — Terminal-size auto-detect + `--width` override (v0.7.0) — ✅ shipped 2026-05-22
-
-kii detects the terminal's actual size via darshana's `tty_winsize(1, …)` (which wraps `ioctl TIOCGWINSZ`) and emits an appropriately-sized aspect-preserving frame. `--width N` overrides; `--width 0` (default) means "match terminal". If detection fails (not a TTY, ioctl unavailable), fall back to 80×24.
-
-**Delivered**:
-- ✅ `kii image.png` in a 200×60 terminal produces ~200×40 output (RAMGON aspect row-binds at 200 cols)
-- ✅ `kii --width 60 image.png` produces exactly 60 ▀ glyphs per row (× 24 rows from aspect for RAMGON 1152×925)
-- ✅ `kii image.png > out.txt` (non-TTY) falls back to 80×24 with no error
-- ✅ `kii --width 200 image.png > big.ansi` captures a 200×80 aspect-true frame (no row cap when --width is explicit)
-- ✅ Bench: end-to-end latency captured at **80×24 / 120×40 / 200×60** for RAMGON.png (761 / 769 / 771 ms; cell-count 6.25× scaling produces ~1.3 % wall-clock delta — PNG decode is the bottleneck)
-- ✅ `docs/architecture/README.md` backfilled (module map + 6 numbered invariants; carried forward from M2)
-- ✅ `docs/adr/0001-png-decoder-in-repo.md` written (carried forward from M3)
-- ✅ CHANGELOG + VERSION → 0.7.0
-
-**Sub-bites**:
-- **(a)** `_kii_compute_target_geometry` — width-driven aspect math (no row cap); main.cyr extracts `--width` flag.
-- **(b)** `_kii_compute_fit_geometry` — aspect-preserving fit into a (max_cols × max_rows) envelope; `tty_winsize(1)`-driven detection wired in main.cyr with 80×24 fallback.
-- **(c)** Three-resolution bench (80×24, 120×40, 200×60) + smoke validation against non-TTY pipe / `--width N` cell counts.
-- **(d)** Close-out: VERSION bump, CHANGELOG, state.md, roadmap, doc-health, architecture README backfill, ADR 0001.
-
-**Deferred** (carried to M7 audit):
-- Visual review against `chafa --colors 16 --size 80x24 image.png` on curated 5-image set — needs `chafa` install and a fixtures dir; M7 audit work.
-
-**Deps added at M6**: none new — darshana 0.5.3 pinned at M5 already exposes `tty_winsize` (added in darshana v0.3.0).
-
-### M7 — v1.0 freeze cycle (v1.0.0)
-
-**Goal**: harden, audit, soak. No new features. Frozen CLI surface. Comprehensive test + benchmark coverage. Security audit pass.
-
-**Acceptance criteria** (all v1.0 criteria above plus):
-
-- [ ] Test suite: 100+ assertions
-- [ ] Benchmarks: latency captured at three resolutions (256² / 1024² / 2048²)
-- [ ] Security audit: PNG fuzz harness runs 10⁶ iterations clean; ANSI-escape-injection paths reviewed
-- [ ] At least one BBS or MUD downstream consumer integrated against kii and green
-- [ ] All ADRs written for design decisions made during M0-M6
-- [ ] Docs / guides / examples all current per `docs/doc-health.md`
+- [ ] First BBS / MUD downstream consumer integrated and green (likely `bannermanor`'s MOTD path — `kii motd.png | bnrmr` style pipeline)
+- [ ] Cross-terminal verification: Linux console (`TERM=linux`), xterm-256color, Alacritty, kitty, tmux. The 256-color escape codes are widely compatible, but `TERM=linux` may need a fallback path through named SGR 30–37 / 40–47 / 90–97 / 100–107.
+- [ ] Visual review against `chafa --colors 16 --size 80x24 image.png` on a curated 5-image fixtures dir (`tests/fixtures/`) — RAMGON.png migrates from the top level into the fixtures dir as part of this
+- [ ] `docs/guides/getting-started.md` backfilled — first runnable user-facing guide (overdue since M5)
+- [ ] `docs/examples/` populated — first image-in → terminal-ANSI-out transcript (overdue since M5)
+- [ ] All ADRs written for design decisions made during M0–M6 (0001 PNG-in-repo at M6, 0002 security-model at M7; M8 lands any others — color-tier discipline, nearest-neighbor downscale, half-block-as-floor are candidates if not already covered in CLAUDE.md + architecture/README)
 - [ ] Marketplace recipe in zugot
-- [ ] CHANGELOG complete; VERSION → 1.0.0; git tag
+- [ ] Doc-health ledger walks every Tier-1 row; all fresh
+- [ ] CHANGELOG complete from v0.1.0 onward
+- [ ] VERSION → 1.0.0; git tag
+
+**Sub-bite cadence**:
+
+- **(a)** First-consumer integration (bannermanor or chosen alternative) — kii substrate consumed at runtime; integration tests in the consumer's repo, not kii's.
+- **(b)** Cross-terminal verification + curated fixtures dir; visual review captured as screenshots or text comparisons in `docs/audit/` or `docs/examples/`.
+- **(c)** Docs backfill — getting-started, examples, remaining ADRs.
+- **(d)** Marketplace + VERSION 1.0.0 + git tag + final CHANGELOG pass.
+
+**Deps gates**: none expected.
 
 ## Out of scope (for v1.0)
 
@@ -179,7 +119,7 @@ The list keeps future contributors from adding to v1.0 by accident:
 
 - **Tier 2 — 256-color + truecolor** (v1.1.0) — `--color 256` and `--color tc` modes; ordered/Floyd-Steinberg dither.
 - **JPEG decoder** (v1.2.0) — JFIF subset via in-repo decoder OR via `tarang`-equivalent media-codec lib if it exists by then.
-- **PNG substrate extraction** — when a second consumer needs PNG decoding, extract `src/png.cyr` → Sanskrit-named substrate lib (`chitra` / `rupa` / TBD per the tools-stable naming convention).
+- **PNG substrate extraction** — when a second consumer needs PNG decoding, extract `src/png.cyr` → Sanskrit-named substrate lib (`chitra` / `rupa` / TBD per the tools-stable naming convention). See [ADR 0001](../adr/0001-png-decoder-in-repo.md).
 - **Tier 3 — Sixel / Kitty protocols** (v2.0.0) — direct-image-protocol output for terminals that support it; the ASCII-art fallback stays the default. Possibly a major-version cut depending on CLI surface impact.
 
-Captured deferrals will live as ADRs (e.g., `docs/adr/0001-no-tier-2-in-v1.md`) when the decision crystallizes.
+Captured deferrals will live as ADRs when the decision crystallizes.
