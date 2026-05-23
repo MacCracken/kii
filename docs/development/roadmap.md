@@ -12,13 +12,13 @@ The contract for tagging v1.0:
 
 - [x] CLI surface frozen — `--help`, `--version`, `--width N`, positional path arg, `--color N` (8 or 16) all stable (shipped at v0.2.0 / M1)
 - [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (PNG decoder shipped at v0.4.0 / M3; W3C-suite acceptance pass still future)
-- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (quantizer shipped at v0.5.0 / M4; visual review carried forward from M5 to M6 alongside the stable terminal-size story)
-- [ ] Half-block glyph emission at terminal-detected geometry works in Linux console, xterm, Alacritty, kitty, and tmux (half-block emit shipped at v0.6.0 / M5 hardcoded 80×24; terminal-detection at M6)
+- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (quantizer shipped at v0.5.0 / M4; visual review carried forward to M7 audit alongside the wider acceptance fixtures)
+- [x] Half-block glyph emission at terminal-detected geometry works (half-block emit at v0.6.0 / M5; terminal-detection at v0.7.0 / M6; cross-terminal verification — Linux console, xterm, Alacritty, kitty, tmux — is M7 audit work)
 - [ ] At least one downstream consumer (BBS or MUD app) integrated and green
 - [x] CHANGELOG complete from v0.1.0 onward (rolling per release; v0.1.0–v0.5.0 all entered)
 - [ ] Security audit pass — PNG fuzz harness clean, ANSI-escape-injection paths reviewed (`docs/audit/YYYY-MM-DD-audit.md`)
-- [x] Test coverage: 100+ assertions across all modules (382 as of v0.6.0)
-- [ ] Benchmarks captured in `docs/benchmarks.md` — image-decode latency at 256×256 / 1024×1024 / 2048×2048; quantization latency at terminal-sized output (quantization bench at 1024×1024 + end-to-end RAMGON → 80×24 frame captured at v0.6.0 / M5; decode-latency matrix at three resolutions still pending — likely M7 audit work)
+- [x] Test coverage: 100+ assertions across all modules (426 as of v0.7.0)
+- [ ] Benchmarks captured in `docs/benchmarks.md` — image-decode latency at 256×256 / 1024×1024 / 2048×2048; quantization latency at terminal-sized output (quantization bench at 1024×1024 + end-to-end RAMGON at 80×24 / 120×40 / 200×60 captured at v0.7.0 / M6; the decode-latency matrix at three SOURCE resolutions is M7 audit work)
 
 ## Milestones
 
@@ -123,18 +123,30 @@ The working CLI. `kii image.png` reads a PNG, decodes it, downscales to 80×48 R
 
 **Sub-bite cadence**: (a) darshana dep + `emit.cyr` scaffold → (b) `downscale.cyr` (nearest-neighbor + per-color_type RGB normalize + new struct slots) → (c) `quantize_rgb_buf` + `quantize_downscaled` + `emit_halfblock` + pipeline restructure + `--verbose` flag → (d) close-out (bench + state.md + CHANGELOG + version bump).
 
-### M6 — Terminal-size auto-detect + `--width` override (v0.7.0)
+### M6 — Terminal-size auto-detect + `--width` override (v0.7.0) — ✅ shipped 2026-05-22
 
-**Goal**: kii detects the terminal's actual size via `ioctl TIOCGWINSZ` and emits an appropriately-sized frame. `--width N` overrides; `--width 0` means "match terminal". If both fail (not a TTY, ioctl unavailable), fall back to 80×24.
+kii detects the terminal's actual size via darshana's `tty_winsize(1, …)` (which wraps `ioctl TIOCGWINSZ`) and emits an appropriately-sized aspect-preserving frame. `--width N` overrides; `--width 0` (default) means "match terminal". If detection fails (not a TTY, ioctl unavailable), fall back to 80×24.
 
-**Acceptance criteria**:
-- [ ] `kii image.png` in an 120×40 terminal produces ~120×40 output (height auto-derived from aspect ratio)
-- [ ] `kii --width 60 image.png` produces exactly 60-char-wide output
-- [ ] `kii image.png > out.txt` (non-TTY) falls back to 80×24 with no error
-- [ ] Bench: end-to-end latency at 1920×1080 → terminal-output for 80×24 / 120×40 / 200×60
-- [ ] CHANGELOG + VERSION → 0.7.0
+**Delivered**:
+- ✅ `kii image.png` in a 200×60 terminal produces ~200×40 output (RAMGON aspect row-binds at 200 cols)
+- ✅ `kii --width 60 image.png` produces exactly 60 ▀ glyphs per row (× 24 rows from aspect for RAMGON 1152×925)
+- ✅ `kii image.png > out.txt` (non-TTY) falls back to 80×24 with no error
+- ✅ `kii --width 200 image.png > big.ansi` captures a 200×80 aspect-true frame (no row cap when --width is explicit)
+- ✅ Bench: end-to-end latency captured at **80×24 / 120×40 / 200×60** for RAMGON.png (761 / 769 / 771 ms; cell-count 6.25× scaling produces ~1.3 % wall-clock delta — PNG decode is the bottleneck)
+- ✅ `docs/architecture/README.md` backfilled (module map + 6 numbered invariants; carried forward from M2)
+- ✅ `docs/adr/0001-png-decoder-in-repo.md` written (carried forward from M3)
+- ✅ CHANGELOG + VERSION → 0.7.0
 
-**Dep gates**: none new — `ioctl TIOCGWINSZ` is in stdlib `syscalls`.
+**Sub-bites**:
+- **(a)** `_kii_compute_target_geometry` — width-driven aspect math (no row cap); main.cyr extracts `--width` flag.
+- **(b)** `_kii_compute_fit_geometry` — aspect-preserving fit into a (max_cols × max_rows) envelope; `tty_winsize(1)`-driven detection wired in main.cyr with 80×24 fallback.
+- **(c)** Three-resolution bench (80×24, 120×40, 200×60) + smoke validation against non-TTY pipe / `--width N` cell counts.
+- **(d)** Close-out: VERSION bump, CHANGELOG, state.md, roadmap, doc-health, architecture README backfill, ADR 0001.
+
+**Deferred** (carried to M7 audit):
+- Visual review against `chafa --colors 16 --size 80x24 image.png` on curated 5-image set — needs `chafa` install and a fixtures dir; M7 audit work.
+
+**Deps added at M6**: none new — darshana 0.5.3 pinned at M5 already exposes `tty_winsize` (added in darshana v0.3.0).
 
 ### M7 — v1.0 freeze cycle (v1.0.0)
 

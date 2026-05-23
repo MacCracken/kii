@@ -44,36 +44,82 @@ fn main(): i64 {
     bench_batch_stop(bh1, n1);
     bench_report(bh1);
 
-    # ---- M5 bench: end-to-end RAMGON → 80×24 ANSI -------------------
-    # Drive the full pipeline 50 iterations:
-    #   png_decode_structure + png_decode_pixels + downscale_to_rgb
-    #   + quantize_downscaled + emit_halfblock_row_buf (per row).
+    # ---- M5/M6 bench: end-to-end RAMGON → terminal-sized ANSI -------
+    # Drive the full pipeline at three target sizes:
+    #   80×24  — the original BBS / VT100 floor (M5 baseline)
+    #   120×40 — common-modern-laptop terminal (chafa's default test)
+    #   200×60 — wide developer terminal (Alacritty / tmux on 4K)
     # We exercise emit_halfblock_row_buf in-process (writing into a
     # module-scope scratch buf) rather than emit_halfblock so the
     # syscall(write, fd 1) cost doesn't dominate the measurement —
-    # this is the closest fair comparison of decode + render CPU
-    # cost. Real-world `kii img.png` adds 24 × write(2) ≈ tens of µs.
-    var bh2 = bench_new("end-to-end RAMGON.png → 80×24 frame");
-    var n2 = 50;
-    bench_batch_start(bh2);
-    var j = 0;
-    while (j < n2) {
-        var pstr_b[160];
-        png_decode_structure("RAMGON.png", &pstr_b);
-        png_decode_pixels(&pstr_b);
-        downscale_to_rgb(&pstr_b, 80, 48);
-        quantize_downscaled(&pstr_b);
-        # Walk all 24 terminal rows, writing each into the scratch buf.
-        var qb = load64(&pstr_b + STRUCT_QUANTIZED_BUF_OFFSET);
-        var row = 0;
-        while (row < 24) {
-            emit_halfblock_row_buf(qb, 80, row, &_bench_emit_scratch, 0);
-            row = row + 1;
+    # this is the closest fair comparison of decode + render CPU cost.
+    # Real-world `kii img.png` adds (rows × write(2)) ≈ tens of µs.
+    #
+    # Per-resolution `n` decreases with rendered cell count to keep
+    # wall-clock per bench roughly bounded; the per-op time is what we
+    # care about, not the iteration count.
+    var bh_80  = bench_new("end-to-end RAMGON.png → 80×24 frame");
+    var n_80 = 50;
+    bench_batch_start(bh_80);
+    var j80 = 0;
+    while (j80 < n_80) {
+        var pstr_80[160];
+        png_decode_structure("RAMGON.png", &pstr_80);
+        png_decode_pixels(&pstr_80);
+        downscale_to_rgb(&pstr_80, 80, 48);
+        quantize_downscaled(&pstr_80);
+        var qb_80 = load64(&pstr_80 + STRUCT_QUANTIZED_BUF_OFFSET);
+        var row_80 = 0;
+        while (row_80 < 24) {
+            emit_halfblock_row_buf(qb_80, 80, row_80, &_bench_emit_scratch, 0);
+            row_80 = row_80 + 1;
         }
-        j = j + 1;
+        j80 = j80 + 1;
     }
-    bench_batch_stop(bh2, n2);
-    bench_report(bh2);
+    bench_batch_stop(bh_80, n_80);
+    bench_report(bh_80);
+
+    var bh_120 = bench_new("end-to-end RAMGON.png → 120×40 frame");
+    var n_120 = 30;
+    bench_batch_start(bh_120);
+    var j120 = 0;
+    while (j120 < n_120) {
+        var pstr_120[160];
+        png_decode_structure("RAMGON.png", &pstr_120);
+        png_decode_pixels(&pstr_120);
+        downscale_to_rgb(&pstr_120, 120, 80);
+        quantize_downscaled(&pstr_120);
+        var qb_120 = load64(&pstr_120 + STRUCT_QUANTIZED_BUF_OFFSET);
+        var row_120 = 0;
+        while (row_120 < 40) {
+            emit_halfblock_row_buf(qb_120, 120, row_120, &_bench_emit_scratch, 0);
+            row_120 = row_120 + 1;
+        }
+        j120 = j120 + 1;
+    }
+    bench_batch_stop(bh_120, n_120);
+    bench_report(bh_120);
+
+    var bh_200 = bench_new("end-to-end RAMGON.png → 200×60 frame");
+    var n_200 = 20;
+    bench_batch_start(bh_200);
+    var j200 = 0;
+    while (j200 < n_200) {
+        var pstr_200[160];
+        png_decode_structure("RAMGON.png", &pstr_200);
+        png_decode_pixels(&pstr_200);
+        downscale_to_rgb(&pstr_200, 200, 120);
+        quantize_downscaled(&pstr_200);
+        var qb_200 = load64(&pstr_200 + STRUCT_QUANTIZED_BUF_OFFSET);
+        var row_200 = 0;
+        while (row_200 < 60) {
+            emit_halfblock_row_buf(qb_200, 200, row_200, &_bench_emit_scratch, 0);
+            row_200 = row_200 + 1;
+        }
+        j200 = j200 + 1;
+    }
+    bench_batch_stop(bh_200, n_200);
+    bench_report(bh_200);
 
     return 0;
 }

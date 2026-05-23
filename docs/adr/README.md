@@ -19,4 +19,6 @@ Decisions about kii — what we chose, the context, and the consequences we acce
 
 ## Index
 
-_No ADRs yet. Add the first as `0001-kebab-case-title.md`._
+| ADR | Status | Subject |
+|---|---|---|
+| [0001](0001-png-decoder-in-repo.md) | Accepted | PNG decoder lives in-repo (not as a substrate library) until a second consumer surfaces |

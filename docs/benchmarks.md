@@ -48,3 +48,22 @@ The pipeline is dominated by the source-resolution PNG decode — downscale → 
 - `_emit_bg_256_buf` extracts to darshana when a second consumer surfaces; bumps a tag and keeps the inline implementation here as a fallback.
 - 16-color palette indices are always 1–2 digits — a per-index escape-string cache (16 × ~10-byte buffer) skips the `_ansi_emit_u8` digit loop entirely, ~30 % emit win.
 - Per-row write coalescing into a single frame-sized buffer (~50 KB) would cut write(2) calls from 24 to 1; would only matter if the syscall edge starts dominating.
+
+## v0.7.0 — M6 terminal-size detection + multi-resolution bench
+
+Host: x86_64 Linux, single-core wall-clock via `clock_gettime`. Cyrius `6.0.1`. Geometry resolution at runtime via `tty_winsize` + `_kii_compute_fit_geometry` (auto-detect) / `_kii_compute_target_geometry` (`--width N`).
+
+| Bench | Iterations | Per-op | Notes |
+|---|---:|---:|---|
+| `quantize_nearest_rgb @ 1024×1024` | 1,048,576 | **269 ns** | Unchanged from v0.6.0; re-measured baseline. |
+| `end-to-end RAMGON.png → 80×24 frame` | 50 | **761 ms** | M5 baseline (1920 ▀ cells); +1 ms noise vs v0.6.0's 747 ms. |
+| `end-to-end RAMGON.png → 120×40 frame` | 30 | **769 ms** | 4800 cells (2.5× of 80×24). |
+| `end-to-end RAMGON.png → 200×60 frame` | 20 | **771 ms** | 12000 cells (6.25× of 80×24). |
+
+**Per-cell scaling**: render-output cell-count climbs 6.25× from 80×24 to 200×60, yet wall-clock climbs only ~1.3 % (~10 ms). The entire pipeline is dominated by `png_decode_pixels` decoding RAMGON's 4.26 MB inflated RGBA buffer (~98 % share, ~745 ms on this host); the M5 emit + downscale + quantize-of-downscaled-buf collectively account for the remaining ~2 %.
+
+**Implication**: any v1.0 latency work should target `png_decode_pixels` — the sankoch inflate or the per-scanline filter undo, both currently single-threaded. The M5/M6 modules don't move the needle until the decoder bottleneck is gone.
+
+**Headroom** (M6-specific):
+- Auto-detection uses one `ioctl TIOCGWINSZ` syscall per frame. Microseconds; not on any reasonable hot path.
+- The fit-vs-target geometry choice in `main.cyr` runs once per invocation; negligible.

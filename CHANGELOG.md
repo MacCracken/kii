@@ -4,6 +4,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-22
+
+### Added
+
+- **M6 — terminal-size auto-detect + `--width N` override**. `kii image.png` now fills the current terminal aspect-preservingly: stdout-TTY → `tty_winsize(1)`-detected `cols × (rows - 1)`; non-TTY → 80×24 BBS-default fallback. `--width N` (M1-frozen flag, finally consumed) honors the exact width without any row cap — useful for `kii --width 200 img.png > big.ansi` captures.
+- **`src/emit.cyr` extensions**:
+  - `_kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src_rows)` — width-driven aspect-preserving height (used when `--width` is explicit). Formula: `dst_src_h = (src_h × dst_cols) / src_w`, clamped to ≥ 2 (1 terminal row min).
+  - `_kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_dst_src_rows)` — aspect-preserving FIT into a (cols × rows) envelope. Picks width-binding when the aspect-true height fits inside `max_rows`; otherwise switches to row-binding and shrinks the width accordingly. `max_cols ≤ 0` / `max_rows ≤ 0` substitute `EMIT_DEFAULT_COLS` (80) / `EMIT_DEFAULT_ROWS` (24).
+- **`src/main.cyr`**: terminal-size detection via darshana's `tty_winsize(1, &rows, &cols)`. Two-path resolver:
+  - `--width N > 0` → M6(a) `_kii_compute_target_geometry` (no row cap; user knows what they're doing).
+  - `--width 0` (default) → `tty_winsize` succeeds → fit-within `cols × (rows - 1)`; failure → fit-within 80×24.
+
+### Changed
+
+- `src/emit.cyr`: `EMIT_COLS` / `EMIT_ROWS` / `EMIT_SRC_ROWS` (module-scope mutable) → `EMIT_DEFAULT_COLS` / `EMIT_DEFAULT_ROWS` (immutable fallbacks). `EMIT_SRC_ROWS` removed (callers compute `2 × rows` where needed).
+- `src/main.cyr`: pipeline replaces the hardcoded `downscale_to_rgb(&pstruct, 80, 48)` with `downscale_to_rgb(&pstruct, target_w, target_src_rows)` where `target_*` come from the M6 resolver above. The downstream `quantize_downscaled` + `emit_halfblock` already read `STRUCT_DOWNSCALED_W/_H` from pstruct, so they pick up the new dimensions without code changes.
+- `print_version` literal bumped to `kii 0.7.0`.
+- `cyrius.cyml [deps.darshana] tag = "0.5.3"` unchanged — M6 uses the already-pinned `tty_winsize` (darshana v0.3.0).
+
+### Tests
+
+- `tests/kii.tcyr` — **426 assertions** (was 382 at v0.6.0).
+  - **M6(a) target-geometry** (24): RAMGON 1152×925 at widths 40 / 80 / 120 produce the expected aspect-true heights; `width=0` falls back to 80-col default; square / wide-landscape / tall-portrait synthetic shapes pin the formula; 800×1 degenerate clamps to ≥ 1 terminal row; invalid source dims return -1.
+  - **M6(b) fit-geometry** (17): width-binding case (1000×100 in 120×40 → 120×6 term, dst_src_rows=12); row-binding case (RAMGON in 120×40 → 99×40 term); square 100×100 in 80×24 → 48×24 row-binds; zero-envelope falls back to (80, 24); single-pixel src clamps; invalid src dims return -1.
+
+### Bench
+
+- `quantize_nearest_rgb @ 1024×1024`: **269 ns/op** (unchanged from v0.6.0).
+- **`end-to-end RAMGON.png → 80×24 frame`: 761 ms/iter** (50 iters; ~1 ms slower than v0.6.0's 747 ms — measurement noise, well under the resolution we have to begin with).
+- **`end-to-end RAMGON.png → 120×40 frame`: 769 ms/iter** (30 iters).
+- **`end-to-end RAMGON.png → 200×60 frame`: 771 ms/iter** (20 iters).
+
+Render cell-count (1920 / 4800 / 12000) climbs 6.25× from 80×24 to 200×60, but the M5 emit + downscale + quantize-of-downscaled-buf are sub-millisecond — the entire bench is dominated by `png_decode_pixels` on RAMGON's 4.26 MB inflated buffer (~98 % share).
+
+### Docs
+
+- `docs/adr/0001-png-decoder-in-repo.md` — first ADR, captures the M3-era decision to keep the PNG decoder in-repo until a 2nd consumer surfaces. Carried forward from M3 → M4 → M5 → M6; finally lands.
+- `docs/architecture/README.md` — backfilled. Module map + six numbered items: (1) pstruct byte-offset layout invariants, (2) half-block aspect math gotcha (src-rows vs term-rows), (3) pipe-purity and stdout discipline, (4) darshana dep + BG-256 inline copy rationale, (5) why `quantize_nearest_image` stays after M5 superseded it, (6) the 80×24 BBS-default non-TTY fallback. Carried M2 → M5; finally lands.
+- `docs/benchmarks.md` — `## v0.7.0` section added.
+- `docs/development/{state.md, roadmap.md}` + `docs/doc-health.md` — refreshed per release.
+
+### Real-world smoke
+
+- `kii RAMGON.png` in a 200×60 terminal renders ~200×40 (row-binding from RAMGON's aspect).
+- `kii RAMGON.png > out.ansi` → exactly 80 cells wide × 24 rows tall (non-TTY 80×24 fallback).
+- `kii --width 60 RAMGON.png` → 60 ▀ glyphs per row × 24 rows.
+- `kii --width 200 RAMGON.png` → 200 ▀ glyphs per row × 80 rows (aspect-true, no row cap on explicit --width).
+
+### Out of scope (deferred per M6 acceptance)
+
+- **Visual review against `chafa --colors 16 --size 80x24`** on a curated 5-image set — carried from M5 again; the geometry is stable now, but a `chafa` install + curated fixtures is M7-audit work.
+- **SIGWINCH-driven live re-render** — kii is one-frame-in-one-frame-out per `CLAUDE.md` § domain rules; interactive resize would be a v2 scope expansion. Captured here so the next contributor doesn't try to add it.
+- **`tty_winsize` on stderr / explicit fd choice** — kii detects on fd 1 (stdout). A future `--detect-tty stderr` would be useful for `kii img.png | tee out.ansi` (where stdout is the pipe but stderr is the terminal) but no consumer has asked yet.
+
 ## [0.6.0] — 2026-05-22
 
 ### Added

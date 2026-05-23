@@ -5,7 +5,7 @@
 
 ## Version
 
-**0.6.0** — M5 (half-block ANSI emit + per-row 256-color escapes) closeout — 2026-05-22.
+**0.7.0** — M6 (terminal-size auto-detect + `--width N` override) closeout — 2026-05-22.
 
 ## Toolchain
 
@@ -13,52 +13,55 @@
 
 ## Surface
 
-Full PNG → 80×24 ANSI half-block frame pipeline:
+Full PNG → terminal-fit ANSI half-block frame pipeline:
 
-- `kii image.png` → 24 rows of `▀` (U+2580) glyphs with paired CSI 38;5;N + CSI 48;5;N escapes per character on **stdout** (~40 KB at 80×24); exit 0. Pipe-pure — `kii image.png > frame.ansi` captures just the frame.
+- `kii image.png` in a TTY → detects terminal cols × rows via `tty_winsize(1)`, fits the image into `cols × (rows - 1)` aspect-preservingly, emits a frame sized to that envelope on stdout. Exit 0.
+- `kii image.png > out.ansi` (non-TTY) → falls back to 80×24 BBS-default; identical frame shape regardless of where stdout lands.
+- `kii --width N image.png` → exactly N cells wide; height aspect-derived without a row cap (so `kii --width 200 img.png > big.ansi` captures a 200×80 frame for RAMGON).
 - `kii --verbose image.png` adds the M4-shape summary line (`<path>: <W>x<H> <N> pixels (<color_type_name>) → 16-color`) to **stderr** after the frame.
 - Missing IEND → frame + stderr warning + exit 0 (per spec § 5.3 tolerance).
-- M3 / M4 error paths unchanged: Adam7 / sub-byte depth / no-IDAT / DEFLATE-failure / invalid-filter all rejected on stderr + exit 1.
-- New M5 error paths: `downscale failed (palette PNG missing PLTE, or OOM)` + `quantization failed (OOM)` + `ANSI emit failed (downscale or quantize not run)` — defensive; should never fire for spec-clean PNGs.
-- CLI surface: M1 set + new `-v` / `--verbose` (was reserved in M1's flag indices; activated at M5 alongside the stderr summary). Frozen surface from here through v1.0.
+- M3–M5 error paths unchanged. CLI surface is now feature-complete for v1.0 (all M1 flags consumed; `--verbose` activated at M5).
 
 Module map:
 
-- `src/main.cyr` — I/O glue + dispatch (structure → pixels → downscale → quantize → emit). `_print` / `_eprint` / `_eprint_quant_summary` helpers.
-- `src/cli.cyr` — CLI parse helpers + `KII_F_VERBOSE`.
-- `src/png.cyr` — PNG decoder: signature, IHDR, CRC32, chunk walker, PLTE capture, filter undo, sankoch zlib_decompress. Struct grew from 15 to 18 slots (160 bytes).
+- `src/main.cyr` — I/O glue + dispatch. Two-path geometry resolver (`--width N` → M6(a); else `tty_winsize`-detect → M6(b) fit).
+- `src/cli.cyr` — CLI parse helpers + `KII_F_*` indices.
+- `src/png.cyr` — PNG decoder: signature, IHDR, CRC32, chunk walker, PLTE, sankoch zlib_decompress, filter undo. 18-slot pstruct layout (160 bytes).
 - `src/palette.cyr` — Linux-console 16-color RGB palette + accessors.
-- `src/quant.cyr` — RGB → 16-color quantization. Added `quantize_rgb_buf` (PNG-agnostic) + `quantize_downscaled` (pstruct-aware wrapper) at M5.
-- `src/downscale.cyr` — nearest-neighbor RGB resampler with per-color_type extraction. New module at M5(b).
-- `src/emit.cyr` — half-block ANSI emit (`emit_halfblock` to fd 1 + `emit_halfblock_row_buf` for testable buffer composition). New module at M5(c). Local `_emit_bg_256_buf` while darshana's BG twin isn't yet shipped.
-- `tests/kii.tcyr` — 382 assertions.
-- `tests/kii.fcyr` — two fuzz surfaces (10k arg + 2k PNG). Downscale/emit fuzz surface deferred to M7.
-- `tests/kii.bcyr` — two benches: `quantize_nearest_rgb @ 1024×1024` (269 ns/op) + `end-to-end RAMGON.png → 80×24 frame` (747 ms/iter).
-- `docs/benchmarks.md` — captured per release that lands perf-critical paths.
+- `src/quant.cyr` — Two surfaces: M4 image-wide `quantize_nearest_image` (kept for test coverage of per-color_type extraction) + M5+ `quantize_rgb_buf` / `quantize_downscaled` (production pipeline).
+- `src/downscale.cyr` — Nearest-neighbor RGB resampler with per-color_type extraction. Variable target size (called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`).
+- `src/emit.cyr` — Half-block ANSI emit + geometry primitives (`_kii_compute_target_geometry` for explicit-width, `_kii_compute_fit_geometry` for terminal-fit). Default constants `EMIT_DEFAULT_COLS = 80` / `EMIT_DEFAULT_ROWS = 24`. Local `_emit_bg_256_buf` while darshana's BG-256 twin isn't shipped.
+- `tests/kii.tcyr` — 426 assertions.
+- `tests/kii.fcyr` — two fuzz surfaces (10k arg + 2k PNG); downscale/emit/geometry fuzz deferred to M7.
+- `tests/kii.bcyr` — four benches: `quantize_nearest_rgb @ 1024×1024` (269 ns) + end-to-end RAMGON at 80×24 / 120×40 / 200×60.
 - `RAMGON.png` — top-level fixture (1152×925 RGBA, ~2 MB).
 
 ## Binary size
 
-Build: ~145 KB at v0.6.0 (compiler reports 431 unreachable fns / ~121 KB DCE-eliminable; dominated by sankoch's encoder + darshana's termios/cursor modules + transitive thread machinery). Set `CYRIUS_DCE=1` to trim.
+Build: ~145 KB at v0.7.0 (compiler reports ~430 unreachable fns / ~120 KB DCE-eliminable, dominated by sankoch's encoder + darshana's termios/cursor modules + transitive thread machinery). Set `CYRIUS_DCE=1` to trim.
 
 ## Tests + bench
 
-- `cyrius test` → **382 assertions, all pass** (was 287 at v0.5.0; +38 M5(b) downscale + +57 M5(c) quantize/emit).
-- Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → 10k arg-parser iters + 2k PNG-decoder iters in ~0.07 s. Exit 0.
-- Bench: `cyrius build tests/kii.bcyr build/kii-bench && ./build/kii-bench`:
+- `cyrius test` → **426 assertions, all pass** (was 382 at v0.6.0; +24 M6(a) target-geometry + +17 M6(b) fit-geometry + +3 extra rejection coverage).
+- Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → 10k arg-parser + 2k PNG-decoder iters in ~0.07 s. Exit 0.
+- Bench (see [`docs/benchmarks.md`](../benchmarks.md)):
   - `quantize_nearest_rgb @ 1024×1024`: **269 ns/op**
-  - `end-to-end RAMGON.png → 80×24 frame`: **747 ms/iter** (50 iters; dominated by `png_decode_pixels` on the 4.26 MB inflated buffer).
-- Real-world smoke (manual): RAMGON.png → 40,770 bytes of ANSI on stdout, exit 0. archlinux-logo.png and kitty.png both render cleanly.
+  - `end-to-end RAMGON.png → 80×24 frame`: **761 ms/iter**
+  - `end-to-end RAMGON.png → 120×40 frame`: **769 ms/iter**
+  - `end-to-end RAMGON.png → 200×60 frame`: **771 ms/iter**
+  - Cell-count climbs 6.25× across the three end-to-end variants; wall-clock climbs ~1.3 % (PNG decode dominates).
 
 ## Dependencies
 
-- **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (no stdlib deltas vs v0.5.0).
-- **External**: **`darshana` 0.5.3** — first external git dep, landed at v0.6.0 / M5. Provides `tty_fg_256_buf` + `tty_sgr_reset_buf` for the half-block emit; the BG-256 twin lives in `src/emit.cyr` locally (extract to darshana on 2nd consumer).
+- **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (no deltas vs v0.6.0).
+- **External**: `darshana 0.5.3` (pinned). M6 uses `tty_winsize` (darshana v0.3.0+) in addition to the M5 ANSI primitives.
 
 ## Cycle context
 
-v0.6.0 close lands during agnos kernel cycle **1.32.x networking-arc**. BBS/MUD apps that will consume kii are out-of-cycle parallel deliverables for that cycle.
+v0.7.0 close lands during agnos kernel cycle **1.32.x networking-arc**. BBS/MUD apps that will consume kii are out-of-cycle parallel deliverables for that cycle.
 
 ## Next
 
-M6 — terminal-size auto-detect via `ioctl TIOCGWINSZ` + `--width N` override (v0.7.0). Replaces the hardcoded 80×24 in `src/emit.cyr` with a runtime-detected geometry from `darshana`'s `tty_winsize`; fallback chain is `--width N` > detected > 80×24. Doc-debt carry-forward (`docs/architecture/README.md`, `docs/adr/0001-png-decoder-in-repo.md`, `docs/examples/`) targeted for M6 close.
+M7 — v1.0 freeze cycle (v1.0.0). No new features. Harden: fuzz harness scales to 10⁶ iterations (downscale/quant/emit fuzz surfaces added against valid-PNG fixtures), end-to-end decode-latency captured at 256² / 1024² / 2048² to complete the bench matrix, security audit pass on ANSI-escape-injection vectors, at least one BBS or MUD downstream consumer integrated and green, doc-health ledger walks Tier-1 rows for currency, CHANGELOG complete from v0.1.0 onward, `VERSION` → 1.0.0 + git tag.
+
+**Carry-forward debt cleared at M6**: `docs/architecture/README.md` backfilled (was overdue M2 → M6); `docs/adr/0001-png-decoder-in-repo.md` written (was overdue M3 → M6).

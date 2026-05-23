@@ -36,12 +36,15 @@
 include "src/palette.cyr"
 include "src/png.cyr"
 
-# Half-block output geometry. Hardcoded for M5; M6 swaps to detected
-# size via tty_winsize. EMIT_SRC_ROWS = EMIT_ROWS × 2 because every
-# terminal row eats two source pixel rows.
-var EMIT_COLS     = 80;
-var EMIT_ROWS     = 24;
-var EMIT_SRC_ROWS = 48;
+# Half-block output geometry defaults. These are the floor used when
+# both `--width` and tty detection fall through — chosen to match the
+# original BBS / VT100 80×24 frame so non-TTY output stays useful
+# without user intervention. M6 introduces tty_winsize-driven runtime
+# geometry; the actual emit dimensions live in pstruct's
+# STRUCT_DOWNSCALED_W/_H slots, computed by
+# `_kii_compute_target_geometry` below.
+var EMIT_DEFAULT_COLS = 80;
+var EMIT_DEFAULT_ROWS = 24;
 
 # UTF-8 byte sequence for U+2580 UPPER HALF BLOCK (▀). Hot path —
 # emitted once per character (up to 80 × 24 = 1920 times per frame),
@@ -80,6 +83,101 @@ fn _emit_bg_256_buf(buf, pos, n) {
         } }
     store8(buf + pos, 109); pos = pos + 1;        # 'm'
     return pos;
+}
+
+# Compute target output dimensions from source W/H + an optional
+# --width flag. Writes the dst column count + dst source-row count
+# (= dst terminal-row count × 2) into the caller-provided i64 slots.
+# Returns 0 on success, -1 on invalid source dimensions.
+#
+# **Aspect math** (half-block-aware):
+# - A terminal "row" carries TWO source pixels stacked vertically
+#   (top half = FG, bottom half = BG of one ▀ glyph).
+# - A terminal "col" carries ONE source pixel horizontally.
+# - For a square source pixel, the terminal "cell" is therefore
+#   effectively 1:2 (cols:rows-of-source-pixels). So preserving the
+#   image's aspect ratio means:
+#     dst_src_h / dst_cols = src_h / src_w
+#     dst_src_h            = (src_h × dst_cols) / src_w
+#     dst_rows             = dst_src_h / 2
+#                          = (src_h × dst_cols) / (src_w × 2)
+#
+# **Width selection** (M6(a) — first cut):
+# - `width_flag > 0` → that exact value (user override).
+# - Otherwise → `EMIT_DEFAULT_COLS` (80). M6(b) replaces the fallback
+#   with `tty_winsize`-driven detection on fd 1.
+#
+# **Minimum**: a 1-pixel source still produces a 1-row output, not 0.
+# Useful for pathological tiny inputs (avoids zero-height frames the
+# emit layer would reject as a bounds error).
+fn _kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src_rows) {
+    if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
+
+    var dst_cols = EMIT_DEFAULT_COLS;
+    if (width_flag > 0) { dst_cols = width_flag; }
+
+    # Aspect-derived terminal rows. Integer division truncates toward
+    # zero — clamp to ≥ 1 so single-row outputs are still well-formed.
+    var dst_rows = (src_h * dst_cols) / (src_w * 2);
+    if (dst_rows < 1) { dst_rows = 1; }
+
+    store64(out_dst_w,        dst_cols);
+    store64(out_dst_src_rows, dst_rows * 2);
+    return 0;
+}
+
+# Aspect-preserving FIT into a `max_cols × max_rows` envelope.
+# Returns the largest dst (cols, src_rows) that:
+#   (1) preserves the source aspect ratio (in source-pixel space)
+#   (2) fits within max_cols columns AND max_rows terminal rows
+# Either constraint can bind:
+#   - Width-binding (image is "wider than the cell aspect of the
+#     envelope"): dst_cols = max_cols; height derives from aspect.
+#   - Row-binding (image is "taller than the cell aspect"): dst_term
+#     rows = max_rows; width derives from aspect, will be < max_cols.
+#
+# Why this differs from `_kii_compute_target_geometry`:
+# That M6(a) primitive does pure width-driven aspect derivation — used
+# when the user explicitly says `--width N` and we honor it regardless
+# of how tall the result becomes (useful for `kii img.png > big.ansi`
+# captures). This fit primitive is the auto-detected path where we
+# don't want to overflow the user's terminal in either direction.
+#
+# Defaults: a `max_cols <= 0` arg is treated as EMIT_DEFAULT_COLS;
+# `max_rows <= 0` as EMIT_DEFAULT_ROWS. So passing both as 0 gives the
+# classic 80×24 envelope — the non-TTY fallback main.cyr uses.
+fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_dst_src_rows) {
+    if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
+
+    var cols = max_cols;
+    var rows = max_rows;
+    if (cols <= 0) { cols = EMIT_DEFAULT_COLS; }
+    if (rows <= 0) { rows = EMIT_DEFAULT_ROWS; }
+
+    # Width-binding candidate: use full `cols`, derive aspect-true
+    # terminal rows. dst_rows_at_cols = (src_h × cols) / (src_w × 2).
+    var dst_rows_at_cols = (src_h * cols) / (src_w * 2);
+
+    var dst_w_final  = 0;
+    var dst_sr_final = 0;
+    if (dst_rows_at_cols <= rows) {
+        # Width binds; height fits inside `rows`. Honor it.
+        dst_w_final = cols;
+        if (dst_rows_at_cols < 1) { dst_rows_at_cols = 1; }
+        dst_sr_final = dst_rows_at_cols * 2;
+    } else {
+        # Row binds; derive aspect-true cols from `rows` and shrink.
+        # dst_src_rows = rows × 2; dst_cols = (dst_src_rows × src_w) / src_h.
+        var dst_src_rows_at_rows = rows * 2;
+        var dst_cols_at_rows = (dst_src_rows_at_rows * src_w) / src_h;
+        if (dst_cols_at_rows < 1) { dst_cols_at_rows = 1; }
+        dst_w_final  = dst_cols_at_rows;
+        dst_sr_final = dst_src_rows_at_rows;
+    }
+
+    store64(out_dst_w,        dst_w_final);
+    store64(out_dst_src_rows, dst_sr_final);
+    return 0;
 }
 
 # emit_halfblock_row_buf — render ONE terminal row of half-block
