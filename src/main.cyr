@@ -10,16 +10,16 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: M3 SHIPPED at v0.4.0 — full PNG pixel decode (signature
-# + IHDR + CRC32 + chunk walker + sankoch zlib_decompress + filter
-# undo for spec § 9 filter types 0–4). Valid PNGs print
-# `<path>: <W>x<H> decoded <N> pixels (<color_type_name>)` to
-# STDOUT + exit 0; missing IEND still emits a stderr warning but
-# the pixel summary on stdout stays the success signal. Adam7
-# interlace + sub-byte bit-depths (1/2/4) explicitly rejected per
-# the v1.0 tier-1 scope — defer-don't-half-implement. M4 lands
-# 16-color ANSI palette + RGB→nearest quantization (replaces the
-# raw pixel summary with palette-index output).
+# Status: M4 SHIPPED at v0.5.0 — full PNG → 16-color ANSI palette
+# quantization. Pipeline: signature + IHDR + CRC32 + chunk walker
+# (incl. PLTE) → sankoch zlib_decompress → filter undo (spec § 9
+# filter types 0–4) → per-color_type RGB extraction → nearest-
+# neighbor in Euclidean RGB space against the Linux-console 16-
+# color palette. Success line:
+#   `<path>: <W>x<H> <N> pixels (<color_type_name>) → 16-color`
+# on STDOUT + exit 0. M5 emits actual ANSI half-block glyphs to
+# stdout using darshana, replacing this summary line with visible
+# terminal art.
 #
 # Domain rules (see CLAUDE.md § Domain-specific rules):
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
@@ -29,6 +29,7 @@
 
 include "src/cli.cyr"
 include "src/png.cyr"
+include "src/quant.cyr"
 
 # argv cap. kii takes one positional path arg at most; 256 is
 # absurdly more than any plausible invocation but matches the
@@ -60,30 +61,39 @@ fn _eprint_path_msg(path, msg): i64 {
     return 0;
 }
 
-# Print "<path>: <W>x<H> decoded <N> pixels (<color_type_name>)\n"
-# to STDOUT. This is the M3 acceptance success shape — replaces
-# the M2 structural-summary line that was `bit_depth=N color_type=T`.
-# Pixel count is W×H (not byte count); consumers wanting the byte
-# count can derive from color_type → channels × bit_depth.
-fn _print_pixel_summary(path, pstruct): i64 {
-    var plen = strlen(path);
-    syscall(1, 1, path, plen);
-    syscall(1, 1, ": ", 2);
+# Stdout-equivalent of _eprint: write a null-terminated string to
+# fd 1, using runtime strlen so non-ASCII literals (the M4 arrow
+# in particular) don't require hand-counted byte widths.
+fn _print(s): i64 {
+    var len = strlen(s);
+    syscall(1, 1, s, len);
+    return 0;
+}
+
+# Print "<path>: <W>x<H> <N> pixels (<color_type_name>) → 16-color\n"
+# to STDOUT. M4 acceptance success shape; supersedes M3's
+# `<path>: <W>x<H> decoded <N> pixels (<color_type_name>)`.
+# The arrow visually separates source format from quantization
+# target — read as "the pipeline took <source> all the way to
+# 16-color palette indices". Missing-IEND warning still rides
+# stderr separately (pipe-purity).
+fn _print_quant_summary(path, pstruct): i64 {
+    _print(path);
+    _print(": ");
     var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
     var h = load64(pstruct + STRUCT_HEIGHT_OFFSET);
     var wbuf[16]; var wlen = fmt_int_buf(w, &wbuf);
     syscall(1, 1, &wbuf, wlen);
-    syscall(1, 1, "x", 1);
+    _print("x");
     var hbuf[16]; var hlen = fmt_int_buf(h, &hbuf);
     syscall(1, 1, &hbuf, hlen);
-    syscall(1, 1, " decoded ", 9);
+    _print(" ");
     var pix_count = w * h;
     var pbuf[24]; var pblen = fmt_int_buf(pix_count, &pbuf);
     syscall(1, 1, &pbuf, pblen);
-    syscall(1, 1, " pixels (", 9);
-    var name = png_color_type_name(load64(pstruct + STRUCT_COLOR_TYPE_OFFSET));
-    syscall(1, 1, name, strlen(name));
-    syscall(1, 1, ")\n", 2);
+    _print(" pixels (");
+    _print(png_color_type_name(load64(pstruct + STRUCT_COLOR_TYPE_OFFSET)));
+    _print(") → 16-color\n");
     return 0;
 }
 
@@ -92,7 +102,7 @@ fn _print_pixel_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 0.4.0");
+    println("kii 0.5.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -200,12 +210,12 @@ fn main(): i64 {
     # M2(d); until then exit 1 with a parenthetical WIP marker.
     #
     # png_decode_structure handles png_crc_init internally; no
-    # need to call it here. pstruct is 112 bytes (14 i64 slots)
-    # to cover the M4(c)-extended layout (M3 fields + plte_buf
-    # + plte_size). M4(d) wires palette PNGs through PLTE-RGB
-    # lookup before quantization.
+    # need to call it here. pstruct is 128 bytes (16 i64 slots)
+    # to cover the M4(d)-extended layout (M3 fields + plte_buf +
+    # plte_size + quantized_buf + quantized_size). M5 wires the
+    # quantized buffer to actual ANSI half-block emission.
     var path = flags_positional(fs, 0);
-    var pstruct[112];
+    var pstruct[128];
     var rc = png_decode_structure(path, &pstruct);
     if (rc == PNG_ERR_OPEN) {
         _eprint_path_msg(path, "cannot open file");
@@ -259,12 +269,22 @@ fn main(): i64 {
         return KII_EXIT_RUN;
     }
 
-    # M3 success line goes to STDOUT (pipe-pure) + exit 0. STRUCT_*
-    # field layout aligns with IHDR_*_OFFSET on the first four slots
-    # so _print_pixel_summary just reads the pstruct directly. The
-    # missing-IEND warning still rides stderr per spec § 5.3
-    # tolerance — the summary on stdout stays the success signal.
-    _print_pixel_summary(path, &pstruct);
+    # M4: pixel decode succeeded → run quantization. Currently
+    # quantize_nearest_image has no fine-grained error codes; a
+    # non-zero return signals "internal" failure (OOM, missing
+    # PLTE on a palette PNG that somehow slipped past png_decode_
+    # structure). Caller surface stays single-message.
+    var qrc = quantize_nearest_image(&pstruct);
+    if (qrc != 0) {
+        _eprint_path_msg(path, "quantization failed (palette PNG missing PLTE, or OOM)");
+        return KII_EXIT_RUN;
+    }
+
+    # M4 success line goes to STDOUT (pipe-pure) + exit 0. The
+    # quantized palette indices live at STRUCT_QUANTIZED_BUF_OFFSET;
+    # M5 reads them to emit half-block ANSI glyphs. Missing-IEND
+    # warning still rides stderr per spec § 5.3 tolerance.
+    _print_quant_summary(path, &pstruct);
     if (load64(&pstruct + STRUCT_SEEN_IEND_OFFSET) == 0) {
         _eprint_path_msg(path, "warning: incomplete PNG (no IEND chunk seen)");
     }

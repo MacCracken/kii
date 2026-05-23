@@ -4,6 +4,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-22
+
+### Added
+
+- **M4 — 16-color ANSI palette + RGB → nearest quantization**. Valid PNGs now quantize through the full pipeline and print `<path>: <W>x<H> <N> pixels (<color_type_name>) → 16-color` to stdout + exit 0. The arrow visually separates source format from quantization target.
+- **`src/palette.cyr`** — Linux-console / CGA-derived 16-color ANSI palette. Module-scope `_ANSI_PALETTE_RGB[16]` packed-byte buffer + `palette_init()` (idempotent) + `palette_r(idx)` / `palette_g(idx)` / `palette_b(idx)` accessors with lazy-init defense. Entries 0–7 are normal (dim) CGA originals; 8–15 are bright. Source: Linux kernel `drivers/tty/vt/vt.c default_color_table`.
+- **`src/quant.cyr`** — RGB → palette-index quantization.
+  - `_color_dist2(r1, g1, b1, r2, g2, b2)` — squared Euclidean distance. Skips sqrt (monotonic for minimum-finding); max value 3 × 255² = 195,075 fits comfortably in i64.
+  - `quantize_nearest_rgb(r, g, b)` — scalar per-pixel: linear scan over 16 palette entries, ties broken by lowest index.
+  - `quantize_nearest_image(pstruct)` — image-wide: walks pixel buffer, dispatches per color_type (greyscale / RGB / palette via PLTE / grey+alpha / RGBA), drops alpha + low-bytes for depth=16 (truncation quantization — full-precision 16-bit is tier-2). Stashes 1-byte-per-pixel result in pstruct.
+- **`src/png.cyr` extensions**:
+  - PLTE chunk capture: walker now allocates a heap buffer + memcpy's PLTE bytes during the existing CRC-streaming pass. Spec § 11.2.3 validation: `chunk_len ≤ 768` AND `chunk_len % 3 == 0`, both → `PNG_ERR_HEADER`.
+  - `_png_is_plte(type_buf)` chunk-type predicate.
+  - Struct grew from 11 to 15 slots (120 bytes): `STRUCT_PLTE_BUF_OFFSET` (88) + `STRUCT_PLTE_SIZE_OFFSET` (96) + `STRUCT_QUANTIZED_BUF_OFFSET` (104) + `STRUCT_QUANTIZED_SIZE_OFFSET` (112).
+- **`tests/kii.bcyr`** — wired. First kii benchmark: `quantize_nearest_rgb` at 1,048,576 iterations. **274 ns/op** on x86_64-linux; captured in [`docs/benchmarks.md`](docs/benchmarks.md). 1024×1024 full-image quantization extrapolates to ~287 ms.
+
+### Changed
+
+- `src/main.cyr`:
+  - Wired `quantize_nearest_image` into dispatch after `png_decode_pixels`. Single new error path: `quantization failed (palette PNG missing PLTE, or OOM)`.
+  - Replaced `_print_pixel_summary` (M3 shape: `decoded N pixels`) with `_print_quant_summary` (M4 shape: `N pixels (<name>) → 16-color`).
+  - Added `_print` helper (stdout equivalent of `_eprint`) so the UTF-8 arrow in the success line doesn't need hand-counted byte widths.
+  - `pstruct[96]` → `pstruct[128]` to cover the 16-slot M4(d)-extended layout.
+
+### Tests
+
+- `tests/kii.tcyr` — **287 assertions** (was 163 at v0.4.0).
+  - **M4(a) palette** (51): size + lazy-init + every RGB entry 0–15 byte-pinned + bounds check that every byte ∈ [0, 255].
+  - **M4(b) quantizer scalar** (37): all four acceptance-criteria pixels (red→1, blue→4, white→15, black→0) plus green/yellow/cyan/magenta + every palette entry round-trips to its own index + brightness gradient (luminance non-decreasing) + `_color_dist2` sanity.
+  - **M4(c) PLTE capture** (21): 3-entry red/green/blue palette byte-for-byte verify + non-PLTE leaves nulls + malformed PLTE rejection (not multiple of 3, > 768 bytes) + real archlinux-logo.png PLTE invariants.
+  - **M4(d) end-to-end** (15): 2x2 canonical RGB fixture quantizes to `[1, 4, 0, 15]` for red/blue/black/white; ungated-call rejection; archlinux-logo.png quantizes via PLTE (256×256 = 65,536 indices).
+
+### Real-world smoke
+
+- `RAMGON.png` (1152×925 RGBA) → `1,065,600 pixels (RGBA) → 16-color`.
+- `/usr/share/pixmaps/archlinux-logo.png` (256×256 palette via PLTE) → `65,536 pixels (palette) → 16-color`.
+- `/usr/share/pixmaps/kitty.png` (256×256 RGBA) → `65,536 pixels (RGBA) → 16-color`.
+
+### Out of scope (deferred per M4 acceptance)
+
+- **CIE Lab / perceptual color spaces** — Euclidean RGB is the tier-1 floor. Lab + perceptual metrics are post-v1 scope per CLAUDE.md color-tier discipline.
+- **Dithering** (Floyd-Steinberg / ordered / Bayer) — explicitly tier-2 / post-v1.
+- **Full-precision 16-bit-depth quantization** — current code truncates to high byte per channel. Full sampling lands when a consumer needs the fidelity.
+
 ## [0.4.0] — 2026-05-22
 
 ### Added

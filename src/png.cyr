@@ -94,6 +94,8 @@ var STRUCT_PIXELS_BUF_OFFSET      = 72;   # alloc'd, populated by png_decode_pix
 var STRUCT_PIXELS_SIZE_OFFSET     = 80;   # decoded pixel-buf byte count (= height × width × bpp)
 var STRUCT_PLTE_BUF_OFFSET        = 88;   # alloc'd, populated by phase-1 walker on PLTE chunk (M4(c)+)
 var STRUCT_PLTE_SIZE_OFFSET       = 96;   # PLTE chunk data length (multiple of 3, max 768 per spec § 11.2.3)
+var STRUCT_QUANTIZED_BUF_OFFSET   = 104;  # alloc'd, populated by quantize_nearest_image (M4(d)+); 1 byte per pixel
+var STRUCT_QUANTIZED_SIZE_OFFSET  = 112;  # quantized-buf byte count (= width × height)
 
 # ---- CRC32 (PNG spec § 5.3) ----------------------------------------
 # Standard "Ethernet" CRC-32 reversed polynomial 0xEDB88320 (same

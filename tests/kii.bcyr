@@ -1,21 +1,46 @@
-# kii benchmarks
-# Stdlib auto-included via cyrius.cyml
+# kii benchmarks — M4 quantization latency.
+# Stdlib auto-included via cyrius.cyml.
 #
-# Pattern: bench_new -> bench_batch_start -> tight loop -> bench_batch_stop -> bench_report.
-# For sub-1us ops use batch_size >= 1000 to amortize clock_gettime overhead
-# (~240 ns per start/stop pair on x86_64 Linux). See lib/bench.cyr header for
-# the full overhead-vs-batching guidance.
+# M4 acceptance criterion (docs/development/roadmap.md):
+#   "Bench: quantization latency at 1024×1024 captured in
+#    docs/benchmarks.md"
+#
+# The bench drives quantize_nearest_rgb in a 1024×1024 = 1,048,576-
+# iteration loop, varying the input RGB to exercise different
+# palette-distance branches. Result is per-op ns reported by
+# lib/bench.cyr's bench_report.
+#
+# Pattern: bench_new → bench_batch_start → tight loop →
+# bench_batch_stop → bench_report. For sub-1µs ops use batch_size
+# ≥ 1000 to amortize clock_gettime overhead (~240 ns per
+# start/stop pair on x86_64 Linux). 1M iterations is well above
+# that floor.
 
-fn bench_noop(): i64 { return 0; }
+include "src/quant.cyr"
 
 fn main(): i64 {
     alloc_init();
-    var b = bench_new("noop");
-    bench_batch_start(b);
+    palette_init();
+
+    var bh = bench_new("quantize_nearest_rgb @ 1024×1024");
+    var n  = 1048576;   # 1024 × 1024
+    bench_batch_start(bh);
     var i = 0;
-    while (i < 1000000) { bench_noop(); i = i + 1; }
-    bench_batch_stop(b, 1000000);
-    bench_report(b);
+    while (i < n) {
+        # Vary RGB to exercise different palette branches —
+        # walking through R / G / B as the iteration count rises
+        # hits every 24-bit color over the full range. Pure-axis
+        # quantization (only R changing, say) hits a degenerate
+        # case where the same palette entry wins; this mix avoids
+        # that.
+        var r  = i & 0xFF;
+        var g  = (i >> 8) & 0xFF;
+        var bb = (i >> 16) & 0xFF;
+        quantize_nearest_rgb(r, g, bb);
+        i = i + 1;
+    }
+    bench_batch_stop(bh, n);
+    bench_report(bh);
     return 0;
 }
 
