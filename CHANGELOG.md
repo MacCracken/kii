@@ -4,6 +4,46 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-23
+
+### Security
+
+- **M7 audit cycle** (see [`docs/audit/2026-05-22-audit.md`](docs/audit/2026-05-22-audit.md)). External research across libpng / lodepng / stb_image / zlib / terminal-emulator CVE corpora (140 CVE/issue rows walked) compiled into a kii-specific findings doc with 10 prioritized items. Hardening commits C1–C4 land below.
+- **C1 — stderr ANSI-injection defense**. `kii_path_has_control_bytes(path)` predicate in `src/cli.cyr` + `_eprint_path_safe` helper in `src/main.cyr`. Filenames containing C0 controls (0x00–0x1F except `\t`/`\n`) or DEL (0x7F) are substituted with `<path containing control bytes — suppressed>` before stderr emit. UTF-8 paths pass through (AGNOS naming surface). Closes the CVE-2021-25743-analog exposure on `_eprint_path_msg` / `_eprint_quant_summary`.
+- **C2 — IHDR dimension caps + PNG spec § 11.2.2 enforcement**. New `KII_MAX_PIXELS = 4096²`, `KII_MAX_DIM = 65535/side`, `KII_MAX_RAW_BYTES = 256 MB` ceilings checked at `png_decode_pixels` entry. Lying-IHDR zip-bomb (e.g. 65535×65535×RGBA-16bit → 34 GB alloc attempt) rejected with new `PNG_ERR_DIMENSIONS`. PNG spec § 11.2.2 Table 11.1 cross-product enforced: `color_type=3 + bit_depth=16` (spec-illegal; stb #1928 Bug 6 class) rejected with `PNG_ERR_BITDEPTH`.
+- **C3 — Decompression-amplification caps**. `idat_total > 256 MB` rejected with new `PNG_ERR_IDAT_TOO_LARGE` (stb OSS-Fuzz #32803 / #1928 Bug 7 / lodepng #165 class). Compression-ratio > 1100:1 (above DEFLATE's 1032:1 theoretical max per RFC 1951 § 3.2.5) rejected with new `PNG_ERR_RATIO_TOO_HIGH` — first-line defense against zip-bombs before any sankoch inflate.
+- **C4 — Chunk-ordering FSM (partial)**. Duplicate PLTE chunks (PNG spec § 5.6 violation; alloc-leak in previous code) and PLTE-after-IDAT rejected with `PNG_ERR_HEADER` in the structural walker.
+- **ADR 0002** ([`docs/adr/0002-security-model.md`](docs/adr/0002-security-model.md)) captures the threat model + commitments + accepted residual risks. Cross-references the audit doc + SECURITY.md.
+
+### Added
+
+- **M7(b) fuzz coverage** — `tests/kii.fcyr` scaled from 12k iters total to **3,011,000 iters** across five surfaces, all clean in ~16.4 s wall-clock:
+  - `arg-parser` (10k, unchanged)
+  - `path-sanitizer` (**1M new**) — random byte paths through `kii_path_has_control_bytes`
+  - `geometry` (**1M new**) — random src/envelope dims through `_kii_compute_target_geometry` + `_kii_compute_fit_geometry`
+  - `emit-pipeline` (**1k new**) — decode-once-then-randomize-target-dims on RAMGON.png through `downscale_to_rgb` → `quantize_downscaled` → `emit_halfblock_row_buf`
+  - `png-decoder` (**scaled 2k → 1M**) — random bytes (50% prefixed with valid sig+IHDR) through `png_decode_structure`
+- **M7(d) decode-latency matrix** at three source-resolution classes — captured in [`docs/benchmarks.md`](docs/benchmarks.md): `archlinux-logo.png` 256×256 (1.8 ms), `starfield.png` 1597×1198 (647 ms), `elarun background.png` 2560×1600 (474 ms). Surprise: per-pixel decode throughput is content-dependent (compression-ratio-driven), not strictly size-dependent — the 2048² class is faster than the 1024² class because its source compresses tighter.
+- **44 new unit-test assertions** covering each new error path, cap boundary, and predicate behavior. Total: 470 assertions, all pass.
+- 3 new `PNG_ERR_*` codes (`DIMENSIONS = 12`, `IDAT_TOO_LARGE = 13`, `RATIO_TOO_HIGH = 14`) with matching `main.cyr` dispatch entries.
+
+### Changed
+
+- `print_version` literal bumped to `kii 0.8.0`.
+- `_eprint_path_msg` + `_eprint_quant_summary` now route path bytes through `_eprint_path_safe` (and thence `kii_path_has_control_bytes`) before stderr emit.
+- Audit doc Finding 5 (palette-index OOB) marked OK rather than DEFER after code re-read confirmed both PLTE-lookup sites (`downscale.cyr:73`, `quant.cyr:129`) already bounds-check and substitute black on OOB.
+- Audit doc Finding 2 (IDAT-accumulator cap) reformulated to absolute `KII_MAX_RAW_BYTES` ceiling rather than the doc's initial relative `1.5 × inflated_size` cap — relative cap failed on tiny inflated payloads where constant zlib/DEFLATE header overhead exceeds the multiplier.
+
+### Deferred to M8
+
+- Per-chunk-type length cap table (libpng CVE-2017-12652 class) — IDAT cumulative cap from C3 covers the OOM-DoS leverage; per-chunk caps for IHDR / IEND would catch trivially malformed inputs at slightly earlier signal, but CRC32 already fires there. Net value marginal.
+- W3C PNG test-suite "broken" set walk — would need download + automation; deferred to M8 alongside cross-terminal verification.
+- Three sankoch upstream items (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers, Huffman-table-construction surface). kii's pre-inflate caps reduce impact; sankoch fixes tracked as v1.0 release gate.
+
+### Deps
+
+- No deltas. `darshana 0.5.3` and stdlib (incl. sankoch) unchanged.
+
 ## [0.7.0] — 2026-05-22
 
 ### Added

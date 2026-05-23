@@ -13,8 +13,8 @@ The contract for tagging v1.0:
 - [x] CLI surface frozen — `--help`, `--version`, `--width N`, positional path arg, `--color N` (8 or 16), `--verbose` all stable (shipped at v0.2.0 / M1; `--verbose` activated at v0.6.0 / M5)
 - [x] Half-block glyph emission at terminal-detected geometry works (half-block emit at v0.6.0 / M5; terminal-detection at v0.7.0 / M6)
 - [x] Test coverage: 100+ assertions across all modules (426 as of v0.7.0)
-- [ ] **Security audit pass** — external CVE / 0-day research compiled into `docs/audit/YYYY-MM-DD-audit.md`; PNG fuzz harness clean at 10⁶ iterations; ANSI-escape-injection paths reviewed; decode-latency matrix at 256² / 1024² / 2048² for DoS-bound validation (M7 / v0.8.0)
-- [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (M7 audit work)
+- [x] **Security audit pass** — external CVE / 0-day research compiled into [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md); PNG fuzz harness clean at 10⁶ iterations; ANSI-escape-injection paths reviewed (Finding 6 — closed via `_eprint_path_safe`); decode-latency matrix at 256² / 1024² / 2048² for DoS-bound validation captured at v0.8.0 / M7
+- [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (M7(a) deferred → M8)
 - [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (M8 freeze work)
 - [ ] At least one downstream consumer (BBS or MUD app) integrated and green (M8 freeze work)
 - [ ] Cross-terminal verification — Linux console, xterm, Alacritty, kitty, tmux (M8 freeze work)
@@ -23,9 +23,9 @@ The contract for tagging v1.0:
 - [ ] Docs / guides / examples all current per `docs/doc-health.md` (M8 freeze work)
 - [ ] Marketplace recipe in zugot (M8 freeze work)
 
-## Shipped milestones (M0 → M6, v0.1.0 → v0.7.0)
+## Shipped milestones (M0 → M7, v0.1.0 → v0.8.0)
 
-All shipped 2026-05-22. Per-milestone delivered lists, sub-bite cadences, deferrals, and deps added live in [`../../CHANGELOG.md`](../../CHANGELOG.md) — this table is the index.
+M0–M6 shipped 2026-05-22; M7 shipped 2026-05-23. Per-milestone delivered lists, sub-bite cadences, deferrals, and deps added live in [`../../CHANGELOG.md`](../../CHANGELOG.md) — this table is the index.
 
 | Milestone | Version | Headline | Deps added |
 |---|---|---|---|
@@ -36,12 +36,20 @@ All shipped 2026-05-22. Per-milestone delivered lists, sub-bite cadences, deferr
 | M4 — 16-color quantization | [v0.5.0](../../CHANGELOG.md#050--2026-05-22) | Linux-console palette + Euclidean-RGB nearest-neighbor + PLTE capture; first bench | — |
 | M5 — Half-block ANSI emit | [v0.6.0](../../CHANGELOG.md#060--2026-05-22) | ▀ glyph + per-row 256-color escapes; downscale.cyr + emit.cyr; `--verbose` activated | external `darshana 0.5.3` (first git dep) |
 | M6 — Terminal-size detect | [v0.7.0](../../CHANGELOG.md#070--2026-05-22) | `tty_winsize` auto-detect + `--width N` honored; aspect-preserving fit; multi-resolution bench; ADR 0001 + architecture/README backfill | — |
+| M7 — Security audit cycle | [v0.8.0](../../CHANGELOG.md#080--2026-05-23) | External CVE/0-day audit (140 rows); hardening commits C1–C4 (path-sanitize + IHDR caps + IDAT/ratio caps + chunk-order FSM); fuzz 2k → 3M+; decode-latency matrix; ADR 0002 | — |
 
-**At v0.7.0**: 426 assertions all pass; four benches captured; CLI surface feature-complete for v1.0; production pipeline (structure → pixels → downscale → quantize → emit) is the path through all five v0.x cycles.
+**At v0.8.0**: 470 assertions all pass (44 new); 3M+ fuzz iters across 5 surfaces clean; seven benches (incl. M7(d) decode-latency matrix); audit doc with 10 kii-specific findings (8 fixed / 2 deferred to M8). Threat model + commitments captured in ADR 0002.
 
 ## In-flight + remaining milestones
 
-### M7 — Security audit cycle (v0.8.0)
+### M7 — Security audit cycle (v0.8.0) — SHIPPED 2026-05-23
+
+Closed out 2026-05-23. Outcomes captured in CHANGELOG [v0.8.0],
+[`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md), and
+[`docs/adr/0002-security-model.md`](../adr/0002-security-model.md).
+Deferred to M8: W3C broken-set walk, per-chunk-type length cap table.
+
+### (former) M7 acceptance — for historical reference
 
 **Goal**: External-source-informed security audit of kii's threat surface. No new user-facing features; output is a comprehensive audit document + hardening commits + scaled fuzz coverage. This is the work the original "M7 = v1.0 freeze" lumped together with socialization — separated here because the security audit is its own dedicated cycle with **external web research for 0-days and CVEs against the substrate libraries kii draws on**.
 

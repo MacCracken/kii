@@ -20,14 +20,32 @@
 
 include "src/cli.cyr"
 include "src/png.cyr"
+include "src/palette.cyr"
+include "src/quant.cyr"
+include "src/downscale.cyr"
+include "src/emit.cyr"
 
-# Iteration counts. Arg-parser fuzz: 10k (no I/O, runs in <50 ms).
-# PNG fuzz: 2k (each iter does a /tmp file_write_all + open + read,
-# ~1 ms each on tmpfs; 2k iters keeps CI under ~3 s while still
-# covering the major dispatch paths). Both raised at M7 (security
-# audit) to 10⁶ per the v1.0 acceptance criterion.
-var FUZZ_ITERS       = 10000;
-var PNG_FUZZ_ITERS   = 2000;
+# Iteration counts.
+#
+# Arg-parser fuzz (FUZZ_ITERS): 10k baseline (no I/O, runs in <50 ms).
+# PNG-decoder fuzz (PNG_FUZZ_ITERS): scaled 2k → 10⁶ at M7(b) per the
+#   v1.0 acceptance criterion (docs/development/roadmap.md § M7). Each
+#   iter does a /tmp file_write_all + open + read on tmpfs; 10⁶ iters
+#   lands around ~35s on the dev box.
+# Path-sanitizer fuzz (PATH_FUZZ_ITERS): pure-memory; 10⁶ at full
+#   M7(b) scale, runs in <1 s.
+# Geometry fuzz (GEOM_FUZZ_ITERS): pure-memory; 10⁶ at full M7(b)
+#   scale, runs in <1 s.
+# Emit-pipeline fuzz (EMIT_FUZZ_ITERS): decodes RAMGON.png once,
+#   then varies (dst_cols, dst_rows) randomly per iter through
+#   downscale → quantize → emit. 1k iters at ~1ms each (the
+#   end-to-end bench at ~770ms/iter is mostly PNG decode, which
+#   we skip here by reusing the decoded pstruct).
+var FUZZ_ITERS        = 10000;
+var PNG_FUZZ_ITERS    = 1000000;
+var PATH_FUZZ_ITERS   = 1000000;
+var GEOM_FUZZ_ITERS   = 1000000;
+var EMIT_FUZZ_ITERS   = 1000;
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -134,6 +152,92 @@ fn _png_fuzz_init_prefix(): i64 {
     return 0;
 }
 
+# ---- M7(b) path-sanitizer fuzz surface -----------------------------
+# Random-byte path buffers driven through kii_path_has_control_bytes
+# (src/cli.cyr) to confirm the predicate never crashes and always
+# returns 0 or 1, regardless of byte content. Each iter generates a
+# null-terminated byte string in `buf` with each non-NUL byte chosen
+# uniformly from 0x01..0xFF (NUL would terminate prematurely).
+# Contract: predicate returns exactly 0 or 1; total call count
+# matches PATH_FUZZ_ITERS.
+fn fuzz_path_iter(buf, max_len): i64 {
+    var n = 1 + _fuzz_rand_range(max_len - 1);
+    var i = 0;
+    while (i < n) {
+        # 0x01..0xFF — exclude NUL (we add it as terminator)
+        store8(buf + i, 1 + (_fuzz_rand() % 255));
+        i = i + 1;
+    }
+    store8(buf + n, 0);
+    var rc = kii_path_has_control_bytes(buf);
+    # Defensive cross-check: return MUST be 0 or 1. If the predicate
+    # somehow returns something else, count it as a failure (the
+    # main loop tallies the bad-return count).
+    if (rc == 0 || rc == 1) { return 0; }
+    return 0 - 1;
+}
+
+# ---- M7(b) geometry fuzz surface -----------------------------------
+# Random (src_w, src_h, max_cols, max_rows) inputs to the M6 geometry
+# helpers. Drive both _kii_compute_target_geometry (--width N path)
+# and _kii_compute_fit_geometry (terminal-fit path). Contract: both
+# return 0 (success) or -1 (clean rejection); never crash on
+# adversarial input including 0s, very large values, and asymmetric
+# aspect ratios. The fuzz inputs are bounded to [0, 65535] for each
+# field — large enough to exercise overflow paths, small enough to
+# fit in the i64 multiplications without wrapping (which would be a
+# separate finding, not a geometry bug).
+fn fuzz_geom_iter(): i64 {
+    var src_w    = _fuzz_rand() % 65536;
+    var src_h    = _fuzz_rand() % 65536;
+    var max_cols = _fuzz_rand() % 65536;
+    var max_rows = _fuzz_rand() % 65536;
+    var width_n  = _fuzz_rand() % 65536;
+
+    var out_w  = 0;
+    var out_sr = 0;
+    var rc1 = _kii_compute_target_geometry(src_w, src_h, width_n, &out_w, &out_sr);
+    if (rc1 != 0 && rc1 != (0 - 1)) { return 0 - 1; }
+    var rc2 = _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, &out_w, &out_sr);
+    if (rc2 != 0 && rc2 != (0 - 1)) { return 0 - 1; }
+    return 0;
+}
+
+# ---- M7(b) emit-pipeline fuzz surface ------------------------------
+# Drive downscale → quantize → emit_halfblock_row_buf on a valid
+# decoded PNG (RAMGON.png from the repo root) with randomized target
+# dimensions per iter. Decoding the source PNG is expensive
+# (~700 ms per the bench harness) so we do it once at startup;
+# per-iter cost is just the M5 pipeline (~1 ms each on tmpfs).
+#
+# Contract: downscale_to_rgb / quantize_downscaled / emit_halfblock_row_buf
+# return 0 on success or -1 on rejection (e.g. dst dims = 0); never
+# crash. The fuzz exercises:
+#   - dst_w / dst_h boundary cases (0, 1, near-source-size, larger-than-source)
+#   - the per-row emit_halfblock_row_buf walk with random row index
+fn fuzz_emit_iter(pstruct, line_buf): i64 {
+    # Random target dims in [1, 200]. Cap at source-w / source-h
+    # constraint inside downscale_to_rgb if it has one — but
+    # contract is "never crash", so we don't pre-validate.
+    var dst_w = 1 + (_fuzz_rand() % 200);
+    var dst_h = 1 + (_fuzz_rand() % 200);
+    var dr = downscale_to_rgb(pstruct, dst_w, dst_h);
+    if (dr != 0 && dr != (0 - 1)) { return 0 - 1; }
+    if (dr != 0) { return 0; }                  # rejection; nothing else to do
+    var qr = quantize_downscaled(pstruct);
+    if (qr != 0 && qr != (0 - 1)) { return 0 - 1; }
+    if (qr != 0) { return 0; }
+    # Pick a random row to emit. dst_h pairs of source rows produce
+    # dst_h/2 terminal rows; safe to walk [0, dst_h/2).
+    var term_rows = dst_h / 2;
+    if (term_rows < 1) { return 0; }
+    var row = _fuzz_rand() % term_rows;
+    var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
+    var dw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
+    emit_halfblock_row_buf(qbuf, dw, row, line_buf, 0);
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # png_decode_structure. Whatever the function returns is fine —
@@ -220,9 +324,52 @@ fn main(): i64 {
         iter = iter + 1;
     }
 
+    # ---- M7(b) path-sanitizer fuzz loop ----------------------------
+    # Pure-memory; fast. 10⁶ iters runs in ~1 s.
+    var path_buf[256];
+    var path_iter = 0;
+    var path_bad  = 0;
+    while (path_iter < PATH_FUZZ_ITERS) {
+        if (fuzz_path_iter(&path_buf, 256) != 0) { path_bad = path_bad + 1; }
+        path_iter = path_iter + 1;
+    }
+
+    # ---- M7(b) geometry fuzz loop ----------------------------------
+    # Pure-memory; fast. 10⁶ iters runs in ~1 s. Exercises both M6
+    # geometry helpers.
+    var geom_iter = 0;
+    var geom_bad  = 0;
+    while (geom_iter < GEOM_FUZZ_ITERS) {
+        if (fuzz_geom_iter() != 0) { geom_bad = geom_bad + 1; }
+        geom_iter = geom_iter + 1;
+    }
+
+    # ---- M7(b) emit-pipeline fuzz loop -----------------------------
+    # Decode RAMGON.png once (the repo-root fixture), then run the
+    # M5 pipeline at randomized target dims per iter. If RAMGON is
+    # missing, skip the loop with emit_iter = 0 — fuzz infra still
+    # runs cleanly on a CI checkout that doesn't bundle the fixture.
+    var emit_iter = 0;
+    var emit_bad  = 0;
+    var emit_pstr[160];
+    if (png_decode_structure("RAMGON.png", &emit_pstr) == PNG_OK) {
+        if (png_decode_pixels(&emit_pstr) == PNG_OK) {
+            # ANSI escape can produce up to ~25 bytes per cell at
+            # 200 cols; 8 KB scratch is well above worst-case.
+            var emit_line[8192];
+            while (emit_iter < EMIT_FUZZ_ITERS) {
+                if (fuzz_emit_iter(&emit_pstr, &emit_line) != 0) {
+                    emit_bad = emit_bad + 1;
+                }
+                emit_iter = emit_iter + 1;
+            }
+        }
+    }
+
     # ---- png-decoder fuzz loop -------------------------------------
-    # Larger scratch: prefix (33) + max payload (1024) = 1057 bytes.
-    # 2 KB stack buf has plenty of headroom.
+    # Scaled 2k → 10⁶ at M7(b). Larger scratch: prefix (33) + max
+    # payload (1024) = 1057 bytes. 2 KB stack buf has plenty of
+    # headroom.
     var png_scratch[2048];
     var png_iter = 0;
     while (png_iter < PNG_FUZZ_ITERS) {
@@ -237,6 +384,21 @@ fn main(): i64 {
     var args_arg = vec_new();
     vec_push(args_arg, iter);
     fmt_printf("fuzz: %d iterations passed (arg-parser crash-safety)\n", args_arg);
+
+    var args_path = vec_new();
+    vec_push(args_path, path_iter);
+    vec_push(args_path, path_bad);
+    fmt_printf("fuzz: %d iterations passed (path-sanitizer; bad=%d)\n", args_path);
+
+    var args_geom = vec_new();
+    vec_push(args_geom, geom_iter);
+    vec_push(args_geom, geom_bad);
+    fmt_printf("fuzz: %d iterations passed (geometry; bad=%d)\n", args_geom);
+
+    var args_emit = vec_new();
+    vec_push(args_emit, emit_iter);
+    vec_push(args_emit, emit_bad);
+    fmt_printf("fuzz: %d iterations passed (emit-pipeline; bad=%d)\n", args_emit);
 
     var args_png = vec_new();
     vec_push(args_png, png_iter);

@@ -47,6 +47,28 @@ var PNG_ERR_BITDEPTH  = 8;  # bit_depth ∈ {1,2,4} or unsupported color_type �
 var PNG_ERR_NO_IDAT   = 9;  # PNG had zero IDAT chunks (structurally valid but no pixel data)
 var PNG_ERR_INFLATE   = 10; # zlib_decompress failed or produced wrong size
 var PNG_ERR_FILTER    = 11; # Unknown filter byte (per-row filter ∈ {0,1,2,3,4} per spec § 9)
+var PNG_ERR_DIMENSIONS= 12; # IHDR width × height × bpp exceeds kii policy ceiling
+                            # (M7(c) Finding 1 — lying-IHDR zip-bomb defense; see
+                            # docs/audit/2026-05-22-audit.md § Finding 1)
+var PNG_ERR_IDAT_TOO_LARGE = 13; # Accumulated IDAT bytes exceed 1.5× inflated_size
+                                 # (M7(c) Finding 2 — IDAT chunk-fusing accumulator cap;
+                                 # stb OSS-Fuzz #32803 / stb #1928 Bug 7 class)
+var PNG_ERR_RATIO_TOO_HIGH = 14; # inflated_size / idat_total > 1100 (above DEFLATE's
+                                 # theoretical 1032:1 ceiling — decompression bomb)
+                                 # (M7(c) Finding 3; see audit doc § Finding 3)
+
+# ---- IHDR policy ceilings (M7(c) Finding 1) ------------------------
+# Cap the attacker-controllable IHDR fields BEFORE any allocation. PNG
+# spec permits width / height up to 2^31-1 but kii's use case (terminal
+# image display) tops out at a few thousand pixels per side; 4096×4096
+# is generous and stays well below the i64-overflow boundary even with
+# bit_depth=16, color_type=6 (bpp=8 → row_bytes ≤ 32768, inflated_size
+# ≤ 134 M). The 256 MB cap is a second-layer guard against any single
+# legal-looking IHDR slipping through. Both caps trip
+# PNG_ERR_DIMENSIONS.
+var KII_MAX_PIXELS    = 16777216;   # 4096 × 4096
+var KII_MAX_RAW_BYTES = 268435456;  # 256 MB
+var KII_MAX_DIM       = 65535;      # per-side cap; pragmatic for terminal display
 
 # ---- IHDR struct layout (sub-bite (b)) -----------------------------
 # Caller passes a ≥32-byte buffer; png_decode_header populates four
@@ -434,6 +456,7 @@ fn png_decode_structure(path, out_struct): i64 {
     var idat_count = 0;
     var idat_total = 0;
     var seen_iend  = 0;
+    var seen_plte  = 0;   # M7(c) Finding 8 — chunk-ordering FSM
     var walking    = 1;
 
     while (walking == 1) {
@@ -456,10 +479,18 @@ fn png_decode_structure(path, out_struct): i64 {
         # 768 bytes (256 entries × 3) and requires length to be a
         # multiple of 3. Reject malformed PLTE at the structural
         # layer — quantizer downstream relies on the invariant.
+        # M7(c) Finding 8 — also enforce PNG spec § 5.6 chunk-
+        # ordering invariants: PLTE must precede the first IDAT,
+        # and there must be exactly one PLTE. Either violation
+        # rejects with PNG_ERR_HEADER. Without the duplicate-PLTE
+        # check, the second alloc would silently leak the first
+        # (overwriting STRUCT_PLTE_BUF_OFFSET).
         var plte_chunk_buf = 0;
         if (is_plte == 1) {
-            if (chunk_len > 768)    { file_close(fd); return PNG_ERR_HEADER; }
-            if (chunk_len % 3 != 0) { file_close(fd); return PNG_ERR_HEADER; }
+            if (seen_plte == 1)        { file_close(fd); return PNG_ERR_HEADER; }
+            if (idat_count > 0)        { file_close(fd); return PNG_ERR_HEADER; }
+            if (chunk_len > 768)       { file_close(fd); return PNG_ERR_HEADER; }
+            if (chunk_len % 3 != 0)    { file_close(fd); return PNG_ERR_HEADER; }
             if (chunk_len > 0) {
                 plte_chunk_buf = alloc(chunk_len);
                 if (plte_chunk_buf == 0) { file_close(fd); return PNG_ERR_CHUNK; }
@@ -516,6 +547,7 @@ fn png_decode_structure(path, out_struct): i64 {
             # bytes to the quantizer.
             store64(out_struct + STRUCT_PLTE_BUF_OFFSET,  plte_chunk_buf);
             store64(out_struct + STRUCT_PLTE_SIZE_OFFSET, chunk_len);
+            seen_plte = 1;
         }
 
         } }
@@ -682,8 +714,25 @@ fn png_decode_pixels(pstruct): i64 {
     if (bit_depth != 8 && bit_depth != 16) { return PNG_ERR_BITDEPTH; }
     var channels = _png_color_channels(color_type);
     if (channels < 0) { return PNG_ERR_BITDEPTH; }
+    # M7(c) Finding 4 — PNG spec § 11.2.2 Table 11.1: color_type=3
+    # (palette) is legal at bit_depth ∈ {1,2,4,8} only. Sub-byte
+    # depths already rejected above; bit_depth=16 + color_type=3 is
+    # spec-illegal and many decoders accept it (stb #1928 Bug 6).
+    if (color_type == 3 && bit_depth == 16) { return PNG_ERR_BITDEPTH; }
+
+    # M7(c) Finding 1 — IHDR dimension caps. width / height are
+    # attacker-controlled u32 fields; an uncapped multiplication
+    # `width × height × bpp` can produce a multi-GB alloc request
+    # (zip-bomb-via-lying-IHDR) or wrap i64 (alloc-negative UB).
+    # All four checks must trip before any size-derivation math.
+    # See docs/audit/2026-05-22-audit.md § Finding 1.
+    if (width <= 0 || height <= 0)              { return PNG_ERR_DIMENSIONS; }
+    if (width > KII_MAX_DIM || height > KII_MAX_DIM) { return PNG_ERR_DIMENSIONS; }
+    if (width * height > KII_MAX_PIXELS)        { return PNG_ERR_DIMENSIONS; }
+
     # No IDAT data at all — structurally valid PNG but nothing
-    # to decode.
+    # to decode. Checked after dimension caps so an attacker can't
+    # claim absurd dimensions to mask the missing-IDAT signal.
     if (idat_buf == 0 || idat_total == 0) { return PNG_ERR_NO_IDAT; }
 
     # ---- size math ----
@@ -693,6 +742,32 @@ fn png_decode_pixels(pstruct): i64 {
     var row_bytes     = width * bpp;
     var inflated_size = height * (1 + row_bytes);   # 1 filter byte per row
     var pixel_size    = height * row_bytes;
+    # Second-layer cap: even within KII_MAX_PIXELS, a 16-bit RGBA
+    # source at 4096² produces ~134 MB of inflated bytes — still
+    # under our 256 MB ceiling, but the cap forms the M7(c) Finding 1
+    # belt for any future bit_depth/channel expansion.
+    if (inflated_size > KII_MAX_RAW_BYTES)       { return PNG_ERR_DIMENSIONS; }
+
+    # M7(c) Finding 2 — IDAT-accumulator cap. The phase-1 walker fuses
+    # all IDAT chunk payloads into one contiguous buffer at alloc(
+    # idat_total) (png_decode_structure phase 2). A malicious PNG with
+    # many large IDATs can demand a multi-GB single allocation even
+    # when the inflated output is small (stb OSS-Fuzz #32803 / #1928
+    # Bug 7 class). Cap idat_total at the same absolute ceiling we
+    # apply to inflated output — 256 MB is the largest single byte
+    # buffer kii will ever ask the allocator for. Relative-to-
+    # inflated-size caps are unworkable for tiny images (zlib header
+    # overhead is constant; tiny payloads legitimately produce idat:
+    # inflated ratios > 1).
+    if (idat_total > KII_MAX_RAW_BYTES)          { return PNG_ERR_IDAT_TOO_LARGE; }
+
+    # M7(c) Finding 3 — Compression-ratio sanity. DEFLATE's
+    # theoretical maximum ratio is 1032:1 (all-length-258 copies from
+    # a single literal, RFC 1951 § 3.2.5). Anything above 1100:1 is
+    # either malformed or a decompression bomb (zip-bomb-via-lying-
+    # IHDR). idat_total > 0 invariant established by the NO_IDAT
+    # check above, so the divide is safe.
+    if ((inflated_size / idat_total) > 1100)     { return PNG_ERR_RATIO_TOO_HIGH; }
 
     # ---- inflate ----
     var inflated = alloc(inflated_size);

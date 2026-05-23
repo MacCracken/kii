@@ -121,6 +121,72 @@ fn main(): i64 {
     bench_batch_stop(bh_200, n_200);
     bench_report(bh_200);
 
+    # ---- M7(d) decode-latency matrix at three source resolutions ----
+    # Audit acceptance: capture DoS-relevant worst-case timing envelope
+    # across small / medium / large input sizes. Decode-only (no
+    # downscale / quantize / emit) so the measurement isolates the
+    # IDAT → raw-pixels cost — the part that scales with input size.
+    # See docs/audit/2026-05-22-audit.md § Finding 1 + decode-latency
+    # matrix section.
+    #
+    # Fixtures chosen from /usr/share to avoid bundling large blobs
+    # in the repo. If a fixture is missing on a CI box, the bench
+    # row is skipped (the iteration count drops to 0 and bench_report
+    # surfaces that visibly).
+
+    # 256² class: archlinux-logo.png is exactly 256×256.
+    var bh_dec_256 = bench_new("png_decode (256² class) — archlinux-logo.png");
+    var n_dec_256 = 50;
+    var pstr_probe_256[160];
+    if (png_decode_structure("/usr/share/pixmaps/archlinux-logo.png", &pstr_probe_256) == PNG_OK) {
+        bench_batch_start(bh_dec_256);
+        var jd256 = 0;
+        while (jd256 < n_dec_256) {
+            var pstr_d256[160];
+            png_decode_structure("/usr/share/pixmaps/archlinux-logo.png", &pstr_d256);
+            png_decode_pixels(&pstr_d256);
+            jd256 = jd256 + 1;
+        }
+        bench_batch_stop(bh_dec_256, n_dec_256);
+        bench_report(bh_dec_256);
+    }
+
+    # 1024² class: starfield.png is 1597×1198 (~1.9M pixels — between
+    # 1024² = 1M and 2048² = 4M, used as the "1024² class" sample).
+    var bh_dec_1k = bench_new("png_decode (1024² class) — starfield.png 1597×1198");
+    var n_dec_1k = 20;
+    var pstr_probe_1k[160];
+    if (png_decode_structure("/usr/share/grub/themes/starfield/starfield.png", &pstr_probe_1k) == PNG_OK) {
+        bench_batch_start(bh_dec_1k);
+        var jd1k = 0;
+        while (jd1k < n_dec_1k) {
+            var pstr_d1k[160];
+            png_decode_structure("/usr/share/grub/themes/starfield/starfield.png", &pstr_d1k);
+            png_decode_pixels(&pstr_d1k);
+            jd1k = jd1k + 1;
+        }
+        bench_batch_stop(bh_dec_1k, n_dec_1k);
+        bench_report(bh_dec_1k);
+    }
+
+    # 2048² class: sddm elarun background is 2560×1600 (~4M pixels —
+    # close to 2048² = 4.2M, used as the "2048² class" sample).
+    var bh_dec_2k = bench_new("png_decode (2048² class) — elarun background 2560×1600");
+    var n_dec_2k = 10;
+    var pstr_probe_2k[160];
+    if (png_decode_structure("/usr/share/sddm/themes/elarun/images/background.png", &pstr_probe_2k) == PNG_OK) {
+        bench_batch_start(bh_dec_2k);
+        var jd2k = 0;
+        while (jd2k < n_dec_2k) {
+            var pstr_d2k[160];
+            png_decode_structure("/usr/share/sddm/themes/elarun/images/background.png", &pstr_d2k);
+            png_decode_pixels(&pstr_d2k);
+            jd2k = jd2k + 1;
+        }
+        bench_batch_stop(bh_dec_2k, n_dec_2k);
+        bench_report(bh_dec_2k);
+    }
+
     return 0;
 }
 

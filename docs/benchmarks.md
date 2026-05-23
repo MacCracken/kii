@@ -67,3 +67,53 @@ Host: x86_64 Linux, single-core wall-clock via `clock_gettime`. Cyrius `6.0.1`. 
 **Headroom** (M6-specific):
 - Auto-detection uses one `ioctl TIOCGWINSZ` syscall per frame. Microseconds; not on any reasonable hot path.
 - The fit-vs-target geometry choice in `main.cyr` runs once per invocation; negligible.
+
+## v0.8.0 — M7 decode-latency matrix (DoS-bound)
+
+Host: x86_64 Linux, single-core wall-clock via `clock_gettime`. Cyrius `6.0.1`.
+Acceptance criterion (docs/development/roadmap.md § M7): capture decode
+latency across small / medium / large source resolutions to establish
+the DoS-relevant worst-case timing envelope. Decode-only — isolates
+`png_decode_structure + png_decode_pixels` from M5 pipeline cost.
+
+| Bench | Source | Pixels | Iterations | Per-op |
+|---|---|---:|---:|---:|
+| `png_decode (256² class)` | `/usr/share/pixmaps/archlinux-logo.png` (256×256, palette) | 65,536 | 50 | **1.8 ms** |
+| `png_decode (1024² class)` | `/usr/share/grub/themes/starfield/starfield.png` (1597×1198, RGB) | 1,913,206 | 20 | **647 ms** |
+| `png_decode (2048² class)` | `/usr/share/sddm/themes/elarun/images/background.png` (2560×1600, RGB) | 4,096,000 | 10 | **474 ms** |
+
+**Surprise**: the 2048² class is **faster** than the 1024² class
+(474 ms vs 647 ms), despite carrying 2.1× the pixel count. The 1024²
+fixture (starfield) is more visually complex → harder DEFLATE
+compression → larger relative IDAT → slower per-pixel inflate
+throughput. The 2048² fixture (a flat-gradient sddm background)
+compresses tighter and inflates faster despite being bigger.
+**Per-pixel decode throughput is content-dependent**, not strictly
+size-dependent.
+
+**Absolute upper bound at v0.8** is set by the M7(c) Finding 1 caps:
+`KII_MAX_PIXELS = 16,777,216` (4096²) and `KII_MAX_RAW_BYTES = 256 MB`.
+Any PNG breaching these is rejected at IHDR-validation with
+`PNG_ERR_DIMENSIONS` before any inflate or allocation. Extrapolating
+from the starfield-class throughput (~340 ns/pixel), worst-case
+4096²-class decode lands near **5–6 s** — well outside an attacker's
+useful DoS window, and bounded.
+
+**Implication**: future bench work would benefit from a multi-fixture
+sample per resolution class (flat gradient + high-entropy photo) to
+capture both content extremes per size class.
+
+## v0.8.0 — fuzz coverage (M7(b))
+
+Fuzz harness (`tests/kii.fcyr`) scaled to **3,011,000 iterations
+total** across five surfaces, all clean in **~16.4 s wall-clock**:
+
+| Surface | Iterations | Surface tested |
+|---|---:|---|
+| arg-parser | 10,000 | `kii_register_flags` + `flags_parse` against random argv |
+| **path-sanitizer** | **1,000,000** | `kii_path_has_control_bytes` against random byte paths |
+| **geometry** | **1,000,000** | `_kii_compute_target_geometry` + `_kii_compute_fit_geometry` against random dims |
+| **emit-pipeline** | **1,000** | `downscale_to_rgb` → `quantize_downscaled` → `emit_halfblock_row_buf` against random target dims on a real PNG |
+| **png-decoder** | **1,000,000** | `png_decode_structure` against random bytes (50% prefixed with valid sig+IHDR) |
+
+All five report zero crashes / contract violations.

