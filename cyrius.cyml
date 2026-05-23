@@ -18,5 +18,17 @@ output = "kii"
 #   v0.2.0 (M1)  — added "flags" (consumer: CLI parser)
 #   v0.4.0 (M3)  — added "sankoch" (consumer: PNG IDAT zlib_decompress)
 #                  + "thread" (sankoch's _sankoch_lock/_unlock wrap mutex_lock/mutex_unlock)
-# darshana (ANSI primitives, external dep) lands at v0.6.0 / M5.
 stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags", "sankoch", "thread"]
+
+# AGNOS first-party deps. v0.6.0 / M5 introduces darshana — the
+# canonical ANSI escape primitives library. kii's emit layer uses
+# darshana's tty_fg_256_buf for foreground 256-color escapes; the
+# background twin (tty_bg_256_buf) is not yet in darshana's surface,
+# so kii builds the CSI 48;5;N escape inline for now. Extracts to
+# darshana when a second consumer surfaces. Pinned tag per
+# AGNOS dep-lockin discipline.
+[deps.darshana]
+git = "https://github.com/MacCracken/darshana.git"
+path = "../darshana"
+tag = "0.5.3"
+modules = ["dist/darshana.cyr"]

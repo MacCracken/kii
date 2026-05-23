@@ -30,6 +30,8 @@
 include "src/cli.cyr"
 include "src/png.cyr"
 include "src/quant.cyr"
+include "src/downscale.cyr"
+include "src/emit.cyr"
 
 # argv cap. kii takes one positional path arg at most; 256 is
 # absurdly more than any plausible invocation but matches the
@@ -71,29 +73,27 @@ fn _print(s): i64 {
 }
 
 # Print "<path>: <W>x<H> <N> pixels (<color_type_name>) → 16-color\n"
-# to STDOUT. M4 acceptance success shape; supersedes M3's
-# `<path>: <W>x<H> decoded <N> pixels (<color_type_name>)`.
-# The arrow visually separates source format from quantization
-# target — read as "the pipeline took <source> all the way to
-# 16-color palette indices". Missing-IEND warning still rides
-# stderr separately (pipe-purity).
-fn _print_quant_summary(path, pstruct): i64 {
-    _print(path);
-    _print(": ");
+# to STDERR. M5 routes this to fd 2 since the ANSI frame now owns
+# stdout (pipe-purity for `kii img.png > frame.ansi`). M4 emitted
+# the same shape to stdout as the success line; the bytes are
+# identical, the destination is the only change.
+fn _eprint_quant_summary(path, pstruct): i64 {
+    _eprint(path);
+    _eprint(": ");
     var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
     var h = load64(pstruct + STRUCT_HEIGHT_OFFSET);
     var wbuf[16]; var wlen = fmt_int_buf(w, &wbuf);
-    syscall(1, 1, &wbuf, wlen);
-    _print("x");
+    syscall(1, 2, &wbuf, wlen);
+    _eprint("x");
     var hbuf[16]; var hlen = fmt_int_buf(h, &hbuf);
-    syscall(1, 1, &hbuf, hlen);
-    _print(" ");
+    syscall(1, 2, &hbuf, hlen);
+    _eprint(" ");
     var pix_count = w * h;
     var pbuf[24]; var pblen = fmt_int_buf(pix_count, &pbuf);
-    syscall(1, 1, &pbuf, pblen);
-    _print(" pixels (");
-    _print(png_color_type_name(load64(pstruct + STRUCT_COLOR_TYPE_OFFSET)));
-    _print(") → 16-color\n");
+    syscall(1, 2, &pbuf, pblen);
+    _eprint(" pixels (");
+    _eprint(png_color_type_name(load64(pstruct + STRUCT_COLOR_TYPE_OFFSET)));
+    _eprint(") → 16-color\n");
     return 0;
 }
 
@@ -102,7 +102,7 @@ fn _print_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 0.5.0");
+    println("kii 0.6.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -115,7 +115,9 @@ fn print_usage(fs): i64 {
     _eprint("\nExamples:\n");
     _eprint("  kii --version                              # version + etymology\n");
     _eprint("  kii --help                                 # this text\n");
-    _eprint("  kii image.png                              # render to terminal (M5+)\n");
+    _eprint("  kii image.png                              # render to terminal (80x24)\n");
+    _eprint("  kii --verbose image.png                    # frame + dimensions/format on stderr\n");
+    _eprint("  kii image.png > frame.ansi                 # capture pure ANSI bytes\n");
     return 0;
 }
 
@@ -210,12 +212,12 @@ fn main(): i64 {
     # M2(d); until then exit 1 with a parenthetical WIP marker.
     #
     # png_decode_structure handles png_crc_init internally; no
-    # need to call it here. pstruct is 128 bytes (16 i64 slots)
-    # to cover the M4(d)-extended layout (M3 fields + plte_buf +
-    # plte_size + quantized_buf + quantized_size). M5 wires the
-    # quantized buffer to actual ANSI half-block emission.
+    # need to call it here. pstruct is 160 bytes (20 i64 slots)
+    # to cover the M5(b)-extended layout (M4 fields + downscaled_buf
+    # + downscaled_w + downscaled_h). M5(c) wires emit_halfblock to
+    # the downscaled-then-quantized buffer.
     var path = flags_positional(fs, 0);
-    var pstruct[128];
+    var pstruct[160];
     var rc = png_decode_structure(path, &pstruct);
     if (rc == PNG_ERR_OPEN) {
         _eprint_path_msg(path, "cannot open file");
@@ -269,22 +271,44 @@ fn main(): i64 {
         return KII_EXIT_RUN;
     }
 
-    # M4: pixel decode succeeded → run quantization. Currently
-    # quantize_nearest_image has no fine-grained error codes; a
-    # non-zero return signals "internal" failure (OOM, missing
-    # PLTE on a palette PNG that somehow slipped past png_decode_
-    # structure). Caller surface stays single-message.
-    var qrc = quantize_nearest_image(&pstruct);
-    if (qrc != 0) {
-        _eprint_path_msg(path, "quantization failed (palette PNG missing PLTE, or OOM)");
+    # M5 pipeline: downscale → quantize → emit. The M4 single-shot
+    # quantize_nearest_image is bypassed in production but kept for
+    # backward compat with M4's per-color_type extraction tests
+    # (downscale.cyr's _extract_rgb mirrors that logic in the new
+    # flow). EMIT_COLS/EMIT_SRC_ROWS are hardcoded 80/48 at v0.6.0;
+    # M6 reads tty_winsize and overrides via --width.
+    var drc = downscale_to_rgb(&pstruct, EMIT_COLS, EMIT_SRC_ROWS);
+    if (drc != 0) {
+        _eprint_path_msg(path, "downscale failed (palette PNG missing PLTE, or OOM)");
         return KII_EXIT_RUN;
     }
 
-    # M4 success line goes to STDOUT (pipe-pure) + exit 0. The
-    # quantized palette indices live at STRUCT_QUANTIZED_BUF_OFFSET;
-    # M5 reads them to emit half-block ANSI glyphs. Missing-IEND
-    # warning still rides stderr per spec § 5.3 tolerance.
-    _print_quant_summary(path, &pstruct);
+    # Quantize the 80×48 RGB-triple buffer into 80×48 palette indices.
+    # quantize_downscaled wraps quantize_rgb_buf with the alloc +
+    # pstruct-update boilerplate; the lower-level fn is the future
+    # entry point for animated frames / multi-format decoders.
+    var qrc = quantize_downscaled(&pstruct);
+    if (qrc != 0) {
+        _eprint_path_msg(path, "quantization failed (OOM)");
+        return KII_EXIT_RUN;
+    }
+
+    # Frame to stdout via per-row buffered writes. emit_halfblock
+    # reads STRUCT_QUANTIZED_BUF + DOWNSCALED_W/H. SIGPIPE-safe (each
+    # row resets SGR; truncated writes leave the terminal clean).
+    var erc = emit_halfblock(&pstruct);
+    if (erc != 0) {
+        _eprint_path_msg(path, "ANSI emit failed (downscale or quantize not run)");
+        return KII_EXIT_RUN;
+    }
+
+    # --verbose: write the M4-shaped summary to stderr AFTER the
+    # frame so a TTY reader sees `kii img.png` paint the image, then
+    # see the dimensions/format line on the next stderr-routed line.
+    # Pure-pipe consumers (`kii img.png | feh -`) don't pay for it.
+    if (flags_get_bool(fs, KII_F_VERBOSE) == 1) {
+        _eprint_quant_summary(path, &pstruct);
+    }
     if (load64(&pstruct + STRUCT_SEEN_IEND_OFFSET) == 0) {
         _eprint_path_msg(path, "warning: incomplete PNG (no IEND chunk seen)");
     }

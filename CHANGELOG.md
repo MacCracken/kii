@@ -4,6 +4,58 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-22
+
+### Added
+
+- **M5 — half-block (`▀`) ANSI emit + per-row 256-color escapes**. `kii image.png` now reads a PNG, decodes it, downscales to 80×48 RGB triples (nearest-neighbor), quantizes to 16-color palette indices, and emits half-block glyphs to **stdout** sized to a hardcoded 80×24 — the first user-visible terminal output. Pipe-pure (`kii img.png > frame.ansi` captures just the frame). Per-character format: `\x1b[38;5;<fg>m\x1b[48;5;<bg>m▀` (top half = FG, bottom half = BG); `\x1b[0m\n` per row.
+- **`src/downscale.cyr`** — new module. Nearest-neighbor RGB resampler. `downscale_to_rgb(pstruct, dst_w, dst_h)` walks each dst pixel, computes `sx = (dx × src_w) / dst_w` (integer truncation), and writes a packed RGB triple at the source `(sx, sy)` per the color_type. Per-color_type extraction (`_extract_rgb`) handles greyscale broadcast / RGB pass-through / PLTE expansion / alpha-drop / 16-bit-depth truncation in one place. Output: `STRUCT_DOWNSCALED_BUF` + `_W` + `_H`.
+- **`src/emit.cyr`** — new module. Half-block emit layer.
+  - `_emit_bg_256_buf(buf, pos, n)` — CSI `48;5;Nm` byte-pack (darshana's BG-256 twin not yet shipped; extract on 2nd consumer per the AGNOS pattern).
+  - `emit_halfblock_row_buf(qbuf, sw, row, buf, pos)` — buffer-targeting variant; unit-testable without subprocessing stdout.
+  - `emit_halfblock(pstruct)` — fd-1 wrapper, one `write(2)` per terminal row (~2 KB each, 24 writes per frame).
+- **`src/quant.cyr` extensions**:
+  - `quantize_rgb_buf(rgb_buf, n_pixels, out_buf)` — PNG-agnostic RGB-triple → palette-index transform. Reusable for future animated-frame / multi-format consumers.
+  - `quantize_downscaled(pstruct)` — struct-aware wrapper that allocs `dw × dh` bytes, calls `quantize_rgb_buf`, stores into `STRUCT_QUANTIZED_BUF/_SIZE`. The M5+ pipeline replacement for `quantize_nearest_image`; the older fn stays for M4-test backward compat.
+- **`src/png.cyr` extensions**: struct grew from 15 to 18 slots (160 bytes): `STRUCT_DOWNSCALED_BUF_OFFSET` (120) + `_W_OFFSET` (128) + `_H_OFFSET` (136).
+- **`src/cli.cyr`**: activated `--verbose` / `-v` (was reserved in M1's flag indices). With the frame now on stdout, the M4 `<path>: <W>x<H> N pixels … → 16-color` summary moves behind this flag and rides stderr.
+- **`darshana` 0.5.3 added to `cyrius.cyml [deps.darshana]`** — first external git dep. Provides `tty_fg_256_buf` (foreground CSI 38;5;Nm) + `tty_sgr_reset_buf` (CSI 0m for buffer composition). The BG twin lives in `src/emit.cyr` locally; extracts to darshana when a 2nd consumer surfaces.
+
+### Changed
+
+- `src/main.cyr`:
+  - Pipeline restructured: `png_decode_structure` → `png_decode_pixels` → `downscale_to_rgb(80, 48)` → `quantize_downscaled` → `emit_halfblock`. Three new error paths (downscale / quantize / emit failures) each with a distinct stderr line.
+  - `_print_quant_summary` → `_eprint_quant_summary` (now writes the M4-shape summary to stderr, gated behind `--verbose`).
+  - `print_usage` Examples list updated: replaced "render to terminal (M5+)" placeholder with concrete 80×24 + `--verbose` + capture examples.
+  - `var pstruct[128]` → `var pstruct[160]` to cover the 20-slot M5(b)-extended layout.
+- `print_version` literal bumped to `kii 0.6.0`.
+
+### Tests
+
+- `tests/kii.tcyr` — **382 assertions** (was 287 at v0.5.0).
+  - **M5(b) downscale** (38): identity 2×2 → 2×2 byte-identical; 2×2 → 4×4 nearest replicate (every quadrant covers source pixel); 2×2 → 1×1 top-left wins; rejects ungated calls + `dst_w <= 0`; RAMGON 1152×925 → 80×48 (11,520 bytes, non-zero); palette-PNG (archlinux-logo.png) per-color_type normalization.
+  - **M5(c) emit** (57): `quantize_rgb_buf` 4-pixel canonical (red→1, blue→4, black→0, white→15); `quantize_downscaled` end-to-end + ungated reject; `_emit_bg_256_buf` exact byte sequences for 1/2/3-digit indices + bounds reject; `emit_halfblock_row_buf` exact byte layout for single-char (26 bytes), 2-col checkerboard (49 bytes), 4-col solid (89 bytes); `emit_halfblock` rejects ungated calls + odd source height + zero width.
+
+### Bench
+
+- `quantize_nearest_rgb @ 1024×1024`: **269 ns/op** (re-measured; ~5 ns noise vs the 274 at v0.5.0).
+- **`end-to-end RAMGON.png → 80×24 frame`: 747 ms/iter** (50 iters; full pipeline including PNG decode + downscale + quantize + 24 in-process row builds). Dominated by `png_decode_pixels` on the 4.26 MB inflated RGBA buffer (~98 % share).
+
+### Real-world smoke
+
+- `RAMGON.png` (1152×925 RGBA) → 40,770 bytes of ANSI on stdout, exit 0. `--verbose` adds the M4-shape summary line on stderr.
+- `/usr/share/pixmaps/archlinux-logo.png` (256×256 palette via PLTE) → renders cleanly.
+- `/usr/share/pixmaps/kitty.png` (256×256 RGBA) → renders cleanly.
+
+### Out of scope (deferred per M5 acceptance)
+
+- **Bilinear / Lanczos downscale** — nearest-neighbor is the tier-1 floor; perceptually-better filters land in post-v1 alongside dithering.
+- **Terminal-size detection** — hardcoded 80×24 at v0.6.0; `ioctl TIOCGWINSZ` is M6 / v0.7.0 work.
+- **Visual review against `chafa --colors 16`** — carried to M6 alongside the reproducible terminal-size story.
+- **Render-a-real-checkerboard-PNG end-to-end** — in-process `emit_halfblock_row_buf` shape tests pin the emit contract; the fixture-PNG variant adds a checkerboard builder that's not strictly required for M5 acceptance.
+- **`tty_bg_256_buf` extraction to darshana** — kept inline in `src/emit.cyr` until a second consumer surfaces.
+- **Fuzz coverage for downscale / quantize / emit** — captured in `docs/doc-health.md` as M7-audit work; needs a valid-PNG-fixture-then-random-dst-dims surface.
+
 ## [0.5.0] — 2026-05-22
 
 ### Added

@@ -1,0 +1,155 @@
+# emit.cyr — half-block (▀) ANSI emit layer.
+#
+# v0.6.0 / M5 — the first user-visible terminal output for kii. The
+# pipeline up to M4 quantizes pixels to 16-color palette indices and
+# stashes them at STRUCT_QUANTIZED_BUF_OFFSET; this module reads that
+# buffer two source-rows at a time and emits half-block glyphs so each
+# terminal character carries TWO source pixels stacked vertically:
+#   - top half     → FG color via CSI 38;5;<idx>
+#   - bottom half  → BG color via CSI 48;5;<idx>
+#   - glyph        → U+2580 UPPER HALF BLOCK (▀)
+#
+# Why half-block: doubles vertical resolution per character row with
+# no extra width cost. This is the chafa / jp2a / viu canonical floor
+# glyph and the BBS/MUD aesthetic kii was scoped to deliver.
+#
+# Why 256-color indexed escapes for a "16-color" output: the lower 16
+# entries of the xterm 256-color cube are the same ANSI 0–15 palette
+# kii's quant.cyr produces. `\x1b[38;5;Nm` with N ∈ [0, 15] is the
+# widest-compat way to address them (named SGR 30–37 / 90–97 +
+# 40–47 / 100–107 splits FG/BG asymmetrically; the indexed form is
+# uniform). M6 may revisit if a target terminal rejects 256-color.
+#
+# Output sizing: hardcoded 80×24 at v0.6.0 — terminal-size detection
+# is M6. Source buffer is therefore 80×48 (24 rows × 2 source pixels
+# per char row); downscaling to that size happens BEFORE quantization
+# in downscale.cyr (M5(b)).
+#
+# darshana surface used:
+#   tty_fg_256_buf(buf, pos, n)   — appends CSI 38;5;Nm
+#   tty_sgr_reset_buf(buf, pos)   — appends CSI 0m
+# kii-local helper:
+#   _emit_bg_256_buf(buf, pos, n) — appends CSI 48;5;Nm (darshana
+#                                    doesn't yet expose a BG variant;
+#                                    extract to darshana on 2nd consumer)
+
+include "src/palette.cyr"
+include "src/png.cyr"
+
+# Half-block output geometry. Hardcoded for M5; M6 swaps to detected
+# size via tty_winsize. EMIT_SRC_ROWS = EMIT_ROWS × 2 because every
+# terminal row eats two source pixel rows.
+var EMIT_COLS     = 80;
+var EMIT_ROWS     = 24;
+var EMIT_SRC_ROWS = 48;
+
+# UTF-8 byte sequence for U+2580 UPPER HALF BLOCK (▀). Hot path —
+# emitted once per character (up to 80 × 24 = 1920 times per frame),
+# so we keep it as raw bytes rather than walking a string literal.
+var EMIT_HALFBLOCK_B0 = 0xE2;
+var EMIT_HALFBLOCK_B1 = 0x96;
+var EMIT_HALFBLOCK_B2 = 0x80;
+
+# CSI 48;5;Nm — background-color twin of darshana's tty_fg_256_buf.
+# Appends to caller buf at `pos`; returns new pos, or -1 if n is
+# outside [0, 255]. Local to kii while darshana's surface lacks a BG
+# variant ("Background twin not yet shipped — wait for a consumer
+# ask" per darshana/src/ansi.cyr v0.5.3). Once a second consumer in
+# the AGNOS surface needs it, lift to darshana per the
+# extract-on-2nd-consumer pattern.
+fn _emit_bg_256_buf(buf, pos, n) {
+    if (n < 0 || n > 255) { return 0 - 1; }
+    store8(buf + pos, 27);  pos = pos + 1;        # ESC
+    store8(buf + pos, 91);  pos = pos + 1;        # '['
+    store8(buf + pos, 52);  pos = pos + 1;        # '4'
+    store8(buf + pos, 56);  pos = pos + 1;        # '8'
+    store8(buf + pos, 59);  pos = pos + 1;        # ';'
+    store8(buf + pos, 53);  pos = pos + 1;        # '5'
+    store8(buf + pos, 59);  pos = pos + 1;        # ';'
+    # Inline 1–3-digit decimal emit (same shape as darshana's
+    # _ansi_emit_u8); avoids exposing darshana's private helper.
+    if (n >= 100) {
+        store8(buf + pos, 48 + n / 100);          pos = pos + 1;
+        store8(buf + pos, 48 + (n / 10) % 10);    pos = pos + 1;
+        store8(buf + pos, 48 + n % 10);           pos = pos + 1;
+    } else { if (n >= 10) {
+            store8(buf + pos, 48 + n / 10);           pos = pos + 1;
+            store8(buf + pos, 48 + n % 10);           pos = pos + 1;
+        } else {
+            store8(buf + pos, 48 + n);                pos = pos + 1;
+        } }
+    store8(buf + pos, 109); pos = pos + 1;        # 'm'
+    return pos;
+}
+
+# emit_halfblock_row_buf — render ONE terminal row of half-block
+# glyphs into a caller-owned byte buffer. Returns the new pos (byte
+# count appended), or -1 on bad index.
+#
+# `row` is the terminal row (0 ≤ row < src_h / 2), so we read source
+# rows (2*row) and (2*row+1). `qbuf` is the source-resolution
+# palette-index buffer (qbuf[sy*sw + sx] = palette index in [0,15]).
+#
+# Buffer-targeting (not a fd-1 write) so tests can assert on the
+# exact byte sequence without subprocessing. emit_halfblock below
+# wraps this for the production fd-1 case.
+fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
+    var col = 0;
+    while (col < sw) {
+        var top_idx = load8(qbuf + (2 * row) * sw + col);
+        var bot_idx = load8(qbuf + (2 * row + 1) * sw + col);
+        pos = tty_fg_256_buf(buf, pos, top_idx);
+        if (pos < 0) { return 0 - 1; }
+        pos = _emit_bg_256_buf(buf, pos, bot_idx);
+        if (pos < 0) { return 0 - 1; }
+        store8(buf + pos, EMIT_HALFBLOCK_B0); pos = pos + 1;
+        store8(buf + pos, EMIT_HALFBLOCK_B1); pos = pos + 1;
+        store8(buf + pos, EMIT_HALFBLOCK_B2); pos = pos + 1;
+        col = col + 1;
+    }
+    # End-of-row reset + newline so each row resets SGR state before
+    # the next row's FG/BG escapes overwrite it. Without the reset
+    # mid-frame an aborted write (eg. SIGPIPE) could leave the
+    # terminal stuck in a colored state.
+    pos = tty_sgr_reset_buf(buf, pos);
+    store8(buf + pos, 10);                       # '\n'
+    pos = pos + 1;
+    return pos;
+}
+
+# emit_halfblock — render the full quantized frame to fd 1 (stdout).
+# Reads STRUCT_DOWNSCALED_W/H + STRUCT_QUANTIZED_BUF from pstruct.
+# Per-row buffering: one write(2) per terminal row, ~2 KB each —
+# 24 writes per frame vs. 1920+ if we wrote per-character.
+#
+# Returns 0 on success; -1 on:
+#   - quantized buf not populated (quantize_downscaled wasn't called)
+#   - dimensions invalid (W <= 0, H <= 0, or H not even — half-block
+#     needs paired source rows so an odd source-height would dangle)
+#
+# Final \x1b[0m at frame end is redundant (every row ends with one)
+# but cheap, and ensures the terminal is clean even if the caller
+# truncates the write.
+fn emit_halfblock(pstruct) {
+    var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
+    var sw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
+    var sh   = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
+    if (qbuf == 0)        { return 0 - 1; }
+    if (sw <= 0 || sh <= 0) { return 0 - 1; }
+    if (sh % 2 != 0)      { return 0 - 1; }
+    var t_rows = sh / 2;
+
+    # Per-row scratch: at sw=80 with 1–2-digit palette indices in
+    # [0,15], each char = 8 (FG) + 8 (BG) + 3 (glyph) = 19 bytes;
+    # 80 × 19 + 5 (reset + LF) = 1525 bytes. 2048 has 500 B headroom
+    # and tolerates 3-digit indices for the post-v1 256-color path.
+    var line_buf[2048];
+    var row = 0;
+    while (row < t_rows) {
+        var pos = emit_halfblock_row_buf(qbuf, sw, row, &line_buf, 0);
+        if (pos < 0) { return 0 - 1; }
+        syscall(1, 1, &line_buf, pos);
+        row = row + 1;
+    }
+    return 0;
+}

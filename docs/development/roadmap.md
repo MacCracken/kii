@@ -12,13 +12,13 @@ The contract for tagging v1.0:
 
 - [x] CLI surface frozen — `--help`, `--version`, `--width N`, positional path arg, `--color N` (8 or 16) all stable (shipped at v0.2.0 / M1)
 - [ ] PNG decoder handles the W3C test suite's "basic" image set without crashing on any malformed input from the "broken" set (PNG decoder shipped at v0.4.0 / M3; W3C-suite acceptance pass still future)
-- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (quantizer shipped at v0.5.0 / M4; visual review pending M5 emit)
-- [ ] Half-block glyph emission at terminal-detected geometry works in Linux console, xterm, Alacritty, kitty, and tmux (M5 + M6 work)
+- [ ] 16-color quantization output passes visual review against `chafa --colors 16` on a curated 10-image test set (quantizer shipped at v0.5.0 / M4; visual review carried forward from M5 to M6 alongside the stable terminal-size story)
+- [ ] Half-block glyph emission at terminal-detected geometry works in Linux console, xterm, Alacritty, kitty, and tmux (half-block emit shipped at v0.6.0 / M5 hardcoded 80×24; terminal-detection at M6)
 - [ ] At least one downstream consumer (BBS or MUD app) integrated and green
 - [x] CHANGELOG complete from v0.1.0 onward (rolling per release; v0.1.0–v0.5.0 all entered)
 - [ ] Security audit pass — PNG fuzz harness clean, ANSI-escape-injection paths reviewed (`docs/audit/YYYY-MM-DD-audit.md`)
-- [x] Test coverage: 100+ assertions across all modules (287 as of v0.5.0)
-- [ ] Benchmarks captured in `docs/benchmarks.md` — image-decode latency at 256×256 / 1024×1024 / 2048×2048; quantization latency at terminal-sized output (quantization bench at 1024×1024 captured at v0.5.0 / M4; decode-latency matrix at three resolutions still pending)
+- [x] Test coverage: 100+ assertions across all modules (382 as of v0.6.0)
+- [ ] Benchmarks captured in `docs/benchmarks.md` — image-decode latency at 256×256 / 1024×1024 / 2048×2048; quantization latency at terminal-sized output (quantization bench at 1024×1024 + end-to-end RAMGON → 80×24 frame captured at v0.6.0 / M5; decode-latency matrix at three resolutions still pending — likely M7 audit work)
 
 ## Milestones
 
@@ -100,21 +100,28 @@ Decoded pixels mapped to the Linux-console 16-color ANSI palette via Euclidean-R
 
 **Sub-bite cadence**: (a) palette table + accessors → (b) scalar quantizer → (c) PLTE capture → (d) image-wide quantizer + close-out (bench + version bump).
 
-### M5 — Half-block glyph emit + per-row ANSI color (v0.6.0)
+### M5 — Half-block glyph emit + per-row ANSI color (v0.6.0) — ✅ shipped 2026-05-22
 
-**Goal**: the working CLI. `kii image.png` reads a PNG, decodes it, quantizes to 16 colors, emits half-block glyphs (`▀`) to stdout with per-character FG/BG ANSI color escapes. Each terminal character represents two source pixels stacked vertically (top half color = FG, bottom half = BG). Output is sized to a hardcoded 80×24 (terminal-size detection at M6).
+The working CLI. `kii image.png` reads a PNG, decodes it, downscales to 80×48 RGB triples (nearest-neighbor), quantizes to 16 colors, and emits half-block glyphs (`▀`) to stdout with per-character FG/BG ANSI color escapes. Each terminal character represents two source pixels stacked vertically (top half color = FG, bottom half = BG). Output is hardcoded 80×24 at v0.6.0 (terminal-size detection at M6).
 
-**Acceptance criteria**:
-- [ ] `kii image.png` produces visible ANSI art on stdout
-- [ ] Output is exactly 80 chars wide × 24 rows tall (each row = `▀` glyphs with paired FG/BG colors)
-- [ ] Source PNG is downscaled (bilinear or nearest — pick at impl time) to 80×48 source pixels before quantization
-- [ ] ANSI escape format: `\x1b[38;5;<fg>m\x1b[48;5;<bg>m▀` per character; final `\x1b[0m` reset at end of line + end of frame
-- [ ] Test: render a checkerboard PNG; assert checkerboard pattern in output
-- [ ] Test: render a solid-color PNG; assert all-same-glyph output
-- [ ] Visual review: side-by-side comparison against `chafa --colors 16 --size 80x24 image.png` on a curated 5-image test set
-- [ ] CHANGELOG + VERSION → 0.6.0
+**Delivered**:
+- ✅ `kii image.png` produces visible ANSI art on stdout (~40 KB for RAMGON.png at 80×24, exit 0, pipe-pure)
+- ✅ Output is exactly 80 chars wide × 24 rows tall (each row = `▀` glyphs with paired FG/BG colors + `\x1b[0m\n` terminator)
+- ✅ Source PNG is downscaled (nearest-neighbor — picked for tier-1 floor; bilinear is post-v1) to 80×48 source pixels before quantization
+- ✅ ANSI escape format: `\x1b[38;5;<fg>m\x1b[48;5;<bg>m▀` per character via darshana's `tty_fg_256_buf` + kii-local `_emit_bg_256_buf` (background twin not yet in darshana); `\x1b[0m` reset at end of each row
+- ✅ Test: `emit_halfblock_row_buf` shape verified at single-char / 2-col checkerboard / 4-col solid (57 M5(c) assertions cover exact byte sequences + bounds rejection)
+- ✅ Test: `downscale_to_rgb` exercised at identity / upscale / shrink / 80×48 RAMGON / palette-PNG normalization (38 M5(b) assertions)
+- ✅ `--verbose` flag activated (was reserved in M1's flag indices) — moves the M4 summary line to stderr after the frame; pipe-pure by default
+- ✅ Bench: `end-to-end RAMGON.png → 80×24 frame = 747 ms/iter` (50 iters; ~98% in `png_decode_pixels`) — captured in [`docs/benchmarks.md`](../benchmarks.md)
+- ✅ CHANGELOG + VERSION → 0.6.0
 
-**Dep gates**: `darshana` ≥ 0.3.5 added to `cyrius.cyml [deps]` (for ANSI escape primitives + reset codes).
+**Deferred** (per acceptance — captured as M6 carry-forward):
+- Visual review against `chafa --colors 16 --size 80x24 image.png` on 5-image curated set — needs `chafa` installed + a stable terminal-size story; deferred to alongside M6 since M6 lands the geometry that makes the comparison reproducible.
+- Render-a-real-checkerboard-PNG end-to-end (vs. the in-process `emit_halfblock_row_buf` shape tests) — adds a fixture PNG builder for PLTE-driven checkerboard; the existing M5(c) coverage already pins the emit shape and quant outputs.
+
+**Deps added at M5**: `darshana 0.5.3` — first external git dep (was only stdlib deps before). Pinned via `cyrius.cyml [deps.darshana].tag`.
+
+**Sub-bite cadence**: (a) darshana dep + `emit.cyr` scaffold → (b) `downscale.cyr` (nearest-neighbor + per-color_type RGB normalize + new struct slots) → (c) `quantize_rgb_buf` + `quantize_downscaled` + `emit_halfblock` + pipeline restructure + `--verbose` flag → (d) close-out (bench + state.md + CHANGELOG + version bump).
 
 ### M6 — Terminal-size auto-detect + `--width` override (v0.7.0)
 

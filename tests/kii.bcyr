@@ -1,46 +1,80 @@
-# kii benchmarks — M4 quantization latency.
+# kii benchmarks — M4 quantization + M5 end-to-end latency.
 # Stdlib auto-included via cyrius.cyml.
 #
 # M4 acceptance criterion (docs/development/roadmap.md):
 #   "Bench: quantization latency at 1024×1024 captured in
 #    docs/benchmarks.md"
-#
-# The bench drives quantize_nearest_rgb in a 1024×1024 = 1,048,576-
-# iteration loop, varying the input RGB to exercise different
-# palette-distance branches. Result is per-op ns reported by
-# lib/bench.cyr's bench_report.
+# M5 acceptance criterion (docs/development/roadmap.md):
+#   "Bench: end-to-end PNG → 80×24 ANSI for RAMGON.png"
 #
 # Pattern: bench_new → bench_batch_start → tight loop →
 # bench_batch_stop → bench_report. For sub-1µs ops use batch_size
 # ≥ 1000 to amortize clock_gettime overhead (~240 ns per
-# start/stop pair on x86_64 Linux). 1M iterations is well above
-# that floor.
+# start/stop pair on x86_64 Linux); 1M iterations clears that floor.
+# For coarser-grain benches (full pipeline at ~ms-class latency),
+# 50 iterations over a real fixture is enough to stabilize median.
 
 include "src/quant.cyr"
+include "src/png.cyr"
+include "src/downscale.cyr"
+include "src/emit.cyr"
+
+# Per-iteration scratch sink for emit_halfblock_row_buf: 2 KB at row
+# scope (M5 emit produces at most ~1.7 KB per row at 80 cols × idx 0–15).
+# Module-scope `var arr[N]` = N × u64 = 16384 bytes total; we use
+# the first 2 KB. Avoids per-iter alloc cost in the bench loop.
+var _bench_emit_scratch[2048];
 
 fn main(): i64 {
     alloc_init();
     palette_init();
 
-    var bh = bench_new("quantize_nearest_rgb @ 1024×1024");
-    var n  = 1048576;   # 1024 × 1024
-    bench_batch_start(bh);
+    # ---- M4 bench: scalar quantizer ---------------------------------
+    var bh1 = bench_new("quantize_nearest_rgb @ 1024×1024");
+    var n1  = 1048576;
+    bench_batch_start(bh1);
     var i = 0;
-    while (i < n) {
-        # Vary RGB to exercise different palette branches —
-        # walking through R / G / B as the iteration count rises
-        # hits every 24-bit color over the full range. Pure-axis
-        # quantization (only R changing, say) hits a degenerate
-        # case where the same palette entry wins; this mix avoids
-        # that.
+    while (i < n1) {
         var r  = i & 0xFF;
         var g  = (i >> 8) & 0xFF;
         var bb = (i >> 16) & 0xFF;
         quantize_nearest_rgb(r, g, bb);
         i = i + 1;
     }
-    bench_batch_stop(bh, n);
-    bench_report(bh);
+    bench_batch_stop(bh1, n1);
+    bench_report(bh1);
+
+    # ---- M5 bench: end-to-end RAMGON → 80×24 ANSI -------------------
+    # Drive the full pipeline 50 iterations:
+    #   png_decode_structure + png_decode_pixels + downscale_to_rgb
+    #   + quantize_downscaled + emit_halfblock_row_buf (per row).
+    # We exercise emit_halfblock_row_buf in-process (writing into a
+    # module-scope scratch buf) rather than emit_halfblock so the
+    # syscall(write, fd 1) cost doesn't dominate the measurement —
+    # this is the closest fair comparison of decode + render CPU
+    # cost. Real-world `kii img.png` adds 24 × write(2) ≈ tens of µs.
+    var bh2 = bench_new("end-to-end RAMGON.png → 80×24 frame");
+    var n2 = 50;
+    bench_batch_start(bh2);
+    var j = 0;
+    while (j < n2) {
+        var pstr_b[160];
+        png_decode_structure("RAMGON.png", &pstr_b);
+        png_decode_pixels(&pstr_b);
+        downscale_to_rgb(&pstr_b, 80, 48);
+        quantize_downscaled(&pstr_b);
+        # Walk all 24 terminal rows, writing each into the scratch buf.
+        var qb = load64(&pstr_b + STRUCT_QUANTIZED_BUF_OFFSET);
+        var row = 0;
+        while (row < 24) {
+            emit_halfblock_row_buf(qb, 80, row, &_bench_emit_scratch, 0);
+            row = row + 1;
+        }
+        j = j + 1;
+    }
+    bench_batch_stop(bh2, n2);
+    bench_report(bh2);
+
     return 0;
 }
 
