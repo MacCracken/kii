@@ -18,6 +18,7 @@
 include "src/cli.cyr"
 include "src/png.cyr"
 include "src/palette.cyr"
+include "src/quant.cyr"
 
 # ---- Test-only PNG fixture builders ---------------------------------
 # Module-scope helpers so they don't clutter main(). All write to
@@ -917,15 +918,83 @@ fn main() {
     # Defensive — guard against accidentally writing > 0xFF
     # (Cyrius store8 truncates, but a typo like 1700 would still
     # be wrong even after truncation).
-    var i = 0;
+    var pi = 0;
     var all_bounded = 1;
-    while (i < 16) {
-        if (palette_r(i) < 0 || palette_r(i) > 255) { all_bounded = 0; }
-        if (palette_g(i) < 0 || palette_g(i) > 255) { all_bounded = 0; }
-        if (palette_b(i) < 0 || palette_b(i) > 255) { all_bounded = 0; }
-        i = i + 1;
+    while (pi < 16) {
+        if (palette_r(pi) < 0 || palette_r(pi) > 255) { all_bounded = 0; }
+        if (palette_g(pi) < 0 || palette_g(pi) > 255) { all_bounded = 0; }
+        if (palette_b(pi) < 0 || palette_b(pi) > 255) { all_bounded = 0; }
+        pi = pi + 1;
     }
     assert_eq(all_bounded, 1, "every palette byte ∈ [0, 255]");
+
+    # ---- M4(b) — quantize_nearest_rgb (scalar) --------------------
+    # Acceptance criteria per docs/development/roadmap.md M4:
+    #   pure-red → 1, pure-blue → 4, white → 15, black → 0.
+    # Plus the natural extensions to green / yellow / cyan / magenta.
+    # Arithmetic sanity (for the curious): pure-red (255,0,0) vs
+    # entry 1 (170,0,0) gives dist² = 85² = 7225; vs entry 9
+    # (255,85,85) gives 0 + 85² + 85² = 14450. Entry 1 wins.
+    test_group("M4(b) — quantize_nearest_rgb canonical pixels");
+    assert_eq(quantize_nearest_rgb(255, 0,   0  ), 1,  "pure red → 1 (red)");
+    assert_eq(quantize_nearest_rgb(0,   0,   255), 4,  "pure blue → 4 (blue)");
+    assert_eq(quantize_nearest_rgb(255, 255, 255), 15, "pure white → 15 (bright white)");
+    assert_eq(quantize_nearest_rgb(0,   0,   0  ), 0,  "pure black → 0 (black)");
+    assert_eq(quantize_nearest_rgb(0,   255, 0  ), 2,  "pure green → 2 (green)");
+    assert_eq(quantize_nearest_rgb(255, 255, 0  ), 11, "pure yellow → 11 (bright yellow)");
+    assert_eq(quantize_nearest_rgb(0,   255, 255), 14, "pure cyan → 14 (bright cyan)");
+    assert_eq(quantize_nearest_rgb(255, 0,   255), 13, "pure magenta → 13 (bright magenta)");
+
+    test_group("M4(b) — each palette entry round-trips to its own index");
+    # Every palette entry's exact RGB should map back to its own
+    # index. Ties broken by lowest index, so identical entries
+    # would map to the first occurrence — but we know the table
+    # has 16 distinct colors so this is a clean round-trip.
+    var qi = 0;
+    while (qi < 16) {
+        var rt = quantize_nearest_rgb(palette_r(qi), palette_g(qi), palette_b(qi));
+        assert_eq(rt, qi, "palette entry round-trips");
+        qi = qi + 1;
+    }
+
+    test_group("M4(b) — brightness gradient maps to monotonic luminance");
+    # The 16-color palette isn't sorted by luminance (entry 8 is
+    # dark gray, entry 7 is light gray — bigger index doesn't
+    # mean brighter). So the gradient acceptance criterion is
+    # phrased at the LUMINANCE level: as input brightness rises
+    # the quantized entry's brightness rises (non-decreasing).
+    var idx_black = quantize_nearest_rgb(0,   0,   0  );
+    var idx_dark  = quantize_nearest_rgb(50,  50,  50 );
+    var idx_mid   = quantize_nearest_rgb(128, 128, 128);
+    var idx_light = quantize_nearest_rgb(200, 200, 200);
+    var idx_white = quantize_nearest_rgb(255, 255, 255);
+    assert_eq(idx_black, 0,  "(0,0,0) → 0 (black)");
+    assert_eq(idx_dark,  8,  "(50,50,50) → 8 (dark gray)");
+    assert_eq(idx_mid,   7,  "(128,128,128) → 7 (light gray)");
+    assert_eq(idx_light, 7,  "(200,200,200) → 7 (light gray)");
+    assert_eq(idx_white, 15, "(255,255,255) → 15 (bright white)");
+    # Luminance check: sum of RGB for each chosen entry must
+    # be non-decreasing across the gradient. This is the actual
+    # "monotone-vary" property the acceptance criterion calls for.
+    var lum_black = palette_r(idx_black) + palette_g(idx_black) + palette_b(idx_black);
+    var lum_dark  = palette_r(idx_dark)  + palette_g(idx_dark)  + palette_b(idx_dark);
+    var lum_mid   = palette_r(idx_mid)   + palette_g(idx_mid)   + palette_b(idx_mid);
+    var lum_light = palette_r(idx_light) + palette_g(idx_light) + palette_b(idx_light);
+    var lum_white = palette_r(idx_white) + palette_g(idx_white) + palette_b(idx_white);
+    assert(lum_black <= lum_dark,  "luminance non-decreasing: black ≤ dark");
+    assert(lum_dark  <= lum_mid,   "luminance non-decreasing: dark ≤ mid");
+    assert(lum_mid   <= lum_light, "luminance non-decreasing: mid ≤ light");
+    assert(lum_light <= lum_white, "luminance non-decreasing: light ≤ white");
+
+    test_group("M4(b) — _color_dist2 sanity");
+    # Pin a few canonical distance² values so a sign / overflow
+    # / typo regression trips here rather than in the larger
+    # quantization-acceptance suite.
+    assert_eq(_color_dist2(0,   0,   0,   0,   0,   0  ), 0,   "dist²(black, black) = 0");
+    assert_eq(_color_dist2(255, 0,   0,   170, 0,   0  ), 7225, "dist²(pure-red, entry-1) = 85²");
+    assert_eq(_color_dist2(255, 0,   0,   0,   255, 0  ), 130050, "dist²(pure-red, pure-green) = 2 × 255²");
+    # Negative deltas square cleanly — the (r1 - r2) can go negative.
+    assert_eq(_color_dist2(0,   0,   0,   255, 255, 255), 195075, "dist²(black, white) = 3 × 255²");
 
     return assert_summary();
 }

@@ -1,0 +1,55 @@
+# quant.cyr — RGB → 16-color ANSI palette quantization.
+#
+# v1.0 tier-1 floor: nearest-neighbor in Euclidean RGB space.
+# Skips the sqrt (monotonic for minimum-finding, saves a
+# transcendental per pixel). Linear-scan all 16 palette entries.
+#
+# CIE Lab distance + perceptual color spaces + Floyd-Steinberg /
+# ordered dither are explicit post-v1 scope per CLAUDE.md
+# tier-1 color discipline. Higher-fidelity quantization can
+# replace this module's internals without changing the public
+# API (palette_idx in, palette_idx out).
+#
+# Multi-source convergent port: shape drawn from chafa's
+# `chafa-canvas.c` glyph-selection (color-quantization micro-
+# pattern), `libcaca`'s color picker, and the Wikipedia
+# "Color quantization" article's vanilla algorithm. No
+# single-source pin.
+
+include "src/palette.cyr"
+
+# Squared Euclidean distance in RGB space between two color
+# triples. Skips the sqrt — for minimum-finding we only need
+# the ordering, which sqrt preserves. Max value at full RGB
+# spread: 3 × 255² = 195,075 — fits comfortably in i64 with
+# no overflow concern.
+fn _color_dist2(r1, g1, b1, r2, g2, b2): i64 {
+    var dr = r1 - r2;
+    var dg = g1 - g2;
+    var db = b1 - b2;
+    return dr * dr + dg * dg + db * db;
+}
+
+# Map one RGB triple to the nearest-distance² palette index in
+# [0, ANSI_PALETTE_SIZE). Ties resolved by lowest index because
+# the loop's `<` (not `<=`) rejects equal-distance challengers.
+# Caller passes raw byte channel values (0..255).
+fn quantize_nearest_rgb(r, g, b): i64 {
+    palette_init();
+    # Seed best with entry 0 so the loop body has no sentinel.
+    # The palette has ≥ 1 entry by ANSI_PALETTE_SIZE constraint.
+    var best_idx = 0;
+    var best_d2  = _color_dist2(r, g, b,
+                                palette_r(0), palette_g(0), palette_b(0));
+    var i = 1;
+    while (i < ANSI_PALETTE_SIZE) {
+        var d2 = _color_dist2(r, g, b,
+                              palette_r(i), palette_g(i), palette_b(i));
+        if (d2 < best_d2) {
+            best_d2  = d2;
+            best_idx = i;
+        }
+        i = i + 1;
+    }
+    return best_idx;
+}
