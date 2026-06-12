@@ -4,6 +4,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — agnos-readiness port (2026-06-12)
+
+Source-level work to make kii build/run on the AGNOS target (`CYRIUS_TARGET_AGNOS`),
+matching the established agnos-tool pattern (anuenue/owl/kriya/bnrmr). **Host build
+unaffected** (`cyrius build src/main.cyr build/kii` → clean, 258 KB).
+
+- **Entry point** (`src/main.cyr`): `var r = main();` → a bare `_agnos_entry()`
+  top-level call. On agnos a module-scope `var = main()` runs `main` during
+  gvar-init *before* cycc's init-rsp capture, so `argc()`/`argv()` would read
+  0/null and kii would see no image path. The bare statement runs in `PARSE_PROG`,
+  after the capture. `SYS_EXIT` (already used) is correct on both targets.
+- **Terminal size** (`src/main.cyr`): `tty_winsize` (darshana, `ioctl TIOCGWINSZ`)
+  is now gated behind `#ifndef CYRIUS_TARGET_AGNOS`. agnos has no `ioctl` syscall
+  (num 16 is `kill`); leaving the call in would invoke `kill(pid=1, sig=TIOCGWINSZ)`
+  by number-collision (returns −1 by luck since sig≥64). On agnos kii uses the
+  EMIT_DEFAULT 80×24 fit. A real FB-console window-size syscall is slotted for
+  **agnos 1.45.x** (FB px ÷ glyph dims → char grid; drops this fallback).
+- **Toolchain pin** (`cyrius.cyml`): `6.0.1` → `6.1.14` + re-vendored `lib/` (gets
+  the `fnptr.cyr` `CYRIUS_TARGET_AGNOS` fncall branch — without it `alloc_via`/
+  `vec_new` return 0 on agnos → null-backed vecs → crash; the owl/kriya class).
+
+**BLOCKED — agnos build does not yet link** (`cyrius build --agnos` →
+`lib/mmap.cyr: undefined variable 'CLONE_VM'`). Not a kii bug: sankoch's PNG
+zlib path calls `_sankoch_lock`/`_unlock` → `mutex_lock` → the Linux clone-based
+`thread`/`mmap` stdlib (`CLONE_VM`), which has no agnos branch (agnos userland is
+single-threaded). kii is the first agnos consumer of sankoch. Tracked upstream:
+`cyrius/docs/development/issues/2026-06-12-sankoch-locks-not-agnos-compatible.md`
+(recommended fix: no-op the sankoch locks under `CYRIUS_TARGET_AGNOS`). The agnos
+build completes once that lands; the kii source above is ready.
+
 ## [1.0.0] — 2026-05-23
 
 ### v1.0 freeze cycle (M8)

@@ -326,19 +326,28 @@ fn main(): i64 {
             return KII_EXIT_RUN;
         }
     } else {
-        # Detection. tty_winsize is darshana surface; returns 0 + sets
-        # the out slots on success. Non-TTY / ioctl-unsupported → -1.
+        var fit_cols = 0;
+        var fit_rows = 0;
+        # Detection. tty_winsize is darshana surface (ioctl TIOCGWINSZ); returns
+        # 0 + sets the out slots on success, -1 on non-TTY / ioctl-unsupported.
+        # AGNOS has no ioctl syscall (num 16 is `kill`), and the FB console
+        # exposes no resize ioctl — so the call is GATED OUT on agnos. Leaving it
+        # in would invoke `kill(pid=1, sig=TIOCGWINSZ)` by number-collision (it
+        # returns -1 by luck since sig>=64, but the gate makes the agnos
+        # terminal-geometry story explicit rather than accidental). On agnos
+        # fit_cols/fit_rows stay 0 → _kii_compute_fit_geometry uses the
+        # EMIT_DEFAULT_* (80×24) fallback. FB-size auto-detect is a follow-up.
+        #ifndef CYRIUS_TARGET_AGNOS
         var term_rows = 0;
         var term_cols = 0;
         var detect_rc = tty_winsize(1, &term_rows, &term_cols);
-        var fit_cols = 0;
-        var fit_rows = 0;
         if (detect_rc == 0 && term_cols > 0 && term_rows > 1) {
             fit_cols = term_cols;
             # Leave one row for the shell prompt; the visible frame
             # therefore tops out at (term_rows - 1) terminal rows.
             fit_rows = term_rows - 1;
         }
+        #endif
         # fit_cols / fit_rows == 0 here means "non-TTY or pathological
         # ioctl result" — `_kii_compute_fit_geometry` substitutes the
         # EMIT_DEFAULT_* fallback values (80 × 24).
@@ -386,5 +395,15 @@ fn main(): i64 {
     return KII_EXIT_OK;
 }
 
-var r = main();
-syscall(SYS_EXIT, r);
+# Bare-call entry (NOT `var r = main();`): on the agnos target a module-scope
+# `var = main()` makes main a gvar-initializer that runs BEFORE cycc's init-rsp
+# capture (placed after gvar-inits), so argc()/argv() would read 0/null and kii
+# would see no image path. A bare top-level statement runs in PARSE_PROG, after
+# the capture, so args resolve correctly. SYS_EXIT (not literal 60) is correct on
+# both targets — agnos renumbers exit to 0. Matches anuenue/owl/bnrmr.
+fn _agnos_entry(): i64 {
+    var r = main();
+    syscall(SYS_EXIT, r);
+    return 0;
+}
+_agnos_entry();
