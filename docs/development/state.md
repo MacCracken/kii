@@ -5,11 +5,11 @@
 
 ## Version
 
-**1.0.0** — M8 (v1.0 freeze cycle) closeout — 2026-05-23.
+**1.0.1** — toolchain + dependency refresh — 2026-06-18. (v1.0.0 M8 freeze closeout was 2026-05-23.)
 
 ## Toolchain
 
-- **Cyrius pin**: `6.0.1` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.2.22` (in `cyrius.cyml [package].cyrius`). `lib/` re-vendored from the 6.2.22 stdlib snapshot at 1.0.1.
 
 ## Surface
 
@@ -64,7 +64,7 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (no deltas vs v0.6.0).
-- **External**: `darshana 0.5.3` (pinned). M6 uses `tty_winsize` (darshana v0.3.0+) in addition to the M5 ANSI primitives.
+- **External**: `darshana 0.7.1` (pinned; bumped from 0.5.3 at 1.0.1). M6 uses `tty_winsize` (darshana v0.3.0+) in addition to the M5 ANSI primitives; the BG-256 twin is still absent from darshana's surface, so kii keeps the inline `_emit_bg_256_buf`.
 
 ## Cycle context
 

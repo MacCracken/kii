@@ -34,6 +34,27 @@ single-threaded). kii is the first agnos consumer of sankoch. Tracked upstream:
 (recommended fix: no-op the sankoch locks under `CYRIUS_TARGET_AGNOS`). The agnos
 build completes once that lands; the kii source above is ready.
 
+## [1.0.1] — 2026-06-18
+
+### Changed — toolchain + dependency refresh
+
+Maintenance release. No user-facing behavior change; the PNG → terminal-ANSI
+pipeline is byte-identical (471 assertions pass unchanged).
+
+- **Toolchain pin** (`cyrius.cyml`): `6.1.14` → `6.2.22`. `lib/` removed and
+  re-vendored from the 6.2.22 stdlib snapshot (`cyrius lib sync` → 98 `.cyr`
+  files) so the vendored stdlib tracks the new pin exactly.
+- **darshana** (`cyrius.cyml [deps.darshana]`): `0.5.3` → `0.7.1`. kii's emit
+  layer still uses `tty_fg_256_buf` + `tty_winsize` (both present in 0.7.1); the
+  BG-256 twin is still absent from darshana's surface, so the inline
+  `_emit_bg_256_buf` stays. `cyrius.lock` re-locked (99 deps).
+- **Version string** (`src/main.cyr`): `print_version` → `kii 1.0.1`.
+
+> Note: `cyrius deps --verify` under 6.2.22 mis-parses the final `cyrius.lock`
+> entry (`lib/result.cyr` → reported as `lib/resu`, "cannot hash"). The lockfile
+> is correct — the file's sha256 matches byte-for-byte — so this is a cosmetic
+> toolchain-side parser quirk on the trailing line, not a kii integrity issue.
+
 ## [1.0.0] — 2026-05-23
 
 ### v1.0 freeze cycle (M8)
