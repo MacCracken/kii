@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-06-22
+
+### Added — real console sizing on AGNOS (winsize#60 / darshana 0.8.0)
+
+- **Drop the agnos `tty_winsize` gate** (`src/main.cyr`): the `#ifndef CYRIUS_TARGET_AGNOS`
+  guard around the `tty_winsize(1, …)` detection is removed. agnos now provides
+  `tty_winsize` via the **`winsize`#60** syscall (agnos kernel 1.45.13) consumed through
+  **darshana 0.8.0**'s `CYRIUS_TARGET_AGNOS` branch, so kii sizes its ASCII-art output to
+  the real framebuffer console grid instead of the 80×24 `EMIT_DEFAULT_*` fallback. The
+  old gate's `kill`#16 number-collision rationale is obsolete (the agnos branch calls
+  `winsize`#60 directly, never `ioctl`). The 80×24 default remains as the failure path
+  (FB not up → -1). `[deps.darshana]` 0.7.1 → 0.8.0.
+
 ### Changed — agnos-readiness port (2026-06-12)
 
 Source-level work to make kii build/run on the AGNOS target (`CYRIUS_TARGET_AGNOS`),

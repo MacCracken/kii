@@ -328,16 +328,14 @@ fn main(): i64 {
     } else {
         var fit_cols = 0;
         var fit_rows = 0;
-        # Detection. tty_winsize is darshana surface (ioctl TIOCGWINSZ); returns
-        # 0 + sets the out slots on success, -1 on non-TTY / ioctl-unsupported.
-        # AGNOS has no ioctl syscall (num 16 is `kill`), and the FB console
-        # exposes no resize ioctl — so the call is GATED OUT on agnos. Leaving it
-        # in would invoke `kill(pid=1, sig=TIOCGWINSZ)` by number-collision (it
-        # returns -1 by luck since sig>=64, but the gate makes the agnos
-        # terminal-geometry story explicit rather than accidental). On agnos
+        # Detection. tty_winsize is darshana surface: on Linux it's the ioctl
+        # TIOCGWINSZ; on agnos (darshana 0.8.0+) it's the winsize#60 syscall
+        # reading the framebuffer console grid. Both return 0 + set the out slots
+        # on success, -1 on failure (non-TTY / FB-not-up). On failure
         # fit_cols/fit_rows stay 0 → _kii_compute_fit_geometry uses the
-        # EMIT_DEFAULT_* (80×24) fallback. FB-size auto-detect is a follow-up.
-        #ifndef CYRIUS_TARGET_AGNOS
+        # EMIT_DEFAULT_* (80×24) fallback. (The pre-0.8.0 agnos gate is gone:
+        # darshana's agnos branch no longer collides with `kill`#16 — it calls
+        # winsize#60 directly, so kii now sizes to the real console on agnos.)
         var term_rows = 0;
         var term_cols = 0;
         var detect_rc = tty_winsize(1, &term_rows, &term_cols);
@@ -347,7 +345,6 @@ fn main(): i64 {
             # therefore tops out at (term_rows - 1) terminal rows.
             fit_rows = term_rows - 1;
         }
-        #endif
         # fit_cols / fit_rows == 0 here means "non-TTY or pathological
         # ioctl result" — `_kii_compute_fit_geometry` substitutes the
         # EMIT_DEFAULT_* fallback values (80 × 24).
