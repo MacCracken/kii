@@ -5,7 +5,7 @@ description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASC
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/cyrius-kii"
 language = "cyrius"
-cyrius = "6.2.22"
+cyrius = "6.2.36"
 
 [build]
 entry = "src/main.cyr"

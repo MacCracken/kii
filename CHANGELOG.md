@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-06-22
+
+### Changed
+
+- **cyrius toolchain pin `6.2.22` → `6.2.36`** — aligns with the latest cyrius (6.2.31–6.2.36
+  agnos-stdlib fixes). Host + `--agnos` builds re-verified clean. No source change.
+
 ## [1.0.2] — 2026-06-22
 
 ### Added — real console sizing on AGNOS (winsize#60 / darshana 0.8.0)
