@@ -6,26 +6,31 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**Mid-alpha — v0.5.0** (2026-05-22). The PNG → 16-color palette-index pipeline is complete; ANSI emission to terminal lands at M5 (v0.6.0).
+**v1.0.3** (2026-06-22). The full PNG → 16-color half-block ANSI pipeline is locked in (v1.0 freeze at v1.0.0). Builds on host and on the AGNOS target (`--agnos`).
 
-Today `kii image.png` decodes any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA at bit-depth 8 or 16, non-interlaced) all the way through:
+Today `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA at bit-depth 8 or 16, non-interlaced), quantizes to the 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
 ```
-$ kii tests/fixtures/RAMGON.png
-tests/fixtures/RAMGON.png: 1152x925 1065600 pixels (RGBA) → 16-color
+$ kii tests/fixtures/RAMGON.png        # renders half-block ANSI to the terminal
+$ kii --verbose tests/fixtures/RAMGON.png > out.ansi
+tests/fixtures/RAMGON.png: 1152x925 1065600 pixels (RGBA) → 16-color   # (stderr, --verbose)
 ```
 
-What's NOT yet visible: actual half-block (`▀`) glyphs to stdout. That's M5 — the quantized indices live internally, but darshana (the ANSI primitives dep) is the M5 gate.
+Terminal size auto-detects on a TTY (`cols × rows`); non-TTY output falls back to an 80×24 BBS-default frame. On AGNOS the console grid is read from the framebuffer via the `winsize` syscall (darshana branch), so output sizes to the real console rather than the 80×24 default.
 
 See [`docs/development/state.md`](docs/development/state.md) for the per-release snapshot, [`docs/development/roadmap.md`](docs/development/roadmap.md) for the path to v1.0, and [`CHANGELOG.md`](CHANGELOG.md) for shipped work.
 
-### Shipped through v0.5.0
+### Shipped through v1.0
 
 - **M0** (v0.1.0): scaffold + first-party docs + CI/release workflows
 - **M1** (v0.2.0): CLI surface — `--help`, `--version`, `--width N`, `--color N`, positional path; arg-parser fuzz harness
 - **M2** (v0.3.0): PNG structural decoder — signature + IHDR + CRC32 + chunk walker through IEND
 - **M3** (v0.4.0): PNG pixel decoder — sankoch `zlib_decompress` + filter undo (spec § 9 filter types 0–4); PNG-decoder fuzz harness
 - **M4** (v0.5.0): 16-color ANSI palette + Euclidean-RGB nearest quantization; PLTE chunk capture for palette PNGs; first benchmark (`quantize_nearest_rgb`: 274 ns/op)
+- **M5** (v0.6.0): half-block (`▀`) ANSI emit to stdout via darshana (256-color SGR per cell)
+- **M6** (v0.7.0): terminal-size auto-detect + `--width N` override (aspect-preserving fit)
+- **M7** (v0.8.0): security audit cycle — input-cap / decompression-amplification / ANSI-injection hardening; fuzz scaled to 3M+ iters
+- **M8** (v1.0.0): v1.0 freeze — ADRs, W3C PngSuite walk, chafa visual review
 
 ### Not yet supported (deferred per scope)
 
@@ -39,7 +44,7 @@ See [`docs/development/state.md`](docs/development/state.md) for the per-release
 
 The world prior art (`chafa`) ships every tier from monochrome through 24-bit truecolor. kii chooses the order deliberately:
 
-- **Tier 1 — v0.x → v1.0**: 8/16-color ANSI palette + half-block (`▀`/`▄`) glyph quantization. Historically-correct rendering target for BBS / MUD clients of the early-90s era; maximum terminal compatibility; well-defined floor. **Palette quantization shipped at v0.5.0; glyph emit lands at v0.6.0; terminal-size detection at v0.7.0.**
+- **Tier 1 — v0.x → v1.0**: 8/16-color ANSI palette + half-block (`▀`/`▄`) glyph quantization. Historically-correct rendering target for BBS / MUD clients of the early-90s era; maximum terminal compatibility; well-defined floor. **Shipped: palette quantization (v0.5.0), glyph emit (v0.6.0), terminal-size detection (v0.7.0); v1.0 freeze at v1.0.0.**
 - **Tier 2 — post-v1**: 256-color ANSI palette + 24-bit truecolor escape sequences (`\x1b[38;2;R;G;Bm`) + dithering schemes (Floyd-Steinberg, ordered/Bayer) for higher fidelity.
 - **Tier 3 — future**: Sixel / Kitty / iTerm2 image-protocol direct rendering (skips ASCII art entirely on supporting terminals). Animated GIF / video frame-pipe support.
 
@@ -52,7 +57,7 @@ The world prior art (`chafa`) ships every tier from monochrome through 24-bit tr
 ## Substrate
 
 - [`sankoch`](https://github.com/MacCracken/sankoch) — DEFLATE/zlib decompression. **Wired at v0.4.0** for PNG IDAT decompression. (Now folded into Cyrius stdlib at v5.8.65, so it's a stdlib-list add, not an external git dep.)
-- [`darshana`](https://github.com/MacCracken/darshana) — TTY/ANSI primitives (color escape sequences, cursor positioning). Lands as an external dep at v0.6.0 / M5 when ANSI emit goes live.
+- [`darshana`](https://github.com/MacCracken/darshana) — TTY/ANSI primitives (color escape sequences, cursor positioning, `tty_winsize`). External dep since v0.6.0 / M5 when ANSI emit went live.
 - **In-repo PNG decoder** (`src/png.cyr`) — signature + IHDR + CRC32 + chunk walker + IDAT inflate + filter undo (filter types 0–4) + PLTE capture. Multi-source convergent port from the W3C spec + `libpng` + `stb_image.h` + `lodepng`. Graduates to a separate Sanskrit-named substrate lib (`chitra` / `rupa` / TBD) once a second consumer surfaces, per the `mihi → iam/chakshu` extract-on-2nd-consumer pattern.
 - **In-repo palette + quantizer** (`src/palette.cyr` + `src/quant.cyr`) — Linux-console 16-color RGB table + nearest-neighbor Euclidean quantization.
 
@@ -76,12 +81,12 @@ cyrius build src/main.cyr build/kii   # compile
 ./build/kii image.png                 # quantize a PNG
 ```
 
-Toolchain pin: `cyrius = "6.0.1"` (in [`cyrius.cyml`](cyrius.cyml)).
+Toolchain pin: `cyrius = "6.2.36"` (in [`cyrius.cyml`](cyrius.cyml)).
 
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 287 assertions across M1–M4 surface
+cyrius test                           # 471 assertions across the M1–M8 surface
 cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # arg-parser + PNG-decoder fuzz
 cyrius build tests/kii.bcyr build/kii-bench && ./build/kii-bench # quantization micro-bench
 ```
