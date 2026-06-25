@@ -18,7 +18,11 @@ output = "kii"
 #   v0.2.0 (M1)  — added "flags" (consumer: CLI parser)
 #   v0.4.0 (M3)  — added "sankoch" (consumer: PNG IDAT zlib_decompress)
 #                  + "thread" (sankoch's _sankoch_lock/_unlock wrap mutex_lock/mutex_unlock)
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "flags", "sankoch", "thread"]
+#   v1.1.0       — DROPPED stdlib "flags": CLI parsing moved to the [deps.cmdit]
+#                  distlib (cmdit = the stdlib flags parser productized + extended).
+#                  "args" stays — cmdit_argv/cmdit_parse call args_init/argc/argv,
+#                  resolved from here.
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "sankoch", "thread"]
 
 # AGNOS first-party deps. v0.6.0 / M5 introduces darshana — the
 # canonical ANSI escape primitives library. kii's emit layer uses
@@ -32,3 +36,13 @@ git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
 tag = "0.8.0"
 modules = ["dist/darshana.cyr"]
+
+# CLI / argument parsing — cmdit (sovereign getopt-long lib, the stdlib flags
+# parser productized + extended). kii is its FIRST consumer (the re-fold: kii's
+# flag-set seeded cmdit's design; adopting it back validates the extraction).
+# Pinned per AGNOS dep-lockin discipline.
+[deps.cmdit]
+git = "https://github.com/MacCracken/cmdit.git"
+path = "../cmdit"
+tag = "0.1.0"
+modules = ["dist/cmdit.cyr"]

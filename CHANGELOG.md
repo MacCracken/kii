@@ -4,6 +4,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - Unreleased
+
+**CLI parsing adopts cmdit (the re-fold).** kii's flag-set seeded cmdit's design (the
+2026-06-25 ecosystem CLI review); adopting cmdit back is its first consumer and validates
+the extraction.
+
+### Changed
+- **Dropped the hand-rolled CLI on stdlib `flags` for the `[deps.cmdit]` distlib.**
+  `kii_register_flags` registers via `cmdit_int`/`cmdit_bool`; `main` parses via
+  `cmdit_parse` (which owns `args_init` + the argc/argv→`cstr*` materialize bridge),
+  dispatches on `CMDIT_HELP`/`CMDIT_VERSION`/`CMDIT_RESULT_ERR`, and reads values via
+  `cmdit_get_*`/`cmdit_positional`. Removed `build_argv_array` and the self-imposed
+  `KII_ARGV_MAX` argv cap (cmdit materializes dynamically).
+- `--help`/`--version` are now auto-registered by `cmdit_new` (kii no longer tracks their
+  flag indices). The `--help` flag list is now cmdit-generated; kii keeps its banner +
+  Examples around it.
+- Stdlib deps: dropped `flags` (kept `args` — cmdit's materialize bridge needs it).
+
+### Notes
+- Behavior preserved: flag parsing, error codes, `0/1/2` exit codes, and rendering are
+  unchanged; only the `--help` text layout shifts to cmdit's generated form.
+- Tests (`tests/kii.tcyr`, `tests/kii.fcyr`) rewired to the cmdit API + return-code model.
+
 ## [1.0.3] — 2026-06-22
 
 ### Changed

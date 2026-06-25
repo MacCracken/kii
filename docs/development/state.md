@@ -5,6 +5,12 @@
 
 ## Version
 
+**1.1.0** — Unreleased. **CLI re-fold: adopted the `cmdit` distlib** (the stdlib flags
+parser productized + extended) — dropped the hand-rolled parsing + `build_argv_array` +
+`KII_ARGV_MAX`; now `cmdit_new`/`cmdit_parse`/`cmdit_get_*`/`cmdit_positional` with auto
+`--help`/`--version`. kii is cmdit's **first consumer** (validates the extraction). Stdlib
+`flags` dropped (`args` kept). Tests rewired. See `agnosticos/docs/development/planning/cmdit.md`.
+
 **1.0.1** — toolchain + dependency refresh — 2026-06-18. (v1.0.0 M8 freeze closeout was 2026-05-23.)
 
 ## Toolchain

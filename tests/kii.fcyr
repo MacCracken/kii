@@ -2,8 +2,8 @@
 #
 # 1. Arg parser (M1 sub-bite (d)): drives kii's flag set via
 #    kii_register_flags with deterministic LCG-generated random
-#    argv arrays. Contract: flags_parse never crashes on malformed
-#    input, only returns FLAG_ERR_* cleanly.
+#    argv arrays. Contract: cmdit_parse_argv never crashes on malformed
+#    input, only returns CMDIT_* codes cleanly.
 #
 # 2. PNG decoder (M2 sub-bite (d)): writes random byte sequences
 #    to /tmp/kii-fuzz-png.bin + drives png_decode_structure over
@@ -294,15 +294,15 @@ fn fuzz_iter(scratch, argv_arr): i64 {
         i = i + 1;
     }
 
-    # Drive kii's actual flag set. flags_new allocates from the
+    # Drive kii's actual flag set. cmdit_new allocates from the
     # bump allocator per iter; that's fine — 10k × ~few KB stays
     # under 100 MB worst-case, well below the heap layout's brk
     # ceiling (~77 MB final per the cyrius README, but the bump
     # allocator grows on demand). The contract: return value is
-    # 0 or -1; never crash.
-    var fs = flags_new();
+    # CMDIT_OK / CMDIT_HELP / CMDIT_VERSION / CMDIT_RESULT_ERR; never crash.
+    var fs = cmdit_new("kii");
     kii_register_flags(fs);
-    flags_parse(fs, argc_val, argv_arr);
+    cmdit_parse_argv(fs, argc_val, argv_arr);
     return 0;
 }
 

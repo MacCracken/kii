@@ -24,29 +24,27 @@ var KII_EXIT_USAGE = 2;
 # Populated by kii_register_flags(fs). Initial sentinel = -1 so
 # unregistered access trips a bounds error in `_flags_entry`
 # rather than silently reading entry 0.
-var KII_F_HELP    = 0 - 1;
-var KII_F_VERSION = 0 - 1;
+# --help/--version are auto-registered by cmdit_new (cmdit_parse returns
+# CMDIT_HELP / CMDIT_VERSION), so kii no longer tracks their indices —
+# width/color/verbose keep indices 2/3/4 (cmdit's auto help/version are 0/1).
 var KII_F_WIDTH   = 0 - 1;
 var KII_F_COLOR   = 0 - 1;
 var KII_F_VERBOSE = 0 - 1;
 
-# Register kii's full M1 flag surface into an existing `fs`
-# (caller owns flags_new + flags_parse). Short codes are ASCII
-# byte values: h = 104, V = 86 (capital — leaves lowercase v
-# free for a future --verbose), w = 119, c = 99 (mirror chafa's
-# `-w` / `-c`). Defaults: --width 0 is the M6 sentinel for
-# "match terminal"; --color 16 picks the higher fidelity tier
-# within v1.0 scope (M5 visual-review baseline is `chafa --colors 16`).
+# Register kii's flag surface into a cmdit context `fs` (caller owns
+# cmdit_new + cmdit_parse). cmdit_new already registered --help/-h (h=104)
+# and --version/-V (V=86), so kii adds only width/color/verbose. Short codes
+# are ASCII bytes: w = 119, c = 99 (mirror chafa's `-w`/`-c`). Defaults:
+# --width 0 is the M6 sentinel for "match terminal"; --color 16 picks the
+# higher fidelity tier within v1.0 scope. cmdit_bool takes no default (always 0).
 fn kii_register_flags(fs): i64 {
-    KII_F_HELP    = flags_add_bool(fs, 104, "help",    0,  "show this help and exit");
-    KII_F_VERSION = flags_add_bool(fs,  86, "version", 0,  "print version and exit");
-    KII_F_WIDTH   = flags_add_int (fs, 119, "width",   0,  "output width in columns (0 = match terminal)");
-    KII_F_COLOR   = flags_add_int (fs,  99, "color",   16, "color tier: 8 or 16 (tier-2 modes post-v1)");
+    KII_F_WIDTH   = cmdit_int (fs, 119, "width",   0,  "output width in columns (0 = match terminal)");
+    KII_F_COLOR   = cmdit_int (fs,  99, "color",   16, "color tier: 8 or 16 (tier-2 modes post-v1)");
     # `v` (118) was reserved for --verbose at M1; activated at M5
     # alongside the ANSI emit. With the frame now occupying stdout,
     # the M4 dimensions / format summary moves behind this flag and
     # rides stderr — pipe-pure by default.
-    KII_F_VERBOSE = flags_add_bool(fs, 118, "verbose", 0,  "print decode summary to stderr after the frame");
+    KII_F_VERBOSE = cmdit_bool(fs, 118, "verbose", "print decode summary to stderr after the frame");
     return 0;
 }
 

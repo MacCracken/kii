@@ -33,12 +33,6 @@ include "src/quant.cyr"
 include "src/downscale.cyr"
 include "src/emit.cyr"
 
-# argv cap. kii takes one positional path arg at most; 256 is
-# absurdly more than any plausible invocation but matches the
-# anuenue cap so every AGNOS userland binary lands on the same
-# stack-buffer shape.
-var KII_ARGV_MAX = 256;
-
 # Write a null-terminated string to fd 2 (stderr). Usage / help
 # text rides this so the happy-path stdout pipe stays pure once
 # M5 lands ANSI emit — `kii image.png | tee out.ansi` mustn't get
@@ -115,16 +109,14 @@ fn _eprint_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 1.0.3");
+    println("kii 1.1.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
 
 fn print_usage(fs): i64 {
     _eprint("kii — kiʻi (Hawaiian: image / picture / likeness). Image → ANSI art.\n\n");
-    _eprint("Usage:\n  kii [OPTIONS] <image.png>\n\n");
-    _eprint("Options:\n");
-    flags_print_help(fs);
+    cmdit_help(fs);                       # generated Usage + flag list (from the cmdit table)
     _eprint("\nExamples:\n");
     _eprint("  kii --version                              # version + etymology\n");
     _eprint("  kii --help                                 # this text\n");
@@ -134,45 +126,26 @@ fn print_usage(fs): i64 {
     return 0;
 }
 
-# Pack argc()/argv(i) into a contiguous cstr* array. flags_parse
-# wants a raw pointer-array (it does `load64(argv + i*8)`), not
-# lib/args.cyr's byte-stream walker.
-fn build_argv_array(arr): i64 {
-    var ac = argc();
-    var i = 0;
-    while (i < ac) {
-        store64(arr + i * 8, argv(i));
-        i = i + 1;
-    }
-    return ac;
-}
-
 fn main(): i64 {
-    args_init();
     alloc_init();
 
-    var ac = argc();
-    if (ac > KII_ARGV_MAX) {
-        _eprint("kii: too many arguments\n");
-        return KII_EXIT_USAGE;
-    }
-    var argv_arr[2048];                     # 256 slots × 8 bytes
-    build_argv_array(&argv_arr);
-
-    # Flag registration lives in src/cli.cyr so kii.tcyr + kii.fcyr
-    # can wire the same flag set without including main.cyr.
-    var fs = flags_new();
+    # CLI parsing via cmdit (the [deps.cmdit] distlib). cmdit_new auto-registers
+    # --help/-h + --version/-V; kii_register_flags adds width/color/verbose.
+    # cmdit_parse reads the process argv itself (args_init + the materialize
+    # bridge), so kii no longer hand-packs an argv array or self-caps argc.
+    var fs = cmdit_new("kii");
     kii_register_flags(fs);
 
-    if (flags_parse(fs, ac, &argv_arr) != 0) {
-        var err = flags_error(fs);
-        if (err == FLAG_ERR_UNKNOWN) {
+    var pr = cmdit_parse(fs);
+    if (pr == CMDIT_RESULT_ERR) {
+        var err = cmdit_error(fs);
+        if (err == CMDIT_ERR_UNKNOWN) {
             _eprint("kii: unknown flag\n");
-        } else { if (err == FLAG_ERR_MISSING_VALUE) {
+        } else { if (err == CMDIT_ERR_MISSING_VALUE) {
             _eprint("kii: flag missing value\n");
-        } else { if (err == FLAG_ERR_BAD_INT) {
+        } else { if (err == CMDIT_ERR_BAD_INT) {
             _eprint("kii: bad integer value\n");
-        } else { if (err == FLAG_ERR_BUNDLED) {
+        } else { if (err == CMDIT_ERR_BUNDLED) {
             _eprint("kii: bundled short flags not supported (use -x -y, not -xy)\n");
         } else {
             _eprint("kii: argument parse error\n");
@@ -181,11 +154,11 @@ fn main(): i64 {
         return KII_EXIT_USAGE;
     }
 
-    if (flags_get_bool(fs, KII_F_HELP) == 1) {
+    if (pr == CMDIT_HELP) {
         print_usage(fs);
         return KII_EXIT_OK;
     }
-    if (flags_get_bool(fs, KII_F_VERSION) == 1) {
+    if (pr == CMDIT_VERSION) {
         return print_version();
     }
 
@@ -194,7 +167,7 @@ fn main(): i64 {
     # about the missing path. --width is parsed but unused until
     # M5; we don't extract it yet (no dead code per CLAUDE.md —
     # M5 adds the extraction back when actually consumed).
-    var color = flags_get_int(fs, KII_F_COLOR);
+    var color = cmdit_get_int(fs, KII_F_COLOR);
     if (kii_validate_color(color) == 0) {
         _eprint("kii: --color must be 8 or 16\n");
         print_usage(fs);
@@ -205,7 +178,7 @@ fn main(): i64 {
     # CLAUDE.md domain rule ("kii takes ONE file path. No glob, no
     # recursive directory scan."). Zero = usage error; two-plus =
     # usage error.
-    var pc = flags_positional_count(fs);
+    var pc = cmdit_positional_count(fs);
     if (pc == 0) {
         _eprint("kii: missing image path\n");
         print_usage(fs);
@@ -229,7 +202,7 @@ fn main(): i64 {
     # to cover the M5(b)-extended layout (M4 fields + downscaled_buf
     # + downscaled_w + downscaled_h). M5(c) wires emit_halfblock to
     # the downscaled-then-quantized buffer.
-    var path = flags_positional(fs, 0);
+    var path = cmdit_positional(fs, 0);
     var pstruct[160];
     var rc = png_decode_structure(path, &pstruct);
     if (rc == PNG_ERR_OPEN) {
@@ -314,7 +287,7 @@ fn main(): i64 {
     # we cap rows to (rows - 1) so the shell prompt has somewhere to
     # land after the frame. Non-TTY → 80×24 fallback (BBS-default
     # frame survives a pipe through `kii img.png | tee out.ansi`).
-    var width_flag = flags_get_int(fs, KII_F_WIDTH);
+    var width_flag = cmdit_get_int(fs, KII_F_WIDTH);
     var src_w = load64(&pstruct + STRUCT_WIDTH_OFFSET);
     var src_h = load64(&pstruct + STRUCT_HEIGHT_OFFSET);
     var target_w = 0;
@@ -383,7 +356,7 @@ fn main(): i64 {
     # frame so a TTY reader sees `kii img.png` paint the image, then
     # see the dimensions/format line on the next stderr-routed line.
     # Pure-pipe consumers (`kii img.png | feh -`) don't pay for it.
-    if (flags_get_bool(fs, KII_F_VERBOSE) == 1) {
+    if (cmdit_get_bool(fs, KII_F_VERBOSE) == 1) {
         _eprint_quant_summary(path, &pstruct);
     }
     if (load64(&pstruct + STRUCT_SEEN_IEND_OFFSET) == 0) {
