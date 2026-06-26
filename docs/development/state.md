@@ -5,7 +5,12 @@
 
 ## Version
 
-**1.1.0** — Unreleased. **CLI re-fold: adopted the `cmdit` distlib** (the stdlib flags
+**1.1.1** — cut 2026-06-25. **cmdit pin advance.** `[deps.cmdit]` `0.1.0` → `1.1.0`
+(cmdit froze its API at 1.0.0; 1.1.0 added `cmdit_help_flags` — both backward-compatible
+supersets of the 0.1.0 surface kii uses). No functional change; 468/468 green, rendering
+byte-identical. `print_version` literal → `kii 1.1.1`.
+
+**1.1.0** — 2026-06-25. **CLI re-fold: adopted the `cmdit` distlib** (the stdlib flags
 parser productized + extended) — dropped the hand-rolled parsing + `build_argv_array` +
 `KII_ARGV_MAX`; now `cmdit_new`/`cmdit_parse`/`cmdit_get_*`/`cmdit_positional` with auto
 `--help`/`--version`. kii is cmdit's **first consumer** (validates the extraction). Stdlib

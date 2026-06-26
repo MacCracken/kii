@@ -4,7 +4,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [1.1.0] - Unreleased
+## [1.1.1] - 2026-06-25
+
+**cmdit pin advance.** Bumps the `[deps.cmdit]` pin `0.1.0` → **`1.1.0`** — cmdit froze
+its public API at 1.0.0 and 1.1.0 added `cmdit_help_flags`, both backward-compatible
+supersets of the 0.1.0 surface kii consumes. No functional change: **468/468** tests
+green and rendering byte-identical against cmdit 1.1.0.
+
+### Changed
+- `[deps.cmdit]` tag `0.1.0` → `1.1.0` (`cyrius.cyml`); `print_version` literal → `kii 1.1.1`.
+
+## [1.1.0] - 2026-06-25
 
 **CLI parsing adopts cmdit (the re-fold).** kii's flag-set seeded cmdit's design (the
 2026-06-25 ecosystem CLI review); adopting cmdit back is its first consumer and validates

@@ -40,9 +40,11 @@ modules = ["dist/darshana.cyr"]
 # CLI / argument parsing — cmdit (sovereign getopt-long lib, the stdlib flags
 # parser productized + extended). kii is its FIRST consumer (the re-fold: kii's
 # flag-set seeded cmdit's design; adopting it back validates the extraction).
-# Pinned per AGNOS dep-lockin discipline.
+# Pinned per AGNOS dep-lockin discipline. Pin advanced 0.1.0 → 1.1.0 at kii v1.1.1
+# (cmdit froze its API at 1.0.0; 1.1.0 added cmdit_help_flags — both backward-
+# compatible supersets of the 0.1.0 surface kii uses).
 [deps.cmdit]
 git = "https://github.com/MacCracken/cmdit.git"
 path = "../cmdit"
-tag = "0.1.0"
+tag = "1.1.0"
 modules = ["dist/cmdit.cyr"]
