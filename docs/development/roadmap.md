@@ -1,14 +1,15 @@
 # kii — Roadmap
 
-> Milestone plan through v1.0. State lives in [`state.md`](state.md);
-> this file is the sequencing — what ships, in what order, against
-> what dependency gates.
+> Sequencing — what ships, in what order, against what dependency gates.
+> State lives in [`state.md`](state.md). **kii is post-v1** (current:
+> v1.3.1); this file keeps the v1.0 record, the post-v1 shipped log, and
+> the not-yet-committed roadmap ahead.
 
-The roadmap is **smallest-first** per AGNOS bite-discipline. Each milestone is sized to be a single coherent cycle of work (~3-7 days of focused effort), and each one ships a working binary that demonstrably does more than the previous one.
+The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a single coherent cycle that ships a working binary doing demonstrably more than the last.
 
-## v1.0 criteria
+## v1.0 criteria (shipped 2026-05-23)
 
-The contract for tagging v1.0:
+The contract that tagged v1.0 — all decode/render/security/docs gates met; three items were explicitly deferred to v1.x (see Carry-forward debt below):
 
 - [x] CLI surface frozen — `--help`, `--version`, `--width N`, positional path arg, `--color N` (8 or 16), `--verbose` all stable (shipped at v0.2.0 / M1; `--verbose` activated at v0.6.0 / M5)
 - [x] Half-block glyph emission at terminal-detected geometry works (half-block emit at v0.6.0 / M5; terminal-detection at v0.7.0 / M6)
@@ -41,96 +42,52 @@ M0–M6 shipped 2026-05-22; M7 + M8 shipped 2026-05-23. Per-milestone delivered 
 
 **At v1.0.0**: 471 assertions all pass (+1 from v0.8.0); 3M+ fuzz iters across 5 surfaces clean; seven benches (incl. M7(d) decode-latency matrix); 5 ADRs landed; W3C PngSuite walked cleanly. Threat model + commitments captured in ADR 0002.
 
-## In-flight + remaining milestones
+M7 (v0.8.0 security audit) + M8 (v1.0.0 freeze) shipped 2026-05-23; outcomes
+in CHANGELOG, [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md),
+and ADRs 0002–0005. The per-milestone acceptance detail lived here pre-execution;
+it's retired now that the work shipped (the table above + CHANGELOG are the record).
 
-### M7 — Security audit cycle (v0.8.0) — SHIPPED 2026-05-23
+## Post-v1 shipped (v1.1.x – v1.3.x)
 
-Closed out 2026-05-23. Outcomes captured in CHANGELOG [v0.8.0],
-[`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md), and
-[`docs/adr/0002-security-model.md`](../adr/0002-security-model.md).
-Deferred to M8: W3C broken-set walk, per-chunk-type length cap table.
+Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 
-### (former) M7 acceptance — for historical reference
+| Release | Headline |
+|---|---|
+| v1.1.0–1.1.2 | **CLI re-fold onto the `cmdit` distlib** (dropped the hand-rolled flag parser); toolchain → cyrius 6.2.44; darshana → 0.8.1 |
+| v1.2.0 | **PNG re-fold** — adopted the `chitra` distlib + deleted the 813-line native decoder ([ADR 0006](../adr/0006-adopt-chitra-decoder.md), supersedes 0001); output byte-identical |
+| v1.2.1 | Fixed a pre-existing `emit_halfblock` `--width` stack overflow (heap-sized per-row buffer) |
+| v1.2.2 | Re-pinned `chitra 0.2.1` → kii renders the **full PNG matrix** (bit depths 1/2/4/8/16 + Adam7 interlace) |
+| v1.3.0 | **`--mode ascii`** — character-glyph rendering lane (luminance ramp), [ADR 0007](../adr/0007-rendering-mode-taxonomy.md) |
+| v1.3.1 | ASCII **shape-vector** glyph matching (orientation-aware; Alex Harri attribution) |
 
-**Goal**: External-source-informed security audit of kii's threat surface. No new user-facing features; output is a comprehensive audit document + hardening commits + scaled fuzz coverage. This is the work the original "M7 = v1.0 freeze" lumped together with socialization — separated here because the security audit is its own dedicated cycle with **external web research for 0-days and CVEs against the substrate libraries kii draws on**.
+**Carry-forward debt** (none blocking; inherited from the v1.0 freeze):
 
-**Threat surfaces** (per [`../../SECURITY.md`](../../SECURITY.md)):
+- First BBS / MUD downstream consumer integrated — a downstream-cycle deliverable, off kii's own roadmap.
+- Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux) — needs a human-eye per-terminal pass; kii ships byte-stable so it can land any time.
+- Marketplace recipe in zugot — depends on zugot tooling.
+- Three sankoch upstream CVE-class items (CVE-2004-0797 / 2005-1849 / 2005-2096) — file as sankoch issues.
 
-1. **PNG decoder surface** — malformed / malicious PNG input. `src/png.cyr` parses untrusted bytes; integer overflows on dimension multiplication, IHDR / PLTE / IDAT ordering tricks, CRC bypass attempts, and chunk-truncation edge cases are all in scope.
-2. **DEFLATE / zlib surface** — decompression amplification ("zip bombs"). sankoch is the Cyrius-native DEFLATE impl, but the algorithm has the same attack surface as zlib regardless of language; bugs in the underlying spec mechanics transfer.
-3. **ANSI escape injection** — path argument + filename flow through `_eprint*` family to stderr; a maliciously-named file is the kii-controlled stdout/stderr injection vector. Terminal-emulator escape sequence parsing bugs are out of scope but worth surveying for context.
+## Out of scope (durable scope guards)
 
-**Acceptance criteria**:
+Durable boundaries on what kii is (not a v1.0-only gate):
 
-- [ ] **External CVE/0-day research compiled into `docs/audit/2026-MM-DD-audit.md`**:
-  - libpng CVEs from 2010+ — every advisory walked, kii-applicability assessed per class
-  - lodepng + stb_image bug histories — same treatment
-  - zlib CVEs (CVE-2018-25032 / CVE-2022-37434 / CVE-2023-45853 + any later) — kii uses sankoch (stdlib), but cross-impl bug-class transfer
-  - Terminal emulator escape sequence CVEs (CVE-2022-31202 / CVE-2003-0859 / etc.) — context only; out of kii's bug-fix scope
-  - W3C PNG test suite "broken" set — each broken-case PoC fed through `kii` to confirm clean rejection or document the gap
-- [ ] PNG fuzz harness scales from 2k → **10⁶ iterations clean** in `tests/kii.fcyr`
-- [ ] **New fuzz surfaces** added: random valid-PNG fixture → random downscale dims → emit_halfblock_row_buf; random target-geometry inputs into `_kii_compute_target_geometry` + `_kii_compute_fit_geometry`. Covers the M5+M6 modules previously fuzz-untested.
-- [ ] Integer-overflow review on every size-derivation multiplication (`width × height × bpp`, `dst_w × dst_src_rows × 3`, `idat_total_size`); add explicit caps where the kernel allows attacker-controlled inputs to overflow i64
-- [ ] **Decompression-amplification cap**: cap `idat_total_size` and the inflate output buffer to a configurable max (e.g. 256 MB) so a malformed IDAT claiming pathological dimensions can't OOM-DoS the host
-- [ ] ANSI escape injection review: enumerate every byte path from user input (path argument) to stderr; document constraints + add defenses (path-sanitization or refusal to emit non-printable bytes in `_eprint_path_msg`)
-- [ ] **Decode-latency matrix** at 256² / 1024² / 2048² source resolutions captured in `docs/benchmarks.md` — establishes the DoS-relevant worst-case timing envelope
-- [ ] `docs/adr/0002-security-model.md` (or similar) — captures kii's threat model + audit findings + accepted residual risks
-- [ ] CHANGELOG + VERSION → 0.8.0
-
-**Sub-bite cadence**:
-
-- **(a)** External research compilation — WebSearch + WebFetch across the CVE databases (NVD / CVE.org / Mitre / GitHub Security Advisories), libpng release notes, zlib changelogs, and any AGNOS first-party security-review playbook. Audit doc shape: per-CVE row with date / severity / class / kii-applicable? / remediation. Ship the doc before any code lands so the rest of the cycle is informed by the research.
-- **(b)** Fuzz scaling (2k → 10⁶) + new fuzz surfaces (downscale + quant + emit + geometry). Iteration count change is small; the new surfaces are the real work.
-- **(c)** Hardening commits for any vulnerabilities found in (a) + integer-overflow / bounds review + decompression-amplification cap.
-- **(d)** Decode-latency bench matrix at three source resolutions + ADR 0002 + close-out (CHANGELOG, state.md, doc-health, version bump).
-
-**Deps gates**: none expected. May add stdlib `bounds` if not already in (for size-cap helpers); confirmed during sub-bite (a).
-
-### M8 — v1.0 freeze cycle (v1.0.0) — SHIPPED 2026-05-23
-
-Closed out 2026-05-23. Per-bite outcomes:
-
-- **(b1)** RAMGON.png moved to `tests/fixtures/`; test/bench/fuzz references updated.
-- **(b2)** Per-chunk-type length cap (audit Finding 6, carry-forward) — IEND-length-zero + generic 256 MB per-chunk cap.
-- **(b3)** chafa visual review — initially deferred; re-run after chafa installed. Closed at v1.0 with 6-fixture comparison + byte-stream metrics + qualitative findings in `docs/audit/chafa-comparison.md`. Validates ADRs 0003 / 0004 / 0005 against chafa as reference impl.
-- **(b4)** W3C PngSuite walk — 14/14 broken rejected, 82/162 valid OK, 0 crashes (audit doc § Appendix A).
-- **(c1)** ADR 0003 — color-tier discipline (8/16-color v1.0).
-- **(c2)** ADR 0004 — half-block (▀/▄) as the floor glyph.
-- **(c3)** ADR 0005 — nearest-neighbor downscale (no Lanczos at v1).
-- **(c4)** `docs/guides/getting-started.md` backfilled.
-- **(c5)** `docs/examples/` populated with 3 runnable transcripts (happy path / palette code path / error path).
-- **(d)** Close-out: VERSION 0.8.0 → 1.0.0, CHANGELOG v1.0.0 entry, state.md refreshed, doc-health walked, roadmap collapsed.
-
-**Deferred to v1.x** (none block v1.0 tag):
-
-- First BBS / MUD downstream consumer integrated — **explicitly OFF the v1.0 acceptance set** (downstream apps ideated, not built; integration is a downstream-cycle deliverable).
-- Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux).
-<!-- chafa visual review: CLOSED at v1.0 (chafa installed; comparison shipped) -->
-- Marketplace recipe in zugot.
-
-## Out of scope (for v1.0)
-
-The list keeps future contributors from adding to v1.0 by accident:
-
-- **Tier 2 / 3 color modes** — 256-color, truecolor, dithering, Sixel, Kitty image protocol. All deferred to post-v1 per CLAUDE.md color-tier discipline.
-- **JPEG / GIF / BMP decoders** — PNG only at v1.0. Other formats land as v1.x bites once a consumer needs them.
+- **JPEG / GIF / BMP decoders in-repo** — kii does not carry format decoders; it consumes them from the `chitra` substrate on a `[deps.chitra]` re-pin (PNG already does; JPEG arrives at chitra 0.3). See [ADR 0006](../adr/0006-adopt-chitra-decoder.md).
 - **Animated GIF / video-frame-pipe** — explicit post-v2 scope.
 - **Output to stdout-other-than-TTY-styled file formats** — e.g. no HTML output, no SVG output. kii is image → ANSI, full stop.
 - **Image transformations** — no crop, no rotate, no scale-other-than-fit-terminal. Use upstream tools (ImageMagick) to pre-transform; kii consumes the result.
 - **Interactive mode** — no live-resize-on-terminal-resize, no animation, no scroll. One frame in, one frame out, exit.
 - **Filesystem traversal** — kii takes ONE file path. No glob, no recursive directory scan. Loop in the shell.
 
-## Post-v1 considerations (informational, not commitments)
+## Roadmap ahead (not yet committed)
 
-- **Tier 2 — 256-color + truecolor** (v1.1.0) — `--color 256` and `--color tc` modes; ordered/Floyd-Steinberg dither.
-- **New formats — via chitra re-pin, not an in-repo decoder** (superseded the old "in-repo JFIF at v1.2.0" plan). Post-re-fold kii consumes formats from the substrate on a `[deps.chitra]` re-pin: **chitra 0.2.1** (sub-byte depths 1/2/4 + Adam7 interlace) is **DONE — consumed by kii v1.2.2**, completing the PNG matrix (kii now renders 1/2/4-bit + interlaced PNGs it used to reject). **chitra 0.3+** adds JPEG (Huffman + IDCT + chroma upsample) — kii will pick it up the same way. Prefer chitra over any in-repo decoder (retires the in-repo JPEG/GIF/BMP line). See [ADR 0006](../adr/0006-adopt-chitra-decoder.md).
-- **~~Adopt `chitra`~~ — DONE at v1.2.0 (the PNG re-fold).** `chitra` 0.1.0 (2026-06-19) forked kii's `src/png.cyr` core for **mabda** (`gpu_texture_load_png`); **chitra 0.2.0** (2026-06-26) made the fork a strict superset of kii's decoder (16-bit depth + every M7(c)/M8 guard); **kii v1.2.0** then switched to `[deps.chitra]` and trimmed `src/png.cyr` to a thin adapter, closing the extract-on-2nd-consumer loop with byte-identical output. See [ADR 0006](../adr/0006-adopt-chitra-decoder.md) (supersedes [ADR 0001](../adr/0001-png-decoder-in-repo.md)). *(Mirrored on the ecosystem roadmap in `agnosticos/docs/development/roadmap.md` § Parallel cycle work.)*
-- **Full Block Elements glyph vocab** (v2.0.0) — supersedes ADR 0004's half-block-only floor. Expands the emit-glyph set from `▀` alone to the full Unicode Block Elements range (U+2580..U+259F): quarter-blocks (`▘▝▖▗`) for 4-corner-per-cell color encoding, eighth-blocks (`▁▂▃▄▅▆▇`) for sub-cell vertical gradients, the horizontal eighth-blocks (`▏▎▍▌▋▊▉`), and the shade blocks (`░▒▓`). Closes the bytewise + visual-detail gap with chafa documented in [`../audit/chafa-comparison.md`](../audit/chafa-comparison.md) (kii's 5.9×–69× byte verbosity vs chafa is driven by half-block-only + per-cell SGR pair; richer vocab lets each cell encode more visual information per byte). Requires a per-cell glyph-dispatch table (~32 arms vs current 1-arm `▀`-only) and a 4-corner color clustering at quantize-time. Trades byte-stability (ADR 0003) for visual fidelity — needs a new ADR superseding 0004 + amending 0003 when scoped.
-- **Character-glyph ASCII mode (`--mode ascii`)** — a SECOND rendering lane alongside the half-block color floor: render the image as **text characters** (the `jp2a` / classic-ASCII-art lane named in CLAUDE.md's identity). Two tiers:
-    - **Floor — luminance ramp**: **DONE — shipped at kii v1.3.0** (`src/ascii.cyr`, [ADR 0007](../adr/0007-rendering-mode-taxonomy.md)). Per-cell luminance → density-ordered glyph ramp `" .:-=+*#%@"`, colored fg. Luminance via the standard relative-luminance formula (`0.2126·R + 0.7152·G + 0.0722·B`) — a **multi-source standard** (W3C *Relative Luminance* / Wikipedia), pinned convergently per CLAUDE.md's no-single-source discipline, NOT from any one blog.
-    - **Advanced — shape-vector glyph matching**: instead of one brightness per cell, sample N coverage "circles" per cell (2D → 6D *shape vectors*), precompute each candidate glyph's coverage vector, and pick the glyph by nearest-neighbor (Euclidean) in shape-vector space — this captures glyph *orientation*, so `/ \ | -` edges emerge implicitly with no explicit Sobel / difference-of-Gaussians. Plus a global + directional contrast-enhancement pass (`normalize-by-max → pow(exponent) → denormalize`) and a k-d-tree / quantized-vector cache for the lookup hot path.
-    - **Insight source + attribution**: review **Alex Harri, "ASCII Art Rendering" — <https://alexharri.com/blog/ascii-rendering>** for the technique above. The **shape-vector glyph-matching and directional contrast-enhancement methods are original to that post — attribute it explicitly** (source comment + ADR) if kii adopts that logic/those formulas. The Euclidean-distance nearest-neighbour and k-d tree are standard CS (no attribution needed); relative-luminance is the W3C/Wikipedia standard (multi-source, convergent pin).
-    - **Fit with existing tiers**: orthogonal to the color tiers — a charset mode can compose with 16/256/truecolor (colored glyphs) or run monochrome, and reuses the existing downscale stage (extended with supersampling/cell-averaging for anti-aliasing). Slots under a `--mode` / `--charset` surface; earns its own ADR (rendering-mode taxonomy, sibling to ADR 0004's half-block floor) when scoped.
-- **Tier 3 — Sixel / Kitty protocols** (v2.0.0) — direct-image-protocol output for terminals that support it; the ASCII-art fallback stays the default. Possibly a major-version cut depending on CLI surface impact.
+Ordered roughly by readiness. Decoder substrate (PNG) and both render lanes
+(half-block + ASCII) are done; what remains is color fidelity, the next
+format, and richer glyph vocabularies.
 
-Captured deferrals will live as ADRs when the decision crystallizes.
+- **Tier 2 — 256-color + truecolor** (next; likely v1.4.0) — `--color 256` and `--color tc` (24-bit SGR) emit, then ordered / Floyd-Steinberg dithering as `--dither` choices. Orthogonal to `--mode` (composes with both half-block and ASCII). Self-contained in the emit/quant layer; amends ADR 0003's tier-1-only stance.
+- **JPEG (and beyond) via `chitra 0.3+`** — JFIF baseline (Huffman + IDCT + chroma upsample) lands in chitra; kii picks it up on a `[deps.chitra]` re-pin, exactly as it gained the full PNG matrix at v1.2.2. No in-repo decoder (ADR 0006).
+- **ASCII shape-vector refinements** (small follow-up to v1.3.1) — the two pieces deferred from Alex Harri's blog: **directional contrast enhancement** (normalize-by-max → power → denormalize on the cell vector before matching, sharpening edges) and a **k-d-tree** lookup to replace the 27-glyph linear scan. See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
+- **Full Block Elements glyph vocab** (v2.0.0) — expand the half-block emit from `▀` alone to the Unicode Block Elements range (U+2580..U+259F): quarter-blocks (`▘▝▖▗`) for 4-corner color, eighth-blocks (`▁▂▃▄▅▆▇` / `▏▎▍▌▋▊▉`) for sub-cell gradients, shade blocks (`░▒▓`). Closes the byte-verbosity + detail gap with chafa ([`../audit/chafa-comparison.md`](../audit/chafa-comparison.md)). Needs a ~32-arm glyph-dispatch + 4-corner quantize; trades byte-stability (ADR 0003) for fidelity — new ADR superseding ADR 0004 when scoped.
+- **Tier 3 — Sixel / Kitty / iTerm2 protocols** (v2.0.0) — direct-image-protocol output where supported; the ASCII/half-block lanes stay the fallback default. Possibly a major cut depending on CLI-surface impact.
+
+Captured deferrals become ADRs when the decision crystallizes.

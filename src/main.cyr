@@ -110,7 +110,7 @@ fn _eprint_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 1.3.0");
+    println("kii 1.3.1");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -330,45 +330,43 @@ fn main(): i64 {
             return KII_EXIT_RUN;
         }
     }
-    # Downscale resolution forks on the render mode: half-block packs 2
-    # source rows per character (▀ fg/bg), so it uses the full
-    # target_src_rows; ASCII renders ONE cell per character, so it uses
-    # half that — which keeps the aspect right in the terminal's ~2:1
-    # character cells. (target_src_rows is even by geometry construction.)
-    var is_ascii = kii_mode_is_ascii(mode);
-    var dst_rows = target_src_rows;
-    if (is_ascii == 1) {
-        dst_rows = target_src_rows / 2;
-        if (dst_rows < 1) { dst_rows = 1; }
-    }
-    var drc = downscale_to_rgb(&pstruct, target_w, dst_rows);
-    if (drc != 0) {
-        _eprint_path_msg(path, "downscale failed (palette PNG missing PLTE, or OOM)");
-        return KII_EXIT_RUN;
-    }
-
-    # Quantize the RGB-triple buffer into palette indices (the per-cell
-    # foreground for both modes). quantize_downscaled wraps quantize_rgb_buf
-    # with the alloc + pstruct-update boilerplate.
-    var qrc = quantize_downscaled(&pstruct);
-    if (qrc != 0) {
-        _eprint_path_msg(path, "quantization failed (OOM)");
-        return KII_EXIT_RUN;
-    }
-
-    # Frame to stdout via per-row buffered writes on the selected lane.
-    # Both read STRUCT_QUANTIZED_BUF + DOWNSCALED_W/H and are SIGPIPE-safe
-    # (each row resets SGR; truncated writes leave the terminal clean).
-    # ASCII also reads STRUCT_DOWNSCALED_BUF for per-cell luminance.
-    var erc = 0;
-    if (is_ascii == 1) {
-        erc = emit_ascii(&pstruct);
+    # The two render lanes fork the back of the pipeline:
+    #   half-block — downscale to (target_w × target_src_rows) [2 source
+    #     rows per ▀ cell], quantize to palette indices, emit_halfblock.
+    #   ascii (v1.3.1 shape-vector) — one char = one cell sampled in a 2×3
+    #     sub-grid, so downscale to (target_w·2 × ascii_rows·3) where
+    #     ascii_rows = target_src_rows/2 (half-block's char-row count). The
+    #     shape emit does its own per-cell mean-color quantize, so no
+    #     separate quantize_downscaled pass. Keeps aspect right in ~2:1 cells.
+    if (kii_mode_is_ascii(mode) == 1) {
+        var ascii_rows = target_src_rows / 2;
+        if (ascii_rows < 1) { ascii_rows = 1; }
+        var adrc = downscale_to_rgb(&pstruct, target_w * 2, ascii_rows * 3);
+        if (adrc != 0) {
+            _eprint_path_msg(path, "downscale failed (palette PNG missing PLTE, or OOM)");
+            return KII_EXIT_RUN;
+        }
+        var aerc = emit_ascii_shape(&pstruct);
+        if (aerc != 0) {
+            _eprint_path_msg(path, "ANSI emit failed (downscale not run)");
+            return KII_EXIT_RUN;
+        }
     } else {
-        erc = emit_halfblock(&pstruct);
-    }
-    if (erc != 0) {
-        _eprint_path_msg(path, "ANSI emit failed (downscale or quantize not run)");
-        return KII_EXIT_RUN;
+        var drc = downscale_to_rgb(&pstruct, target_w, target_src_rows);
+        if (drc != 0) {
+            _eprint_path_msg(path, "downscale failed (palette PNG missing PLTE, or OOM)");
+            return KII_EXIT_RUN;
+        }
+        var qrc = quantize_downscaled(&pstruct);
+        if (qrc != 0) {
+            _eprint_path_msg(path, "quantization failed (OOM)");
+            return KII_EXIT_RUN;
+        }
+        var erc = emit_halfblock(&pstruct);
+        if (erc != 0) {
+            _eprint_path_msg(path, "ANSI emit failed (downscale or quantize not run)");
+            return KII_EXIT_RUN;
+        }
     }
 
     # --verbose: write the M4-shaped summary to stderr AFTER the

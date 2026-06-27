@@ -1,104 +1,335 @@
-# ascii.cyr — character-glyph ("ASCII art") rendering mode (kii 1.3.0).
+# ascii.cyr — character-glyph ("ASCII art") rendering mode.
 #
-# The jp2a / namesake lane: render each downscaled cell as a TEXT glyph
-# chosen by the cell's luminance, colored with the cell's quantized
-# foreground. A second rendering lane beside the half-block default
-# (ADR 0007). Unlike half-block (2 source rows per character via ▀ fg/bg),
-# ASCII uses ONE cell per character — so main.cyr downscales to
-# (cols × rows) rather than (cols × 2·rows), which keeps the aspect right
-# in the terminal's ~2:1 character cells.
+# v1.3.0 introduced this lane with a luminance density ramp; v1.3.1
+# UPGRADES it to SHAPE-VECTOR glyph matching. Each output cell is sampled
+# in a 2x3 sub-grid, and the glyph whose ink-coverage vector is nearest
+# (squared-Euclidean over the 6 regions) is chosen — so the matcher tracks
+# glyph ORIENTATION (/, \, |, -, _, ...), not just density.
 #
-# This is the rendering FLOOR: a luminance → density-ramp mapping. The
-# advanced shape-vector glyph matching (Alex Harri,
-# https://alexharri.com/blog/ascii-rendering — attribute if adopted)
-# is a tracked follow-up; it needs per-glyph coverage data and a contrast
-# pass. See docs/development/roadmap.md § Post-v1.
+# ATTRIBUTION: the shape-vector technique (per-cell N-region coverage
+# vectors + nearest-glyph match) is from Alex Harri, "ASCII Art Rendering"
+# — https://alexharri.com/blog/ascii-rendering. kii uses a 6-region (2x3)
+# variant of his idea; the per-glyph coverage table is computed offline
+# from the Liberation-Mono font (scratch gen_shape.py) and normalized to
+# the 0..255 cell-luminance scale. The Euclidean nearest-neighbour and the
+# Rec.709 luma are standard (no attribution needed). Deferred refinements
+# from the blog (directional contrast enhancement, k-d-tree lookup) are
+# tracked — see docs/development/roadmap.md and ADR 0007.
 #
-# Stdlib (alloc/syscalls) + darshana (tty_fg_256_buf / tty_sgr_reset_buf)
-# auto-resolve from cyrius.cyml; png.cyr supplies the STRUCT_*_OFFSET
-# pstruct contract.
+# Still a SECOND lane beside the half-block default (ADR 0007). One char =
+# one cell, so main.cyr downscales to (cols*2)x(rows*3) for this mode — the
+# 2x3 sub-samples per character cell. Foreground is the cell's mean color
+# quantized to the 16-color palette.
+#
+# Stdlib (alloc/syscalls) + darshana (tty_*) auto-resolve; png.cyr gives
+# the pstruct contract; quant.cyr gives quantize_nearest_rgb (per-cell fg).
 
 include "src/png.cyr"
+include "src/quant.cyr"
 
-# Density ramp, dark → bright (10 levels), all single-byte ASCII (no
-# UTF-8 cell-width ambiguity, unlike the half-block glyphs). Space is the
-# darkest (the terminal background shows through); '@' is the densest ink.
-var ASCII_RAMP     = " .:-=+*#%@";
-var ASCII_RAMP_LEN = 10;
-
-# Rec.709 relative luminance, integer-scaled: round(0.2126/0.7152/0.0722
-# × 256) = 54/183/19 (sum 256), so the >>8 is an exact /256. Returns
-# 0..255. The coefficients are the W3C/Wikipedia standard (multi-source,
-# not from any single blog — see roadmap § char-ASCII attribution note).
+# Rec.709 relative luminance, integer-scaled 54/183/19 (sum 256, exact /256
+# via >>8). Returns 0..255. W3C/Wikipedia standard coefficients.
 fn _ascii_luma(r, g, b): i64 {
     return (54 * r + 183 * g + 19 * b) >> 8;
 }
 
-# Map luminance 0..255 → a ramp glyph byte: idx = luma·(len-1)/255, so
-# luma 0 → ' ' and luma 255 → '@'.
-fn _ascii_glyph(luma): i64 {
-    var idx = (luma * (ASCII_RAMP_LEN - 1)) / 255;
-    return load8(ASCII_RAMP + idx);
+# === GENERATED (gen_shape.py, Liberation-Mono 24x48) — do not hand-edit ===
+var ASCII_SHAPE_COUNT = 27;
+var ASCII_SHAPE_GLYPHS[32];
+var ASCII_SHAPE_COV[192];
+var _ascii_shape_inited = 0;
+
+# Populate the glyph + coverage tables (idempotent; mirrors palette_init).
+fn _ascii_shape_init(): i64 {
+    if (_ascii_shape_inited == 1) { return 0; }
+    store64(&ASCII_SHAPE_GLYPHS + 0 * 8, 32);
+    store64(&ASCII_SHAPE_COV + (0 * 6 + 0) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (0 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (0 * 6 + 2) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (0 * 6 + 3) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (0 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (0 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 1 * 8, 46);
+    store64(&ASCII_SHAPE_COV + (1 * 6 + 0) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (1 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (1 * 6 + 2) * 8, 15);
+    store64(&ASCII_SHAPE_COV + (1 * 6 + 3) * 8, 11);
+    store64(&ASCII_SHAPE_COV + (1 * 6 + 4) * 8, 60);
+    store64(&ASCII_SHAPE_COV + (1 * 6 + 5) * 8, 45);
+    store64(&ASCII_SHAPE_GLYPHS + 2 * 8, 44);
+    store64(&ASCII_SHAPE_COV + (2 * 6 + 0) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (2 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (2 * 6 + 2) * 8, 31);
+    store64(&ASCII_SHAPE_COV + (2 * 6 + 3) * 8, 6);
+    store64(&ASCII_SHAPE_COV + (2 * 6 + 4) * 8, 209);
+    store64(&ASCII_SHAPE_COV + (2 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 3 * 8, 39);
+    store64(&ASCII_SHAPE_COV + (3 * 6 + 0) * 8, 130);
+    store64(&ASCII_SHAPE_COV + (3 * 6 + 1) * 8, 90);
+    store64(&ASCII_SHAPE_COV + (3 * 6 + 2) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (3 * 6 + 3) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (3 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (3 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 4 * 8, 96);
+    store64(&ASCII_SHAPE_COV + (4 * 6 + 0) * 8, 49);
+    store64(&ASCII_SHAPE_COV + (4 * 6 + 1) * 8, 40);
+    store64(&ASCII_SHAPE_COV + (4 * 6 + 2) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (4 * 6 + 3) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (4 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (4 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 5 * 8, 58);
+    store64(&ASCII_SHAPE_COV + (5 * 6 + 0) * 8, 49);
+    store64(&ASCII_SHAPE_COV + (5 * 6 + 1) * 8, 38);
+    store64(&ASCII_SHAPE_COV + (5 * 6 + 2) * 8, 40);
+    store64(&ASCII_SHAPE_COV + (5 * 6 + 3) * 8, 31);
+    store64(&ASCII_SHAPE_COV + (5 * 6 + 4) * 8, 60);
+    store64(&ASCII_SHAPE_COV + (5 * 6 + 5) * 8, 45);
+    store64(&ASCII_SHAPE_GLYPHS + 6 * 8, 59);
+    store64(&ASCII_SHAPE_COV + (6 * 6 + 0) * 8, 49);
+    store64(&ASCII_SHAPE_COV + (6 * 6 + 1) * 8, 38);
+    store64(&ASCII_SHAPE_COV + (6 * 6 + 2) * 8, 36);
+    store64(&ASCII_SHAPE_COV + (6 * 6 + 3) * 8, 31);
+    store64(&ASCII_SHAPE_COV + (6 * 6 + 4) * 8, 187);
+    store64(&ASCII_SHAPE_COV + (6 * 6 + 5) * 8, 36);
+    store64(&ASCII_SHAPE_GLYPHS + 7 * 8, 45);
+    store64(&ASCII_SHAPE_COV + (7 * 6 + 0) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (7 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (7 * 6 + 2) * 8, 90);
+    store64(&ASCII_SHAPE_COV + (7 * 6 + 3) * 8, 81);
+    store64(&ASCII_SHAPE_COV + (7 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (7 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 8 * 8, 95);
+    store64(&ASCII_SHAPE_COV + (8 * 6 + 0) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (8 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (8 * 6 + 2) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (8 * 6 + 3) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (8 * 6 + 4) * 8, 85);
+    store64(&ASCII_SHAPE_COV + (8 * 6 + 5) * 8, 85);
+    store64(&ASCII_SHAPE_GLYPHS + 9 * 8, 126);
+    store64(&ASCII_SHAPE_COV + (9 * 6 + 0) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (9 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (9 * 6 + 2) * 8, 128);
+    store64(&ASCII_SHAPE_COV + (9 * 6 + 3) * 8, 128);
+    store64(&ASCII_SHAPE_COV + (9 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (9 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 10 * 8, 61);
+    store64(&ASCII_SHAPE_COV + (10 * 6 + 0) * 8, 133);
+    store64(&ASCII_SHAPE_COV + (10 * 6 + 1) * 8, 133);
+    store64(&ASCII_SHAPE_COV + (10 * 6 + 2) * 8, 135);
+    store64(&ASCII_SHAPE_COV + (10 * 6 + 3) * 8, 135);
+    store64(&ASCII_SHAPE_COV + (10 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (10 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 11 * 8, 43);
+    store64(&ASCII_SHAPE_COV + (11 * 6 + 0) * 8, 56);
+    store64(&ASCII_SHAPE_COV + (11 * 6 + 1) * 8, 36);
+    store64(&ASCII_SHAPE_COV + (11 * 6 + 2) * 8, 216);
+    store64(&ASCII_SHAPE_COV + (11 * 6 + 3) * 8, 185);
+    store64(&ASCII_SHAPE_COV + (11 * 6 + 4) * 8, 6);
+    store64(&ASCII_SHAPE_COV + (11 * 6 + 5) * 8, 2);
+    store64(&ASCII_SHAPE_GLYPHS + 12 * 8, 124);
+    store64(&ASCII_SHAPE_COV + (12 * 6 + 0) * 8, 119);
+    store64(&ASCII_SHAPE_COV + (12 * 6 + 1) * 8, 81);
+    store64(&ASCII_SHAPE_COV + (12 * 6 + 2) * 8, 119);
+    store64(&ASCII_SHAPE_COV + (12 * 6 + 3) * 8, 81);
+    store64(&ASCII_SHAPE_COV + (12 * 6 + 4) * 8, 119);
+    store64(&ASCII_SHAPE_COV + (12 * 6 + 5) * 8, 81);
+    store64(&ASCII_SHAPE_GLYPHS + 13 * 8, 47);
+    store64(&ASCII_SHAPE_COV + (13 * 6 + 0) * 8, 2);
+    store64(&ASCII_SHAPE_COV + (13 * 6 + 1) * 8, 214);
+    store64(&ASCII_SHAPE_COV + (13 * 6 + 2) * 8, 185);
+    store64(&ASCII_SHAPE_COV + (13 * 6 + 3) * 8, 33);
+    store64(&ASCII_SHAPE_COV + (13 * 6 + 4) * 8, 78);
+    store64(&ASCII_SHAPE_COV + (13 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 14 * 8, 92);
+    store64(&ASCII_SHAPE_COV + (14 * 6 + 0) * 8, 212);
+    store64(&ASCII_SHAPE_COV + (14 * 6 + 1) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (14 * 6 + 2) * 8, 49);
+    store64(&ASCII_SHAPE_COV + (14 * 6 + 3) * 8, 166);
+    store64(&ASCII_SHAPE_COV + (14 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (14 * 6 + 5) * 8, 81);
+    store64(&ASCII_SHAPE_GLYPHS + 15 * 8, 60);
+    store64(&ASCII_SHAPE_COV + (15 * 6 + 0) * 8, 36);
+    store64(&ASCII_SHAPE_COV + (15 * 6 + 1) * 8, 137);
+    store64(&ASCII_SHAPE_COV + (15 * 6 + 2) * 8, 245);
+    store64(&ASCII_SHAPE_COV + (15 * 6 + 3) * 8, 128);
+    store64(&ASCII_SHAPE_COV + (15 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (15 * 6 + 5) * 8, 13);
+    store64(&ASCII_SHAPE_GLYPHS + 16 * 8, 62);
+    store64(&ASCII_SHAPE_COV + (16 * 6 + 0) * 8, 135);
+    store64(&ASCII_SHAPE_COV + (16 * 6 + 1) * 8, 27);
+    store64(&ASCII_SHAPE_COV + (16 * 6 + 2) * 8, 135);
+    store64(&ASCII_SHAPE_COV + (16 * 6 + 3) * 8, 248);
+    store64(&ASCII_SHAPE_COV + (16 * 6 + 4) * 8, 9);
+    store64(&ASCII_SHAPE_COV + (16 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 17 * 8, 40);
+    store64(&ASCII_SHAPE_COV + (17 * 6 + 0) * 8, 139);
+    store64(&ASCII_SHAPE_COV + (17 * 6 + 1) * 8, 88);
+    store64(&ASCII_SHAPE_COV + (17 * 6 + 2) * 8, 227);
+    store64(&ASCII_SHAPE_COV + (17 * 6 + 3) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (17 * 6 + 4) * 8, 153);
+    store64(&ASCII_SHAPE_COV + (17 * 6 + 5) * 8, 74);
+    store64(&ASCII_SHAPE_GLYPHS + 18 * 8, 41);
+    store64(&ASCII_SHAPE_COV + (18 * 6 + 0) * 8, 110);
+    store64(&ASCII_SHAPE_COV + (18 * 6 + 1) * 8, 119);
+    store64(&ASCII_SHAPE_COV + (18 * 6 + 2) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (18 * 6 + 3) * 8, 225);
+    store64(&ASCII_SHAPE_COV + (18 * 6 + 4) * 8, 97);
+    store64(&ASCII_SHAPE_COV + (18 * 6 + 5) * 8, 133);
+    store64(&ASCII_SHAPE_GLYPHS + 19 * 8, 94);
+    store64(&ASCII_SHAPE_COV + (19 * 6 + 0) * 8, 130);
+    store64(&ASCII_SHAPE_COV + (19 * 6 + 1) * 8, 124);
+    store64(&ASCII_SHAPE_COV + (19 * 6 + 2) * 8, 121);
+    store64(&ASCII_SHAPE_COV + (19 * 6 + 3) * 8, 126);
+    store64(&ASCII_SHAPE_COV + (19 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (19 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 20 * 8, 118);
+    store64(&ASCII_SHAPE_COV + (20 * 6 + 0) * 8, 56);
+    store64(&ASCII_SHAPE_COV + (20 * 6 + 1) * 8, 67);
+    store64(&ASCII_SHAPE_COV + (20 * 6 + 2) * 8, 230);
+    store64(&ASCII_SHAPE_COV + (20 * 6 + 3) * 8, 230);
+    store64(&ASCII_SHAPE_COV + (20 * 6 + 4) * 8, 74);
+    store64(&ASCII_SHAPE_COV + (20 * 6 + 5) * 8, 60);
+    store64(&ASCII_SHAPE_GLYPHS + 21 * 8, 120);
+    store64(&ASCII_SHAPE_COV + (21 * 6 + 0) * 8, 69);
+    store64(&ASCII_SHAPE_COV + (21 * 6 + 1) * 8, 74);
+    store64(&ASCII_SHAPE_COV + (21 * 6 + 2) * 8, 216);
+    store64(&ASCII_SHAPE_COV + (21 * 6 + 3) * 8, 200);
+    store64(&ASCII_SHAPE_COV + (21 * 6 + 4) * 8, 81);
+    store64(&ASCII_SHAPE_COV + (21 * 6 + 5) * 8, 88);
+    store64(&ASCII_SHAPE_GLYPHS + 22 * 8, 111);
+    store64(&ASCII_SHAPE_COV + (22 * 6 + 0) * 8, 106);
+    store64(&ASCII_SHAPE_COV + (22 * 6 + 1) * 8, 99);
+    store64(&ASCII_SHAPE_COV + (22 * 6 + 2) * 8, 216);
+    store64(&ASCII_SHAPE_COV + (22 * 6 + 3) * 8, 230);
+    store64(&ASCII_SHAPE_COV + (22 * 6 + 4) * 8, 119);
+    store64(&ASCII_SHAPE_COV + (22 * 6 + 5) * 8, 110);
+    store64(&ASCII_SHAPE_GLYPHS + 23 * 8, 42);
+    store64(&ASCII_SHAPE_COV + (23 * 6 + 0) * 8, 191);
+    store64(&ASCII_SHAPE_COV + (23 * 6 + 1) * 8, 162);
+    store64(&ASCII_SHAPE_COV + (23 * 6 + 2) * 8, 15);
+    store64(&ASCII_SHAPE_COV + (23 * 6 + 3) * 8, 15);
+    store64(&ASCII_SHAPE_COV + (23 * 6 + 4) * 8, 0);
+    store64(&ASCII_SHAPE_COV + (23 * 6 + 5) * 8, 0);
+    store64(&ASCII_SHAPE_GLYPHS + 24 * 8, 35);
+    store64(&ASCII_SHAPE_COV + (24 * 6 + 0) * 8, 155);
+    store64(&ASCII_SHAPE_COV + (24 * 6 + 1) * 8, 155);
+    store64(&ASCII_SHAPE_COV + (24 * 6 + 2) * 8, 230);
+    store64(&ASCII_SHAPE_COV + (24 * 6 + 3) * 8, 230);
+    store64(&ASCII_SHAPE_COV + (24 * 6 + 4) * 8, 49);
+    store64(&ASCII_SHAPE_COV + (24 * 6 + 5) * 8, 49);
+    store64(&ASCII_SHAPE_GLYPHS + 25 * 8, 37);
+    store64(&ASCII_SHAPE_COV + (25 * 6 + 0) * 8, 169);
+    store64(&ASCII_SHAPE_COV + (25 * 6 + 1) * 8, 128);
+    store64(&ASCII_SHAPE_COV + (25 * 6 + 2) * 8, 221);
+    store64(&ASCII_SHAPE_COV + (25 * 6 + 3) * 8, 227);
+    store64(&ASCII_SHAPE_COV + (25 * 6 + 4) * 8, 56);
+    store64(&ASCII_SHAPE_COV + (25 * 6 + 5) * 8, 126);
+    store64(&ASCII_SHAPE_GLYPHS + 26 * 8, 64);
+    store64(&ASCII_SHAPE_COV + (26 * 6 + 0) * 8, 223);
+    store64(&ASCII_SHAPE_COV + (26 * 6 + 1) * 8, 255);
+    store64(&ASCII_SHAPE_COV + (26 * 6 + 2) * 8, 191);
+    store64(&ASCII_SHAPE_COV + (26 * 6 + 3) * 8, 248);
+    store64(&ASCII_SHAPE_COV + (26 * 6 + 4) * 8, 221);
+    store64(&ASCII_SHAPE_COV + (26 * 6 + 5) * 8, 176);
+    _ascii_shape_inited = 1;
+    return 0;
 }
 
-# emit_ascii_row_buf — render ONE row of colored ASCII glyphs into a
-# caller-owned byte buffer; returns the new pos (bytes appended) or -1.
-# `rgb` is the packed RGB-triple buffer (luminance source), `qbuf` the
-# parallel palette-index buffer (fg color), both `sw` cells wide. Buffer-
-# targeting (not an fd write) so tests can assert the exact bytes — the
-# same split as emit_halfblock_row_buf.
-fn emit_ascii_row_buf(rgb, qbuf, sw, row, buf, pos): i64 {
-    var col = 0;
-    while (col < sw) {
-        var ci = row * sw + col;
-        var o = rgb + ci * 3;
-        var luma = _ascii_luma(load8(o + 0), load8(o + 1), load8(o + 2));
-        var fg = load8(qbuf + ci);
+# _ascii_match — given a 6-byte region-luminance vector `v` (row-major:
+# r0c0 r0c1 r1c0 r1c1 r2c0 r2c1, each 0..255), return the glyph byte whose
+# coverage vector is nearest in squared-Euclidean distance. Ties resolve to
+# the lower index (strict `<`), so glyph 0 (space) wins an all-dark cell.
+# Max distance 6*255^2 ~= 390k — well within i64.
+fn _ascii_match(v): i64 {
+    _ascii_shape_init();
+    var best_g = 0;
+    var best_d = 0 - 1;
+    var g = 0;
+    while (g < ASCII_SHAPE_COUNT) {
+        var d = 0;
+        var r = 0;
+        while (r < 6) {
+            var diff = load8(v + r) - load64(&ASCII_SHAPE_COV + (g * 6 + r) * 8);
+            d = d + diff * diff;
+            r = r + 1;
+        }
+        if (best_d < 0 || d < best_d) {
+            best_d = d;
+            best_g = g;
+        }
+        g = g + 1;
+    }
+    return load64(&ASCII_SHAPE_GLYPHS + best_g * 8);
+}
+
+# emit_ascii_shape_row_buf — render ONE character row (cell row `cy`) into
+# `buf` at `pos`. `rgb` is the finer (sub_w x sub_h) downscaled RGB buffer
+# where sub_w = cols*2; each cell pulls its 2x3 sub-samples, builds the
+# 6-region luminance vector, matches a glyph, and colors it with the cell's
+# mean quantized color. Returns the new pos, or -1. (Buffer-targeting so
+# tests can assert the exact bytes — same split as emit_halfblock_row_buf.)
+fn emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, buf, pos): i64 {
+    var cx = 0;
+    while (cx < cols) {
+        var vec[6];
+        var sumr = 0;
+        var sumg = 0;
+        var sumb = 0;
+        var rr = 0;
+        while (rr < 3) {
+            var cc = 0;
+            while (cc < 2) {
+                var sx = cx * 2 + cc;
+                var sy = cy * 3 + rr;
+                var o = rgb + (sy * sub_w + sx) * 3;
+                var pr = load8(o + 0);
+                var pg = load8(o + 1);
+                var pb = load8(o + 2);
+                store8(&vec + (rr * 2 + cc), _ascii_luma(pr, pg, pb));
+                sumr = sumr + pr;
+                sumg = sumg + pg;
+                sumb = sumb + pb;
+                cc = cc + 1;
+            }
+            rr = rr + 1;
+        }
+        var glyph = _ascii_match(&vec);
+        var fg = quantize_nearest_rgb(sumr / 6, sumg / 6, sumb / 6);
         pos = tty_fg_256_buf(buf, pos, fg);
         if (pos < 0) { return 0 - 1; }
-        store8(buf + pos, _ascii_glyph(luma));
+        store8(buf + pos, glyph);
         pos = pos + 1;
-        col = col + 1;
+        cx = cx + 1;
     }
-    # Reset SGR + newline per row (same SIGPIPE-clean discipline as
-    # emit_halfblock — a truncated write never leaves a colored TTY).
+    # Per-row SGR reset + newline (SIGPIPE-clean, like emit_halfblock).
     pos = tty_sgr_reset_buf(buf, pos);
     store8(buf + pos, 10);
     pos = pos + 1;
     return pos;
 }
 
-# emit_ascii — render the downscaled frame as colored ASCII glyphs to
-# fd 1 (stdout). Luminance comes from the true downscaled RGB
-# (STRUCT_DOWNSCALED_BUF, before color quantization); the per-cell
-# foreground color is the quantized palette index (STRUCT_QUANTIZED_BUF).
-# Both buffers are DOWNSCALED_W × DOWNSCALED_H. One write(2) per row.
-#
-# Returns 0 on success; -1 if downscale/quantize weren't run (null bufs)
-# or dimensions are invalid.
-#
-# The line buffer is heap-allocated and sized from the width — each cell
-# is at most an fg escape (≤11 B) + 1 glyph byte, plus a per-row reset
-# (≤5) + LF; `sw·14 + 16` bounds it with margin. (Fixed-stack buffers are
-# the v1.2.1 overflow trap — never size a per-row buffer by a constant.)
-fn emit_ascii(pstruct): i64 {
-    var rgb  = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
-    var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
-    var sw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
-    var sh   = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
-    if (rgb == 0 || qbuf == 0)   { return 0 - 1; }
-    if (sw <= 0 || sh <= 0)      { return 0 - 1; }
-
-    var line_cap = sw * 14 + 16;
+# emit_ascii_shape — render the full frame to fd 1 (stdout). Reads
+# STRUCT_DOWNSCALED_* (the finer (cols*2 x rows*3) RGB buffer main.cyr
+# produces for ASCII mode). Returns 0, or -1 if downscale wasn't run / dims
+# invalid. Per-row heap buffer sized from cols (no fixed-stack overflow —
+# the v1.2.1 lesson): each cell is <=11 B fg + 1 glyph, + per-row reset/LF.
+fn emit_ascii_shape(pstruct): i64 {
+    var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var sub_w = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
+    var sub_h = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
+    if (rgb == 0) { return 0 - 1; }
+    if (sub_w < 2 || sub_h < 3) { return 0 - 1; }
+    var cols = sub_w / 2;
+    var rows = sub_h / 3;
+    var line_cap = cols * 14 + 16;
     var line_buf = alloc(line_cap);
     if (line_buf == 0) { return 0 - 1; }
-
-    var row = 0;
-    while (row < sh) {
-        var pos = emit_ascii_row_buf(rgb, qbuf, sw, row, line_buf, 0);
+    var cy = 0;
+    while (cy < rows) {
+        var pos = emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, line_buf, 0);
         if (pos < 0) { return 0 - 1; }
         syscall(1, 1, line_buf, pos);
-        row = row + 1;
+        cy = cy + 1;
     }
     return 0;
 }

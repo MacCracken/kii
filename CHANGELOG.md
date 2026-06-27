@@ -4,6 +4,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-06-26
+
+**ASCII shape-vector glyph matching.** Upgrades `--mode ascii` from the v1.3.0
+luminance ramp to **shape-aware** glyph selection: each cell is sampled in a 2×3
+sub-grid and matched (nearest squared-Euclidean over the 6 regions) to the glyph
+whose ink-coverage vector is closest — so the output tracks glyph *orientation*
+(`/ \ | - _ ( ) ^` …), not just density. Half-block remains byte-identical.
+
+### Changed
+- `src/ascii.cyr`: replaced the ramp (`_ascii_glyph`/`emit_ascii`) with the
+  shape-vector matcher — `_ascii_match` (6-region nearest-glyph), a 27-glyph
+  coverage table (`_ascii_shape_init`, computed offline from Liberation-Mono,
+  normalized to the 0..255 luminance scale), `emit_ascii_shape_row_buf` +
+  `emit_ascii_shape`. `_ascii_luma` retained. `main.cyr`'s ASCII lane downscales
+  to (cols·2 × rows·3) for the sub-cell grid; foreground is the cell's mean color
+  quantized (no separate `quantize_downscaled` pass in this lane).
+- `tests/ascii.tcyr` rewired to the matcher (luma, self-match per glyph, exact
+  row bytes, guards).
+
+### Attribution
+- The shape-vector technique (per-cell N-region coverage vectors + nearest-glyph
+  match) is from **Alex Harri, "ASCII Art Rendering"
+  (<https://alexharri.com/blog/ascii-rendering>)** — cited in `src/ascii.cyr` and
+  [ADR 0007](docs/adr/0007-rendering-mode-taxonomy.md). kii uses a 6-region (2×3)
+  variant; the Euclidean NN + Rec.709 luma are standard. Deferred from the blog:
+  directional contrast enhancement + k-d-tree lookup (tracked).
+
 ## [1.3.0] — 2026-06-26
 
 **Character-glyph ASCII mode (`--mode ascii`).** A second rendering lane beside

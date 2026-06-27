@@ -1,5 +1,6 @@
-# tests/ascii.tcyr — character-glyph ("ASCII art") rendering mode (kii 1.3.0).
-# Covers the luminance ramp + the per-row glyph emit. Standalone suite.
+# tests/ascii.tcyr — character-glyph ASCII mode, shape-vector matcher
+# (kii 1.3.1). Covers Rec.709 luma, the 6-region nearest-glyph match
+# against the coverage table, and the per-row glyph emit. Standalone suite.
 include "src/ascii.cyr"
 include "lib/assert.cyr"
 
@@ -13,35 +14,55 @@ fn test_ascii_luma() {
     return 0;
 }
 
-# Ramp " .:-=+*#%@": idx = luma·9/255. Glyph bytes are ASCII.
-fn test_ascii_glyph() {
-    assert_eq(_ascii_glyph(0),   32, "luma 0 -> ' ' (32)");
-    assert_eq(_ascii_glyph(255), 64, "luma 255 -> '@' (64)");
-    assert_eq(_ascii_glyph(29),  46, "luma 29 -> '.' (46)");
-    assert_eq(_ascii_glyph(128), 61, "luma 128 -> '=' (61)");
-    assert_eq(_ascii_glyph(200), 35, "luma 200 -> '#' (35)");
+# Helper: build a 6-byte region vector and match it.
+fn _mk_match(a, b, c, d, e, f): i64 {
+    var v[6];
+    store8(&v + 0, a); store8(&v + 1, b); store8(&v + 2, c);
+    store8(&v + 3, d); store8(&v + 4, e); store8(&v + 5, f);
+    return _ascii_match(&v);
+}
+
+# Each glyph's own (normalized) coverage vector must match itself — a
+# distance-0 hit, the strongest correctness check on the matcher + table.
+fn test_ascii_match() {
+    # all-dark -> space (32); also the tie-break to glyph 0.
+    assert_eq(_mk_match(0, 0, 0, 0, 0, 0), 32, "all-dark -> ' '");
+    # '|' coverage [119,81,119,81,119,81] -> '|' (124).
+    assert_eq(_mk_match(119, 81, 119, 81, 119, 81), 124, "center column -> '|'");
+    # '/' coverage [2,214,185,33,78,0] -> '/' (47) — the forward diagonal.
+    assert_eq(_mk_match(2, 214, 185, 33, 78, 0), 47, "fwd diagonal -> '/'");
+    # '@' coverage [223,255,191,248,221,176] -> '@' (64), the densest.
+    assert_eq(_mk_match(223, 255, 191, 248, 221, 176), 64, "dense -> '@'");
+    # Saturated cell -> the densest glyph '@'.
+    assert_eq(_mk_match(255, 255, 255, 255, 255, 255), 64, "all-bright -> '@'");
     return 0;
 }
 
-# emit_ascii_row_buf: a 2-cell row (black/idx0, white/idx15) — assert the
-# structure (fg escapes + glyphs + per-row reset + LF) by bytes.
-fn test_ascii_row_buf() {
-    var rgb[8];
-    var qbuf[8];
+# emit_ascii_shape_row_buf: a 2-cell row (cell0 black, cell1 white) over a
+# 4×3 sub-sample buffer (sub_w=4). cell0 -> ' ', cell1 -> '@'.
+fn test_ascii_shape_row_buf() {
+    var rgb[36];
+    var z = 0;
+    while (z < 36) { store8(&rgb + z, 0); z = z + 1; }
+    # cell1 = sub-columns 2,3 across all 3 rows -> white.
+    var sy = 0;
+    while (sy < 3) {
+        var sx = 2;
+        while (sx < 4) {
+            var o = (sy * 4 + sx) * 3;
+            store8(&rgb + o + 0, 255); store8(&rgb + o + 1, 255); store8(&rgb + o + 2, 255);
+            sx = sx + 1;
+        }
+        sy = sy + 1;
+    }
     var out[64];
-    store8(&rgb + 0, 0);   store8(&rgb + 1, 0);   store8(&rgb + 2, 0);     # cell0 black
-    store8(&rgb + 3, 255); store8(&rgb + 4, 255); store8(&rgb + 5, 255);   # cell1 white
-    store8(&qbuf + 0, 0);  store8(&qbuf + 1, 15);
-    var pos = emit_ascii_row_buf(&rgb, &qbuf, 2, 0, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 4, 0, 2, &out, 0);
     assert(pos > 0, "row_buf returns positive pos");
-    # Row ends with the SGR reset (ESC [ 0 m) then LF.
     assert_eq(load8(&out + pos - 1), 10,   "row ends LF");
     assert_eq(load8(&out + pos - 2), 0x6D, "reset 'm'");
-    assert_eq(load8(&out + pos - 3), 0x30, "reset '0'");
-    assert_eq(load8(&out + pos - 4), 0x5B, "reset '['");
     assert_eq(load8(&out + pos - 5), 0x1B, "reset ESC");
-    # Dark cell -> space glyph (32); bright cell -> '@' (64). Neither byte
-    # occurs in a 256-color SGR escape, so a scan is unambiguous.
+    # Dark cell -> ' ' (32); white cell -> '@' (64). Neither byte occurs in
+    # a 256-color SGR escape, so a scan is unambiguous.
     var saw_space = 0;
     var saw_at = 0;
     var i = 0;
@@ -51,25 +72,25 @@ fn test_ascii_row_buf() {
         if (b == 64) { saw_at = 1; }
         i = i + 1;
     }
-    assert_eq(saw_space, 1, "dark cell -> ' ' glyph");
-    assert_eq(saw_at, 1, "bright cell -> '@' glyph");
+    assert_eq(saw_space, 1, "dark cell -> ' '");
+    assert_eq(saw_at, 1, "white cell -> '@'");
     return 0;
 }
 
-# emit_ascii rejects an un-run pipeline (null downscaled/quantized bufs).
-fn test_ascii_emit_guards() {
+# emit_ascii_shape rejects an un-run pipeline (null downscaled buf).
+fn test_ascii_shape_guards() {
     var pstruct[160];
     var z = 0;
     while (z < 160) { store8(&pstruct + z, 0); z = z + 1; }
-    assert_eq(emit_ascii(&pstruct), 0 - 1, "null bufs -> -1");
+    assert_eq(emit_ascii_shape(&pstruct), 0 - 1, "null buf -> -1");
     return 0;
 }
 
 fn main() {
     test_ascii_luma();
-    test_ascii_glyph();
-    test_ascii_row_buf();
-    test_ascii_emit_guards();
+    test_ascii_match();
+    test_ascii_shape_row_buf();
+    test_ascii_shape_guards();
     return assert_summary();
 }
 

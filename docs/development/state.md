@@ -5,6 +5,14 @@
 
 ## Version
 
+**1.3.1** — cut 2026-06-26. **ASCII shape-vector glyph matching.** Upgrades `--mode ascii`
+from the 1.3.0 luminance ramp to shape-aware selection: each cell sampled in a 2×3 sub-grid,
+matched (6-region nearest-Euclidean) to the glyph whose ink-coverage vector is closest — tracks
+orientation (`/ \ | - _ ( ) ^`), not just density. 27-glyph coverage table computed offline from
+Liberation-Mono (normalized 0..255). Attribution: Alex Harri's blog (cited in `src/ascii.cyr` +
+ADR 0007); deferred refinements: directional contrast + k-d-tree. Half-block byte-identical.
+`print_version` → `kii 1.3.1`. 369 assertions.
+
 **1.3.0** — cut 2026-06-26. **Character-glyph ASCII mode (`--mode ascii`).** A second
 rendering lane beside half-block — kii's jp2a/namesake "ASCII art": text glyphs by
 luminance (ramp `" .:-=+*#%@"`, Rec.709 luma), colored per cell. Shares decode →
@@ -68,7 +76,7 @@ Full PNG → terminal-fit ANSI half-block frame pipeline (unchanged at the user-
 - `kii image.png > out.ansi` (non-TTY) → falls back to 80×24 BBS-default; identical frame shape regardless of where stdout lands.
 - `kii --width N image.png` → exactly N cells wide; height aspect-derived without a row cap.
 - `kii --verbose image.png` adds the M4-shape summary line to **stderr** after the frame.
-- `kii --mode ascii image.png` → character-glyph "ASCII art" lane (luminance ramp `" .:-=+*#%@"`, colored fg) instead of the half-block default. `--mode halfblock` (default) is the `▀` floor. See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
+- `kii --mode ascii image.png` → character-glyph "ASCII art" lane (v1.3.1 shape-vector: 2×3 sub-grid matched to glyph coverage → orientation-aware `/ \ | - _ ( ) ^`, colored fg) instead of the half-block default. `--mode halfblock` (default) is the `▀` floor. See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
 - Missing IEND → frame + stderr warning + exit 0 (per spec § 5.3 tolerance).
 - **Decode rejection paths** (the M7(c)/M8 guards now live inside chitra; kii maps
   `ChitraErr` → `PNG_ERR_*` for byte-stable stderr): dimensions/ratio bombs →
@@ -86,7 +94,7 @@ Module map:
 
 - `src/main.cyr` — I/O glue + dispatch. Two-path geometry resolver (`--width N` → M6(a); else `tty_winsize`-detect → M6(b) fit). M7(c) added `_eprint_path_safe` helper routing path bytes through the sanitizer.
 - `src/cli.cyr` — CLI parse helpers + `KII_F_*` indices (width/color/verbose/**mode**). M7(c) added `kii_path_has_control_bytes(path)`; v1.3.0 added `kii_validate_mode` / `kii_mode_is_ascii` for `--mode`.
-- `src/ascii.cyr` — **v1.3.0 character-glyph lane**: `_ascii_luma` (Rec.709), `_ascii_glyph` (ramp), `emit_ascii_row_buf` (testable buffer variant) + `emit_ascii`. Per-row buffer heap-allocated from width (no fixed-stack overflow).
+- `src/ascii.cyr` — **character-glyph lane** (v1.3.0 ramp → v1.3.1 shape-vector): `_ascii_luma` (Rec.709), `_ascii_match` (6-region nearest-glyph) + `_ascii_shape_init` (27-glyph coverage table, offline-generated), `emit_ascii_shape_row_buf` (testable) + `emit_ascii_shape`. Per-row buffer heap-allocated from width.
 - `src/png.cyr` — **chitra adapter** (post-re-fold; was the 813-line native decoder). Keeps the `PNG_ERR_*` code space + 20-slot `STRUCT_*_OFFSET` pstruct (160 bytes, +`STRUCT_SRC_COLOR_TYPE_OFFSET`=144) + `_png_color_channels` / `png_color_type_name`. Adds `kii_decode_png(path,&pstruct)` (size-capped slurp → `chitra_png_decode` → RGBA8 as a depth-8 ct6 image), `kii_file_size` (lseek SEEK_END), and `_kii_map_chitra_err` (`ChitraErr`→`PNG_ERR_*`). All signature/IHDR/CRC/inflate/unfilter/PLTE + security caps now live in chitra.
 - `src/palette.cyr` — Linux-console 16-color RGB palette + accessors.
 - `src/quant.cyr` — `quantize_nearest_rgb` (scalar) + `quantize_rgb_buf` / `quantize_downscaled` (production pipeline). The M4 `quantize_nearest_image` was removed at the re-fold (it read native color_type/PLTE that no longer reach the pstruct).

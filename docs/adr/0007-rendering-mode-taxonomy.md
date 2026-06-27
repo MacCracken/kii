@@ -39,23 +39,29 @@ the emit step:
   source rows in this mode, keeping the aspect correct in the terminal's
   ~2:1 character cells.
 
-The ASCII lane ships as the **floor**: a luminance→ramp mapping with the
-standard Rec.709 relative-luminance weights (`0.2126/0.7152/0.0722`,
-integer-scaled 54/183/19 ÷256 — a W3C/Wikipedia multi-source standard, not
-from any single source). It is **colored by default** (composes with the
-color tier) rather than monochrome, matching kii's identity as a color
-tool. Scope held to PNG-feature-parity-with-the-default: no new color tier,
-no dithering — those remain separate post-v1 items.
+The lane shipped in two steps. **v1.3.0 — the floor:** a luminance→ramp
+mapping with the standard Rec.709 weights (`0.2126/0.7152/0.0722`,
+integer 54/183/19 ÷256 — a W3C/Wikipedia multi-source standard). **v1.3.1 —
+the shape-vector upgrade:** `--mode ascii` now samples each cell in a 2×3
+sub-grid and picks the glyph whose ink-coverage vector is nearest
+(squared-Euclidean over the 6 regions), so it tracks glyph *orientation*
+(`/ \ | - _ ( ) ^`), not just density. The per-glyph coverage table (27
+glyphs) is computed offline from Liberation-Mono and normalized to the
+0..255 luminance scale. Both steps are **colored by default** (compose with
+the color tier). Scope stays off the color tier + dithering (separate post-v1
+items).
 
-**Out of scope (tracked follow-up):** the *advanced* shape-vector glyph
-matching from Alex Harri's "ASCII Art Rendering"
-(<https://alexharri.com/blog/ascii-rendering>) — per-cell N-D coverage
-vectors + nearest-glyph search + directional contrast, which yields
-edge-aware `/ \ | -` glyphs. It needs per-glyph coverage data (glyph
-rasterization) and is a larger build; if adopted, **the blog must be
-attributed** in source + an ADR (its shape-vector + contrast methods are
-original to that post). The luminance-ramp floor needs none of that and is
-a complete, dependency-free feature on its own.
+**Attribution:** the shape-vector technique (per-cell N-region coverage
+vectors + nearest-glyph match) is **Alex Harri's**, "ASCII Art Rendering"
+(<https://alexharri.com/blog/ascii-rendering>) — cited in `src/ascii.cyr`.
+kii uses a 6-region (2×3) variant; the Euclidean NN + Rec.709 luma are
+standard CS (no attribution needed).
+
+**Out of scope (tracked follow-up):** the further refinements from the blog —
+directional **contrast enhancement** (normalize-by-max → power → denormalize
+on the cell vector before matching) and a **k-d-tree** lookup to replace the
+linear glyph scan. The 6-region raw-luminance match is a complete feature
+without them; they sharpen edges / speed the hot path.
 
 ## Consequences
 
@@ -83,10 +89,11 @@ a complete, dependency-free feature on its own.
 - **Replace half-block with ASCII / pick one** — rejected: half-block is
   the documented floor (ADR 0004) and the higher-fidelity default for the
   BBS/MUD aesthetic; ASCII is a distinct deliverable, not a replacement.
-- **Ship the shape-vector matcher now** — rejected for this cut: it needs
-  glyph-coverage data / rasterization and a contrast pass — a much larger
-  build. The luminance ramp is the correct, complete floor; the advanced
-  matcher is a clean follow-up increment on top of it.
+- **Ship the shape-vector matcher in the first cut (v1.3.0)** — deferred,
+  not rejected: the luminance ramp landed first as the dependency-free floor
+  (v1.3.0), and the shape-vector matcher followed as a clean increment on top
+  (v1.3.1) once the coverage table was generated. Staging kept each release
+  small and verifiable.
 - **Monochrome ASCII by default** — rejected: kii is a color tool; colored
   glyphs compose with the color tier and are the richer default. A future
   `--mode ascii` + a "no color" axis can offer monochrome.
