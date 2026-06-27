@@ -1,0 +1,272 @@
+# kii — decode-adapter tests (standalone, the PNG re-fold surface).
+#
+# Post-re-fold, kii no longer carries a native PNG decoder; src/png.cyr
+# is a thin adapter over the chitra distlib. The decoder-internal
+# assertions (signature / IHDR / CRC / chunk-walk / unfilter / inflate)
+# moved to chitra's own tests/tcyr/png.tcyr. What remains kii's
+# responsibility — and what this file pins — is the ADAPTER:
+#   - the ChitraErr → PNG_ERR_* mapping (_kii_map_chitra_err),
+#   - kii_decode_png's file-I/O boundary + pstruct contract,
+#   - the error paths the adapter is on the hook for (open / empty /
+#     not-a-PNG / inflate failure / IEND tolerance).
+#
+# M3(a) sankoch zlib round-trip is kept verbatim: kii's tests still
+# call zlib_decompress directly, and the dep wiring is still load-bearing.
+#
+# Stdlib (sankoch crc32 + zlib, io) + the chitra dist auto-resolve from
+# cyrius.cyml; only the project adapter module + assert harness are
+# included explicitly.
+
+include "src/png.cyr"
+include "lib/assert.cyr"
+
+# Scratch dir for the file-I/O error-path fixtures (session-isolated).
+var SCRATCH = "/tmp/claude-1000/-home-macro-Repos-kii/41b04b33-f7eb-4285-b14d-f506b51dae66/scratchpad";
+
+# ---- Test-only PNG fixture builders --------------------------------
+# Same shape as the old monolith's helpers, but PNG_MAGIC + png_crc32
+# are gone post-re-fold: the signature is inlined and the CRC uses
+# sankoch's crc32 (call crc32_init_table() once first; bit-identical to
+# the old png_crc32).
+
+fn _ut_put_u32_be(buf, off, val): i64 {
+    store8(buf + off + 0, (val >> 24) & 0xFF);
+    store8(buf + off + 1, (val >> 16) & 0xFF);
+    store8(buf + off + 2, (val >> 8) & 0xFF);
+    store8(buf + off + 3, val & 0xFF);
+    return 0;
+}
+
+# 8-byte PNG signature (spec § 5.2).
+fn _ut_put_sig(buf): i64 {
+    store8(buf + 0, 0x89); store8(buf + 1, 0x50); store8(buf + 2, 0x4E); store8(buf + 3, 0x47);
+    store8(buf + 4, 0x0D); store8(buf + 5, 0x0A); store8(buf + 6, 0x1A); store8(buf + 7, 0x0A);
+    return 0;
+}
+
+# Build a PNG with one IDAT chunk between IHDR and IEND into `buf`.
+# Layout: signature (8) + IHDR (25) + IDAT (12 + idat_len) + IEND (12).
+# Returns total byte count = 57 + idat_len.
+fn _ut_build_png_with_idat(buf, w, h, bit_depth, color_type, interlace,
+                            idat_data, idat_len): i64 {
+    _ut_put_sig(buf);
+    # ---- IHDR ----
+    _ut_put_u32_be(buf, 8, 13);
+    store8(buf + 12, 0x49); store8(buf + 13, 0x48);
+    store8(buf + 14, 0x44); store8(buf + 15, 0x52);      # "IHDR"
+    _ut_put_u32_be(buf, 16, w);
+    _ut_put_u32_be(buf, 20, h);
+    store8(buf + 24, bit_depth);
+    store8(buf + 25, color_type);
+    store8(buf + 26, 0);                                 # compression
+    store8(buf + 27, 0);                                 # filter
+    store8(buf + 28, interlace);                         # interlace
+    var ihdr_crc = crc32(buf + 12, 17);                  # type + 13 data bytes
+    _ut_put_u32_be(buf, 29, ihdr_crc);
+    # ---- IDAT ----
+    var idat_off = 33;
+    _ut_put_u32_be(buf, idat_off, idat_len);
+    store8(buf + idat_off + 4, 0x49); store8(buf + idat_off + 5, 0x44);
+    store8(buf + idat_off + 6, 0x41); store8(buf + idat_off + 7, 0x54);  # "IDAT"
+    if (idat_len > 0) { memcpy(buf + idat_off + 8, idat_data, idat_len); }
+    var idat_crc = crc32(buf + idat_off + 4, 4 + idat_len);
+    _ut_put_u32_be(buf, idat_off + 8 + idat_len, idat_crc);
+    # ---- IEND ----
+    var iend_off = idat_off + 12 + idat_len;
+    _ut_put_u32_be(buf, iend_off, 0);
+    store8(buf + iend_off + 4, 0x49); store8(buf + iend_off + 5, 0x45);
+    store8(buf + iend_off + 6, 0x4E); store8(buf + iend_off + 7, 0x44);  # "IEND"
+    store8(buf + iend_off + 8,  0xAE); store8(buf + iend_off + 9,  0x42);
+    store8(buf + iend_off + 10, 0x60); store8(buf + iend_off + 11, 0x82);
+    return iend_off + 12;
+}
+
+# Join SCRATCH + "/" + name into `out` (a caller buffer), null-terminated.
+fn _scratch_path(out, name): i64 {
+    var n = 0;
+    var sl = strlen(SCRATCH);
+    while (n < sl) { store8(out + n, load8(SCRATCH + n)); n = n + 1; }
+    store8(out + n, 0x2F); n = n + 1;        # '/'
+    var m = 0;
+    var nl = strlen(name);
+    while (m < nl) { store8(out + n, load8(name + m)); n = n + 1; m = m + 1; }
+    store8(out + n, 0);
+    return n;
+}
+
+fn main() {
+    alloc_init();
+    crc32_init_table();
+
+    # ---- M3(a) — sankoch zlib round-trip ---------------------------
+    # Kept verbatim from the monolith: confirms the sankoch dep wires
+    # up cleanly and the exact API kii consumes (zlib_compress +
+    # zlib_decompress) round-trips byte-identical. PNG IDAT uses the
+    # zlib wrapper (not raw DEFLATE) per spec § 10.3.
+    test_group("M3(a) — sankoch zlib round-trip");
+
+    # Deterministic 16-byte input: ASCII 'A'..'P'.
+    var rt_in[16];
+    var rt_i = 0;
+    while (rt_i < 16) {
+        store8(&rt_in + rt_i, 0x41 + rt_i);
+        rt_i = rt_i + 1;
+    }
+
+    var rt_compressed[64];
+    var rt_clen = zlib_compress(&rt_in, 16, &rt_compressed, 64);
+    assert(rt_clen > 0,  "zlib_compress returns positive length");
+    assert(rt_clen < 64, "compressed fits in 64-byte buffer");
+
+    var rt_decompressed[32];
+    var rt_dlen = zlib_decompress(&rt_compressed, rt_clen, &rt_decompressed, 32);
+    assert_eq(rt_dlen, 16, "zlib_decompress recovers original length");
+
+    var rt_match = 1;
+    var rt_j = 0;
+    while (rt_j < 16) {
+        if (load8(&rt_in + rt_j) != load8(&rt_decompressed + rt_j)) { rt_match = 0; }
+        rt_j = rt_j + 1;
+    }
+    assert_eq(rt_match, 1, "decompressed bytes byte-identical to input");
+
+    var rt_dec_small[8];
+    var rt_dlen_neg = zlib_decompress(&rt_compressed, rt_clen, &rt_dec_small, 8);
+    assert(rt_dlen_neg < 0, "dst_cap too small → negative return");
+
+    # ---- _kii_map_chitra_err: every ChitraErr → its PNG_ERR_* code --
+    # The adapter preserves kii's per-error stderr diagnostics across
+    # the re-fold. Documented collapses (ADR 0006): SIGNATURE→NOT_PNG,
+    # TRUNCATED→CHUNK, BAD_CHUNK→HEADER, UNSUPPORTED→BITDEPTH,
+    # OOM→IDAT_TOO_LARGE, OTHER→HEADER.
+    test_group("re-fold — _kii_map_chitra_err mapping");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_SIGNATURE),   PNG_ERR_NOT_PNG,        "SIGNATURE → NOT_PNG");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_TRUNCATED),   PNG_ERR_CHUNK,          "TRUNCATED → CHUNK");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BAD_CHUNK),   PNG_ERR_HEADER,         "BAD_CHUNK → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_UNSUPPORTED), PNG_ERR_BITDEPTH,       "UNSUPPORTED → BITDEPTH");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE),     PNG_ERR_INFLATE,        "INFLATE → INFLATE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_OOM),         PNG_ERR_IDAT_TOO_LARGE, "OOM → IDAT_TOO_LARGE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_CRC),         PNG_ERR_CRC,            "CRC → CRC");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INTERLACE),   PNG_ERR_INTERLACE,      "INTERLACE → INTERLACE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BIT_DEPTH),   PNG_ERR_BITDEPTH,       "BIT_DEPTH → BITDEPTH");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_DIMENSIONS),  PNG_ERR_DIMENSIONS,     "DIMENSIONS → DIMENSIONS");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_FILTER),      PNG_ERR_FILTER,         "FILTER → FILTER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_NO_IDAT),     PNG_ERR_NO_IDAT,        "NO_IDAT → NO_IDAT");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_OTHER),       PNG_ERR_HEADER,         "OTHER → HEADER (generic malformed)");
+
+    # ---- kii_decode_png end-to-end on the real RAMGON.png fixture ---
+    # The adapter normalizes to depth-8 ct6; SRC_COLOR_TYPE carries the
+    # real pre-normalization color_type (RAMGON is RGBA → 6).
+    test_group("re-fold — kii_decode_png e2e (RAMGON.png)");
+    var pstr_ram[160];
+    assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_ram), PNG_OK,
+              "RAMGON.png → PNG_OK");
+    assert_eq(load64(&pstr_ram + STRUCT_WIDTH_OFFSET),       1152, "RAMGON width = 1152");
+    assert_eq(load64(&pstr_ram + STRUCT_HEIGHT_OFFSET),      925,  "RAMGON height = 925");
+    assert_eq(load64(&pstr_ram + STRUCT_COLOR_TYPE_OFFSET),  6,    "adapter forces ct6");
+    assert_eq(load64(&pstr_ram + STRUCT_SRC_COLOR_TYPE_OFFSET), 6, "RAMGON src color_type = 6 (RGBA)");
+    assert_eq(load64(&pstr_ram + STRUCT_BIT_DEPTH_OFFSET),   8,    "bit_depth = 8");
+    assert_eq(load64(&pstr_ram + STRUCT_PIXELS_SIZE_OFFSET), 1152 * 925 * 4,
+              "pixels size = 1152 × 925 × 4");
+    assert_eq(load64(&pstr_ram + STRUCT_SEEN_IEND_OFFSET),   1,    "saw IEND");
+    assert(load64(&pstr_ram + STRUCT_PIXELS_BUF_OFFSET) != 0, "pixels_buf non-null");
+
+    # ---- kii_decode_png adapter + error paths via tmp files --------
+    # (a) a valid 2x2 RGB PNG (built in-memory, real zlib IDAT) → PNG_OK,
+    #     COLOR_TYPE forced to 6, SRC_COLOR_TYPE preserved as 2 (RGB).
+    test_group("re-fold — kii_decode_png (valid 2x2 RGB → ct6 / src ct2)");
+    # Raw scanline stream: filter byte 0 + 2 px × 3 bytes per row.
+    var raw_stream[14];
+    store8(&raw_stream + 0,  0);    # filter byte (None) row 0
+    store8(&raw_stream + 1,  100); store8(&raw_stream + 2,  101); store8(&raw_stream + 3,  102);
+    store8(&raw_stream + 4,  103); store8(&raw_stream + 5,  104); store8(&raw_stream + 6,  105);
+    store8(&raw_stream + 7,  0);    # filter byte (None) row 1
+    store8(&raw_stream + 8,  110); store8(&raw_stream + 9,  111); store8(&raw_stream + 10, 112);
+    store8(&raw_stream + 11, 113); store8(&raw_stream + 12, 114); store8(&raw_stream + 13, 115);
+    var idat_payload[64];
+    var idat_clen = zlib_compress(&raw_stream, 14, &idat_payload, 64);
+    assert(idat_clen > 0, "2x2 row-stream compresses cleanly");
+    var pbuf_ok[128];
+    var ok_len = _ut_build_png_with_idat(&pbuf_ok, 2, 2, 8, 2, 0, &idat_payload, idat_clen);
+    var path_ok[256];
+    _scratch_path(&path_ok, "kii-decode-ok.png");
+    file_write_all(&path_ok, &pbuf_ok, ok_len);
+    var pstr_ok[160];
+    assert_eq(kii_decode_png(&path_ok, &pstr_ok), PNG_OK, "valid 2x2 RGB → PNG_OK");
+    assert_eq(load64(&pstr_ok + STRUCT_WIDTH_OFFSET),  2, "2x2 width = 2");
+    assert_eq(load64(&pstr_ok + STRUCT_HEIGHT_OFFSET), 2, "2x2 height = 2");
+    assert_eq(load64(&pstr_ok + STRUCT_COLOR_TYPE_OFFSET), 6, "adapter forces ct6");
+    assert_eq(load64(&pstr_ok + STRUCT_SRC_COLOR_TYPE_OFFSET), 2, "src color_type = 2 (RGB)");
+    assert_eq(load64(&pstr_ok + STRUCT_PIXELS_SIZE_OFFSET), 2 * 2 * 4, "pixels size = 2×2×4");
+    assert_eq(load64(&pstr_ok + STRUCT_SEEN_IEND_OFFSET), 1, "valid PNG saw IEND");
+
+    # (b) IEND-less but otherwise valid → PNG_OK + SEEN_IEND = 0.
+    #     Truncate the valid PNG before its trailing 12-byte IEND chunk
+    #     (spec § 5.3 tolerance — chitra still decodes, flags seen_iend=0).
+    test_group("re-fold — kii_decode_png (IEND-less → PNG_OK, seen_iend=0)");
+    var path_ni[256];
+    _scratch_path(&path_ni, "kii-decode-noiend.png");
+    file_write_all(&path_ni, &pbuf_ok, ok_len - 12);
+    var pstr_ni[160];
+    assert_eq(kii_decode_png(&path_ni, &pstr_ni), PNG_OK, "IEND-less → PNG_OK");
+    assert_eq(load64(&pstr_ni + STRUCT_SEEN_IEND_OFFSET), 0, "IEND-less → seen_iend = 0");
+
+    # (c) a non-PNG text file (≥ 8 bytes, wrong signature) → NOT_PNG.
+    test_group("re-fold — kii_decode_png (non-PNG text → NOT_PNG)");
+    var path_tx[256];
+    _scratch_path(&path_tx, "kii-decode-notpng.txt");
+    file_write_all(&path_tx, "this is plainly not a png\n", 26);
+    var pstr_tx[160];
+    assert_eq(kii_decode_png(&path_tx, &pstr_tx), PNG_ERR_NOT_PNG,
+              "non-PNG text file → PNG_ERR_NOT_PNG");
+
+    # (d) an empty file → NOT_PNG (kii_decode_png's sz==0 guard).
+    test_group("re-fold — kii_decode_png (empty file → NOT_PNG)");
+    var path_em[256];
+    _scratch_path(&path_em, "kii-decode-empty.bin");
+    file_write_all(&path_em, "", 0);
+    var pstr_em[160];
+    assert_eq(kii_decode_png(&path_em, &pstr_em), PNG_ERR_NOT_PNG,
+              "empty file → PNG_ERR_NOT_PNG");
+
+    # (d2) a sub-8-byte non-empty file (1..7 bytes) → NOT_PNG. chitra's
+    # signature check guards len<8 before any memeq, so the adapter must
+    # not OOB-read the short slurp and must surface NOT_PNG.
+    test_group("re-fold — kii_decode_png (sub-8-byte file → NOT_PNG)");
+    var path_sh[256];
+    _scratch_path(&path_sh, "kii-decode-short.bin");
+    file_write_all(&path_sh, "\x89PNG", 4);          # 4 bytes: valid prefix, too short
+    var pstr_sh[160];
+    assert_eq(kii_decode_png(&path_sh, &pstr_sh), PNG_ERR_NOT_PNG,
+              "4-byte file → PNG_ERR_NOT_PNG (no OOB read)");
+
+    # (e) a structurally-valid PNG with a bad-zlib IDAT → INFLATE.
+    #     CRC over the IDAT data is correct (so we pass the CRC gate),
+    #     but the bytes are not a valid zlib stream → chitra reports
+    #     INFLATE → PNG_ERR_INFLATE.
+    test_group("re-fold — kii_decode_png (bad-zlib IDAT → INFLATE)");
+    var bad_idat[4];
+    store8(&bad_idat + 0, 0x78); store8(&bad_idat + 1, 0x9C);  # plausible zlib header
+    store8(&bad_idat + 2, 0xAA); store8(&bad_idat + 3, 0xBB);  # garbage deflate body
+    var pbuf_bz[128];
+    var bz_len = _ut_build_png_with_idat(&pbuf_bz, 2, 2, 8, 2, 0, &bad_idat, 4);
+    var path_bz[256];
+    _scratch_path(&path_bz, "kii-decode-badzlib.png");
+    file_write_all(&path_bz, &pbuf_bz, bz_len);
+    var pstr_bz[160];
+    assert_eq(kii_decode_png(&path_bz, &pstr_bz), PNG_ERR_INFLATE,
+              "bad-zlib IDAT → PNG_ERR_INFLATE");
+
+    # (f) a missing path → OPEN.
+    test_group("re-fold — kii_decode_png (missing path → OPEN)");
+    var path_mi[256];
+    _scratch_path(&path_mi, "kii-decode-missing-zzy42.png");
+    var pstr_mi[160];
+    assert_eq(kii_decode_png(&path_mi, &pstr_mi), PNG_ERR_OPEN,
+              "nonexistent path → PNG_ERR_OPEN");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

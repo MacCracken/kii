@@ -1,7 +1,11 @@
 # 0001 — PNG decoder lives in-repo (not as a substrate library)
 
-**Status**: Accepted
+**Status**: Superseded by [0006](0006-adopt-chitra-decoder.md)
 **Date**: 2026-05-22
+
+> **2026-06-26**: the "until a second consumer surfaces" condition fired —
+> mabda surfaced as the second consumer, the decoder extracted to `chitra`,
+> and kii now consumes it back. See [ADR 0006](0006-adopt-chitra-decoder.md).
 
 ## Context
 

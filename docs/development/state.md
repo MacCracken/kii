@@ -5,6 +5,16 @@
 
 ## Version
 
+**1.2.0** — cut 2026-06-26. **The PNG re-fold — kii adopts the `chitra` distlib and
+deletes its own decoder.** `src/png.cyr` drops from 813 lines to a thin adapter over
+`[deps.chitra]` `0.2.0` (the release that made chitra a strict superset of kii's decoder:
+16-bit depth + every M7(c)/M8 guard). `kii_decode_png` slurps the file (256 MB pre-read
+cap), calls `chitra_png_decode`, and writes the RGBA8 into the pstruct as a depth-8 ct6
+image so `downscale`/`quant`/`emit` are untouched — **frames byte-identical** (RAMGON
+golden diff at 40/80/120/200/default + verbose). Same extract-on-2nd-consumer move as the
+cmdit CLI re-fold (v1.1.0). Test suite split into `tests/{cli,quant,render,decode}.tcyr`;
+decoder-internal coverage retired to chitra. See [ADR 0006](../adr/0006-adopt-chitra-decoder.md).
+
 **1.1.2** — cut 2026-06-26. **Toolchain + darshana refresh.** cyrius pin `6.2.36` →
 `6.2.44` with `lib/` re-vendored from the 6.2.44 stdlib snapshot; `[deps.darshana]`
 `0.8.0` → `0.8.1` (`[deps.cmdit]` stays `1.1.0`). No functional change; rendering
@@ -36,27 +46,31 @@ Full PNG → terminal-fit ANSI half-block frame pipeline (unchanged at the user-
 - `kii --width N image.png` → exactly N cells wide; height aspect-derived without a row cap.
 - `kii --verbose image.png` adds the M4-shape summary line to **stderr** after the frame.
 - Missing IEND → frame + stderr warning + exit 0 (per spec § 5.3 tolerance).
-- **M7(c) new rejection paths**:
-  - `PNG_ERR_DIMENSIONS` (12) — image dimensions exceed kii policy ceiling (max 4096×4096, 256 MB raw)
-  - `PNG_ERR_IDAT_TOO_LARGE` (13) — accumulated IDAT > 256 MB
-  - `PNG_ERR_RATIO_TOO_HIGH` (14) — DEFLATE ratio > 1100:1 (above theoretical 1032:1 ceiling)
-  - Plus duplicate-PLTE / PLTE-after-IDAT rejected as `PNG_ERR_HEADER`
-  - Plus color_type=3 + bit_depth=16 rejected as `PNG_ERR_BITDEPTH` (PNG § 11.2.2 violation)
-- **M7(c) stderr hardening**: filenames containing C0 control bytes or DEL are substituted with `<path containing control bytes — suppressed>` before stderr emit; CVE-2021-25743-analog injection vector closed.
+- **Decode rejection paths** (the M7(c)/M8 guards now live inside chitra; kii maps
+  `ChitraErr` → `PNG_ERR_*` for byte-stable stderr): dimensions/ratio bombs →
+  `PNG_ERR_DIMENSIONS` (12); OOM / IDAT-too-large → `PNG_ERR_IDAT_TOO_LARGE` (13);
+  duplicate/late PLTE, palette-OOB, non-zero IEND, bad chunk → `PNG_ERR_HEADER` (4);
+  color_type=3 + bit_depth=16 → `PNG_ERR_BITDEPTH` (8); zero IDAT → `PNG_ERR_NO_IDAT` (9).
+  Reserved (unreachable via chitra, kept for the stable code space): `PNG_ERR_TRUNCATED`
+  (2, a <8-byte file now reports `not a PNG`) and `PNG_ERR_RATIO_TOO_HIGH` (14, the ratio
+  bomb arrives as `DIMENSIONS`). See [ADR 0006](../adr/0006-adopt-chitra-decoder.md).
+- **New `PNG_ERR_FILE_TOO_LARGE` (15)** — input file > 256 MB rejected before the in-memory
+  slurp (a DoS guard the old streaming decoder didn't need).
+- **M7(c) stderr hardening** (stays in kii, never decoder code): filenames containing C0 control bytes or DEL are substituted with `<path containing control bytes — suppressed>` before stderr emit; CVE-2021-25743-analog injection vector closed.
 
 Module map:
 
 - `src/main.cyr` — I/O glue + dispatch. Two-path geometry resolver (`--width N` → M6(a); else `tty_winsize`-detect → M6(b) fit). M7(c) added `_eprint_path_safe` helper routing path bytes through the sanitizer.
 - `src/cli.cyr` — CLI parse helpers + `KII_F_*` indices. M7(c) added `kii_path_has_control_bytes(path)` predicate (ANSI-injection defense).
-- `src/png.cyr` — PNG decoder: signature, IHDR, CRC32, chunk walker, PLTE, sankoch zlib_decompress, filter undo. 18-slot pstruct layout (160 bytes). M7(c) added KII_MAX_PIXELS / KII_MAX_DIM / KII_MAX_RAW_BYTES policy ceilings, 3 new `PNG_ERR_*` codes, dimension/ratio/IDAT-accumulator caps, duplicate-PLTE + PLTE-after-IDAT rejection.
+- `src/png.cyr` — **chitra adapter** (post-re-fold; was the 813-line native decoder). Keeps the `PNG_ERR_*` code space + 20-slot `STRUCT_*_OFFSET` pstruct (160 bytes, +`STRUCT_SRC_COLOR_TYPE_OFFSET`=144) + `_png_color_channels` / `png_color_type_name`. Adds `kii_decode_png(path,&pstruct)` (size-capped slurp → `chitra_png_decode` → RGBA8 as a depth-8 ct6 image), `kii_file_size` (lseek SEEK_END), and `_kii_map_chitra_err` (`ChitraErr`→`PNG_ERR_*`). All signature/IHDR/CRC/inflate/unfilter/PLTE + security caps now live in chitra.
 - `src/palette.cyr` — Linux-console 16-color RGB palette + accessors.
-- `src/quant.cyr` — Two surfaces: M4 image-wide `quantize_nearest_image` (kept for test coverage of per-color_type extraction) + M5+ `quantize_rgb_buf` / `quantize_downscaled` (production pipeline).
-- `src/downscale.cyr` — Nearest-neighbor RGB resampler with per-color_type extraction. Variable target size (called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`).
+- `src/quant.cyr` — `quantize_nearest_rgb` (scalar) + `quantize_rgb_buf` / `quantize_downscaled` (production pipeline). The M4 `quantize_nearest_image` was removed at the re-fold (it read native color_type/PLTE that no longer reach the pstruct).
+- `src/downscale.cyr` — Nearest-neighbor RGB resampler. Post-re-fold the live input is always ct6 (chitra RGBA8); the `_extract_rgb` color_type table is retained. Called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`.
 - `src/emit.cyr` — Half-block ANSI emit + geometry primitives (`_kii_compute_target_geometry` for explicit-width, `_kii_compute_fit_geometry` for terminal-fit). Default constants `EMIT_DEFAULT_COLS = 80` / `EMIT_DEFAULT_ROWS = 24`. Local `_emit_bg_256_buf` while darshana's BG-256 twin isn't shipped.
-- `tests/kii.tcyr` — **471 assertions** (+45 from v0.7.0: 24 path-sanitizer, 16 dimension/cross-product caps, 2 ratio, 2 chunk-ordering FSM, 1 IEND-length-zero per-chunk cap).
-- `tests/kii.fcyr` — **five fuzz surfaces** at **3,011,000 total iters**: arg-parser (10k), path-sanitizer (1M), geometry (1M), emit-pipeline (1k), png-decoder (1M, scaled from 2k).
-- `tests/kii.bcyr` — **seven benches**: M4 quantize + M5/M6 end-to-end RAMGON (3 sizes) + M7 decode-latency matrix (3 source resolutions).
-- `tests/fixtures/RAMGON.png` — real-world fixture (1152×925 RGBA, ~2 MB). Moved from top level to curated fixtures dir at M8(b1).
+- `tests/` — split from the monolithic `tests/kii.tcyr` into focused standalone suites at the re-fold (matches chitra's `tests/tcyr/*.tcyr` convention): `tests/cli.tcyr` (cmdit/flags + path-sanitizer), `tests/quant.tcyr` (palette + quantize), `tests/render.tcyr` (downscale + emit + geometry), `tests/decode.tcyr` (`kii_decode_png` e2e + `_kii_map_chitra_err` + adapter + sankoch zlib round-trip). **336 assertions** total (cli 57 + quant 109 + render 129 + decode 41); ~132 decoder-internal assertions retired to chitra (its suite is 322).
+- `tests/kii.fcyr` — fuzz surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG); the PNG surface re-aimed through `kii_decode_png`.
+- `tests/kii.bcyr` — benches (quantize + end-to-end RAMGON + decode latency); decode bench re-aimed through `kii_decode_png`.
+- `tests/fixtures/RAMGON.png` — real-world fixture (1152×925 RGBA, ~2 MB).
 
 ## Binary size
 
@@ -64,8 +78,8 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 
 ## Tests + bench
 
-- `cyrius test` → **471 assertions, all pass** (was 426 at v0.7.0; +45: 24 path-sanitizer, 16 dimension/cross-product caps, 2 compression-ratio, 2 chunk-ordering FSM, 1 IEND-length-zero per-chunk cap from M8(b2)).
-- Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → **3,011,000 iters in ~16.4 s, all clean**. Surfaces: 10k arg-parser + 1M path-sanitizer + 1M geometry + 1k emit-pipeline + 1M PNG-decoder.
+- `cyrius test` → **336 assertions, all pass** across 4 split suites (cli 57 / quant 109 / render 129 / decode 41). Down from 468 at v1.1.2: ~132 decoder-internal assertions retired to chitra (322 there) at the v1.2.0 re-fold; `decode.tcyr` adds the `kii_decode_png` adapter + `_kii_map_chitra_err` mapping coverage.
+- Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → **3,011,000 iters, all clean**. Surfaces: 10k arg-parser + 1M path-sanitizer + 1M geometry + 1k emit-pipeline + 1M PNG (re-aimed through `kii_decode_png` → chitra at the re-fold).
 - Bench (see [`docs/benchmarks.md`](../benchmarks.md)):
   - `quantize_nearest_rgb @ 1024×1024`: **268 ns/op** (v0.7.0: 269 ns; noise)
   - `end-to-end RAMGON.png → 80×24 frame`: **752 ms/iter**
@@ -79,8 +93,8 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 
 ## Dependencies
 
-- **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (no deltas vs v0.6.0).
-- **External**: `darshana 0.8.1` (pinned; bumped 0.8.0 → 0.8.1 at 1.1.2; was 0.7.1 at 1.0.1, 0.5.3 originally) + `cmdit 1.1.0`. M6 uses `tty_winsize` (darshana v0.3.0+) in addition to the M5 ANSI primitives; the BG-256 twin is still absent from darshana's surface, so kii keeps the inline `_emit_bg_256_buf`.
+- **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `sankoch`, `thread` (`flags` dropped at the v1.1.0 cmdit re-fold). `sankoch` + `thread` stay post-decoder-re-fold — chitra's dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list, and kii's tests call `zlib_decompress` directly.
+- **External**: `darshana 0.8.1` + `cmdit 1.1.0` + **`chitra 0.2.0`** (PNG decoder, added at the v1.2.0 re-fold). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns PNG decode (`dist/chitra.cyr`).
 
 ## Cycle context
 
@@ -93,7 +107,8 @@ v1.0.0 ships during agnos kernel cycle **1.32.x networking-arc**. kii lands as s
 - `--color 256` and `--color tc` modes (truecolor SGR emit).
 - Floyd-Steinberg + ordered-Bayer dithering as `--dither` choices.
 - `--filter {nearest,bilinear,box}` selection.
-- JPEG decoder (likely v1.2.0).
+- **JPEG + other formats arrive via chitra** (0.2.1 = sub-byte depths 1/2/4 + Adam7; 0.3+ = JPEG) on a `[deps.chitra]` re-pin — post-re-fold kii consumes new formats from the substrate rather than an in-repo decoder (see ADR 0006).
+- **Character-glyph ASCII mode** (`--mode ascii`) — luminance-ramp floor + shape-vector glyph matching; review item in `docs/development/roadmap.md` § Post-v1 (attribution: Alex Harri's ASCII-rendering blog for the shape-vector/contrast logic).
 - Re-render the chafa visual-review fixture set (deferred from M8) once chafa is installed in the dev environment.
 - Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux) on a wider terminal set.
 - Three sankoch upstream items (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers) — file as sankoch issues; track impact.

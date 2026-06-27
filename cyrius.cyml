@@ -48,3 +48,19 @@ git = "https://github.com/MacCracken/cmdit.git"
 path = "../cmdit"
 tag = "1.1.0"
 modules = ["dist/cmdit.cyr"]
+
+# PNG decode — chitra (pure-Cyrius CPU raster decoder, the PNG-substrate
+# extraction forked from kii's own src/png.cyr). THE PNG RE-FOLD (v1.2.0):
+# kii drops its 813-line native decoder and consumes chitra's dist, the
+# same extract-on-2nd-consumer move kii made for CLI parsing with cmdit at
+# v1.1.0. Pinned to 0.2.0 — the release that made chitra a strict SUPERSET
+# of kii's decoder (16-bit depth + every kii M7(c)/M8 security guard
+# backported), so the re-fold is zero capability loss. stdlib sankoch +
+# thread STAY in [deps].stdlib above: chitra's strip-include dist resolves
+# zlib_decompress / crc32 / mutex from the consumer's stdlib list, and
+# kii's tests call zlib_decompress directly. See ADR 0006.
+[deps.chitra]
+git = "https://github.com/MacCracken/chitra.git"
+path = "../chitra"
+tag = "0.2.0"
+modules = ["dist/chitra.cyr"]

@@ -5,12 +5,12 @@
 #    argv arrays. Contract: cmdit_parse_argv never crashes on malformed
 #    input, only returns CMDIT_* codes cleanly.
 #
-# 2. PNG decoder (M2 sub-bite (d)): writes random byte sequences
-#    to /tmp/kii-fuzz-png.bin + drives png_decode_structure over
-#    them. 50% of iterations prepend a valid signature + IHDR so
-#    the post-IHDR chunk walker gets exercised. Contract:
-#    png_decode_structure never crashes; returns PNG_OK or any
-#    PNG_ERR_* cleanly.
+# 2. PNG decode adapter (M2 sub-bite (d), re-aimed at the PNG re-fold):
+#    writes random byte sequences to /tmp/kii-fuzz-png.bin + drives
+#    kii_decode_png (the chitra adapter) over them. 50% of iterations
+#    prepend a valid signature + IHDR so chitra's post-IHDR chunk walker
+#    gets exercised. Contract: kii_decode_png never crashes; returns
+#    PNG_OK or any PNG_ERR_* cleanly.
 #
 # Determinism: fixed seed (1) + Numerical Recipes LCG. Same byte
 # sequences every CI run; failures bisect cleanly.
@@ -129,10 +129,11 @@ var _png_fuzz_prefix_inited = 0;
 
 fn _png_fuzz_init_prefix(): i64 {
     if (_png_fuzz_prefix_inited == 1) { return 0; }
-    png_crc_init();
+    crc32_init_table();
     var b = &_png_fuzz_prefix;
-    # signature
-    memcpy(b, PNG_MAGIC, PNG_MAGIC_LEN);
+    # signature (inlined; PNG_MAGIC removed in the PNG re-fold)
+    store8(b + 0, 0x89); store8(b + 1, 0x50); store8(b + 2, 0x4E); store8(b + 3, 0x47);
+    store8(b + 4, 0x0D); store8(b + 5, 0x0A); store8(b + 6, 0x1A); store8(b + 7, 0x0A);
     # IHDR length = 13
     store8(b + 8, 0);  store8(b + 9, 0);  store8(b + 10, 0); store8(b + 11, 13);
     # IHDR type "IHDR"
@@ -143,7 +144,7 @@ fn _png_fuzz_init_prefix(): i64 {
     store8(b + 24, 8); store8(b + 25, 2);
     store8(b + 26, 0); store8(b + 27, 0); store8(b + 28, 0);
     # IHDR CRC32 over type + data (17 bytes at offset 12..28)
-    var crc = png_crc32(b + 12, 17);
+    var crc = crc32(b + 12, 17);
     store8(b + 29, (crc >> 24) & 0xFF);
     store8(b + 30, (crc >> 16) & 0xFF);
     store8(b + 31, (crc >> 8)  & 0xFF);
@@ -240,7 +241,7 @@ fn fuzz_emit_iter(pstruct, line_buf): i64 {
 
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
-# png_decode_structure. Whatever the function returns is fine —
+# kii_decode_png. Whatever the function returns is fine —
 # the contract is "never crash". `scratch_buf` is caller-owned;
 # `scratch_cap` is the buffer's capacity so we don't overflow.
 fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
@@ -265,10 +266,11 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
     # file_write_all uses O_TRUNC, so the file is fresh every iter.
     file_write_all("/tmp/kii-fuzz-png.bin", scratch_buf, total);
 
-    # Drive the decoder. Result discarded — we only care about
-    # not-crashing.
-    var pstruct[64];
-    png_decode_structure("/tmp/kii-fuzz-png.bin", &pstruct);
+    # Drive the decode adapter. Result discarded — we only care about
+    # not-crashing; any PNG_ERR_* return is fine. The adapter writes
+    # PIXELS_BUF@72 and SRC_COLOR_TYPE@144, so pstruct must be ≥160 B.
+    var pstruct[160];
+    kii_decode_png("/tmp/kii-fuzz-png.bin", &pstruct);
     return 0;
 }
 
@@ -352,17 +354,15 @@ fn main(): i64 {
     var emit_iter = 0;
     var emit_bad  = 0;
     var emit_pstr[160];
-    if (png_decode_structure("tests/fixtures/RAMGON.png", &emit_pstr) == PNG_OK) {
-        if (png_decode_pixels(&emit_pstr) == PNG_OK) {
-            # ANSI escape can produce up to ~25 bytes per cell at
-            # 200 cols; 8 KB scratch is well above worst-case.
-            var emit_line[8192];
-            while (emit_iter < EMIT_FUZZ_ITERS) {
-                if (fuzz_emit_iter(&emit_pstr, &emit_line) != 0) {
-                    emit_bad = emit_bad + 1;
-                }
-                emit_iter = emit_iter + 1;
+    if (kii_decode_png("tests/fixtures/RAMGON.png", &emit_pstr) == PNG_OK) {
+        # ANSI escape can produce up to ~25 bytes per cell at
+        # 200 cols; 8 KB scratch is well above worst-case.
+        var emit_line[8192];
+        while (emit_iter < EMIT_FUZZ_ITERS) {
+            if (fuzz_emit_iter(&emit_pstr, &emit_line) != 0) {
+                emit_bad = emit_bad + 1;
             }
+            emit_iter = emit_iter + 1;
         }
     }
 

@@ -55,102 +55,14 @@ fn quantize_nearest_rgb(r, g, b): i64 {
     return best_idx;
 }
 
-# Walk all pixels in pstruct's decoded buffer, quantize each into
-# a 16-color palette index, store the result back into pstruct at
-# STRUCT_QUANTIZED_BUF_OFFSET + STRUCT_QUANTIZED_SIZE_OFFSET. One
-# output byte per pixel; ordering matches scanline / pixel order
-# in the source buffer.
-#
-# Per-color_type extraction:
-#   0 greyscale     — R = G = B = sample byte
-#   2 RGB           — straight pass through
-#   3 palette        — PLTE-lookup (caller's responsibility to have
-#                      PLTE populated; otherwise return -1)
-#   4 grey+alpha    — R = G = B = grey sample; alpha dropped
-#   6 RGBA          — R/G/B from sample; alpha dropped
-#
-# For bit_depth=16, each channel takes 2 bytes BE; we take the
-# HIGH byte only (truncation quantization). Full-precision 16-bit
-# quantization is tier-2 scope per CLAUDE.md color-tier discipline.
-#
-# Returns 0 on success, -1 on any error (PLTE missing when needed,
-# alloc failure, png_decode_pixels not yet run).
-fn quantize_nearest_image(pstruct): i64 {
-    palette_init();
-    var width      = load64(pstruct + STRUCT_WIDTH_OFFSET);
-    var height     = load64(pstruct + STRUCT_HEIGHT_OFFSET);
-    var bit_depth  = load64(pstruct + STRUCT_BIT_DEPTH_OFFSET);
-    var color_type = load64(pstruct + STRUCT_COLOR_TYPE_OFFSET);
-    var pixels     = load64(pstruct + STRUCT_PIXELS_BUF_OFFSET);
-    var pixel_size = load64(pstruct + STRUCT_PIXELS_SIZE_OFFSET);
-    var plte_buf   = load64(pstruct + STRUCT_PLTE_BUF_OFFSET);
-    var plte_size  = load64(pstruct + STRUCT_PLTE_SIZE_OFFSET);
-
-    if (pixels == 0)     { return 0 - 1; }
-    if (pixel_size <= 0) { return 0 - 1; }
-    var channels = _png_color_channels(color_type);
-    if (channels < 0) { return 0 - 1; }
-    var bps = bit_depth / 8;
-    var bpp = channels * bps;
-    var n_pixels = width * height;
-    if (color_type == 3) {
-        if (plte_buf == 0 || plte_size == 0) { return 0 - 1; }
-    }
-    var out_buf = alloc(n_pixels);
-    if (out_buf == 0) { return 0 - 1; }
-
-    # Sequential dispatch on color_type — each branch is mutually
-    # exclusive (color_type is a single value), so only one fires
-    # per pixel. Cheaper than nested if/elif at the source level
-    # and the optimizer hoists the invariant comparisons.
-    var i = 0;
-    while (i < n_pixels) {
-        var pix_off = i * bpp;
-        var r = 0; var g = 0; var b = 0;
-        if (color_type == 0) {
-            # Greyscale: 1 sample × bps bytes per pixel.
-            r = load8(pixels + pix_off);
-            g = r; b = r;
-        }
-        if (color_type == 2) {
-            # RGB: 3 samples × bps bytes per pixel.
-            r = load8(pixels + pix_off);
-            g = load8(pixels + pix_off + bps);
-            b = load8(pixels + pix_off + 2 * bps);
-        }
-        if (color_type == 3) {
-            # Palette: 1 byte index → PLTE RGB lookup.
-            var pi = load8(pixels + pix_off);
-            var po = pi * 3;
-            # Defensive bounds check: out-of-range indices map to
-            # entry 0 (black) rather than reading past the PLTE.
-            # Real-world PNGs from libpng-style encoders never emit
-            # OOB indices, but malformed input shouldn't crash.
-            if (po + 2 < plte_size) {
-                r = load8(plte_buf + po);
-                g = load8(plte_buf + po + 1);
-                b = load8(plte_buf + po + 2);
-            }
-        }
-        if (color_type == 4) {
-            # Greyscale + alpha: grey sample + alpha sample.
-            r = load8(pixels + pix_off);
-            g = r; b = r;
-        }
-        if (color_type == 6) {
-            # RGBA: drop alpha, quantize on RGB only.
-            r = load8(pixels + pix_off);
-            g = load8(pixels + pix_off + bps);
-            b = load8(pixels + pix_off + 2 * bps);
-        }
-        store8(out_buf + i, quantize_nearest_rgb(r, g, b));
-        i = i + 1;
-    }
-
-    store64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET,  out_buf);
-    store64(pstruct + STRUCT_QUANTIZED_SIZE_OFFSET, n_pixels);
-    return 0;
-}
+# NOTE: the M4-era image-wide quantizer `quantize_nearest_image` was
+# removed in the PNG re-fold (v1.2.0). It read the native color_type +
+# PLTE off pstruct to do per-color_type pixel extraction — but post-flip
+# the chitra adapter normalizes every image to depth-8 ct6 RGBA8 (PLTE
+# resolved inside chitra), so the function's source-format dispatch had
+# no live inputs. The M5+ flow uses downscale_to_rgb (its _extract_rgb
+# owns the RGB extraction) → quantize_downscaled instead, and the
+# decoder-internal coverage moved to chitra's own tests. See ADR 0006.
 
 # Quantize a packed RGB-triple source buffer into palette indices.
 # Writes n_pixels bytes into out_buf (caller-owned). Returns 0 on

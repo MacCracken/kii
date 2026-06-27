@@ -4,6 +4,58 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-26
+
+**The PNG re-fold: kii adopts the `chitra` distlib and deletes its own decoder.**
+The 813-line native PNG decoder (`src/png.cyr`) was forked into the sibling `chitra`
+package so mabda could consume it; at **chitra 0.2.0** that fork became a strict
+SUPERSET of kii's decoder (16-bit depth + every M7(c)/M8 security guard backported).
+kii now consumes it back — the same extract-on-2nd-consumer move kii made for CLI
+parsing with `cmdit` at v1.1.0. **Output frames are byte-identical** to the native
+decoder across all widths (RAMGON.png golden-frame diff: identical at 40/80/120/200 +
+default + `--verbose` stderr), and **16-bit support is preserved** (chitra reads the
+high byte, exactly as kii's downscale/quant did). See [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md).
+
+### Changed
+- **`[deps.chitra]` added** (`git` + `path=../chitra` + `tag="0.2.0"`,
+  `modules=["dist/chitra.cyr"]`). stdlib `sankoch` + `thread` STAY — chitra's
+  strip-include dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list,
+  and kii's tests call `zlib_decompress` directly.
+- **`src/png.cyr` trimmed from 813 lines to a thin chitra adapter**: keeps the
+  `PNG_ERR_*` code space + `STRUCT_*_OFFSET` pstruct contract + `_png_color_channels` +
+  `png_color_type_name`, and adds `kii_decode_png(path, &pstruct)` (file-slurp →
+  `chitra_png_decode` → RGBA8 written into the pstruct as a depth-8 `color_type=6`
+  image, so `downscale`/`quant`/`emit` are untouched) plus a `ChitraErr`→`PNG_ERR_*`
+  mapping. Deleted the signature/IHDR/CRC32/chunk-walk/PLTE/inflate/unfilter bodies
+  and the M7(c) IHDR/ratio/IDAT caps (all now enforced inside chitra).
+- **`src/main.cyr`**: the two-call decode (`png_decode_structure` + `png_decode_pixels`)
+  + ~22 error branches collapse to one `kii_decode_png` call + a compact mapped-error
+  ladder. Missing-IEND still emits the frame + stderr warning + exit 0 (via
+  `chitra_image_seen_iend`); `--verbose` reports the source color_type (via
+  `chitra_image_source_color_type`), so it stays byte-identical.
+- **New DoS guard**: `kii_decode_png` rejects an input file larger than 256 MB
+  (`PNG_ERR_FILE_TOO_LARGE`) before the slurp — the in-memory boundary holds the whole
+  file, which the old streaming reader didn't. Exact-`fstat`-sized alloc (via
+  `lseek(SEEK_END)`), no 256 MB overcommit.
+- **Test suite split** from the 1941-line monolithic `tests/kii.tcyr` into focused
+  standalone files (`tests/cli.tcyr`, `tests/quant.tcyr`, `tests/render.tcyr`,
+  `tests/decode.tcyr`), matching chitra's `tests/tcyr/*.tcyr` convention. Decoder-internal
+  assertions retired to chitra (322 assertions there); kii keeps the CLI / palette /
+  quant / downscale / emit / geometry / path-sanitizer surface and adds `kii_decode_png`
+  e2e + `ChitraErr`-mapping + adapter coverage. Fuzz (`tests/kii.fcyr`) + bench
+  (`tests/kii.bcyr`) PNG surfaces re-aimed through `kii_decode_png`.
+- **Removed** the dead `quantize_nearest_image` (its per-color_type extraction read
+  native pstruct fields that no longer exist post-flip).
+
+### Accepted diagnostic deltas (documented in ADR 0006; security guards all intact)
+- A `<8`-byte file reports `not a PNG` (chitra's signature check), so the dedicated
+  "shorter than 8 bytes" message is unreachable (`PNG_ERR_TRUNCATED` reserved).
+- The decompression-ratio bomb cap reports `dimensions exceed ceiling`
+  (`CHITRA_ERR_DIMENSIONS`) rather than a distinct ratio code (`PNG_ERR_RATIO_TOO_HIGH`
+  reserved); the guard fires identically.
+- A corrupt palette index is a hard reject (chitra `BAD_CHUNK` → `malformed PNG`) rather
+  than the old graceful map-to-black. Stricter; affects corrupt input only.
+
 ## [1.1.2] — 2026-06-26
 
 **Toolchain + dep refresh.** Maintenance release. No functional change: the PNG →
