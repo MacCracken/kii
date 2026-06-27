@@ -5,6 +5,11 @@
 
 ## Version
 
+**1.1.2** — cut 2026-06-26. **Toolchain + darshana refresh.** cyrius pin `6.2.36` →
+`6.2.44` with `lib/` re-vendored from the 6.2.44 stdlib snapshot; `[deps.darshana]`
+`0.8.0` → `0.8.1` (`[deps.cmdit]` stays `1.1.0`). No functional change; rendering
+byte-identical. `print_version` literal → `kii 1.1.2`.
+
 **1.1.1** — cut 2026-06-25. **cmdit pin advance.** `[deps.cmdit]` `0.1.0` → `1.1.0`
 (cmdit froze its API at 1.0.0; 1.1.0 added `cmdit_help_flags` — both backward-compatible
 supersets of the 0.1.0 surface kii uses). No functional change; 468/468 green, rendering
@@ -20,7 +25,7 @@ parser productized + extended) — dropped the hand-rolled parsing + `build_argv
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.22` (in `cyrius.cyml [package].cyrius`). `lib/` re-vendored from the 6.2.22 stdlib snapshot at 1.0.1.
+- **Cyrius pin**: `6.2.44` (in `cyrius.cyml [package].cyrius`). `lib/` re-vendored from the 6.2.44 stdlib snapshot at 1.1.2 (was 6.2.22 / re-vendored at 1.0.1).
 
 ## Surface
 
@@ -75,7 +80,7 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `flags`, `sankoch`, `thread` (no deltas vs v0.6.0).
-- **External**: `darshana 0.7.1` (pinned; bumped from 0.5.3 at 1.0.1). M6 uses `tty_winsize` (darshana v0.3.0+) in addition to the M5 ANSI primitives; the BG-256 twin is still absent from darshana's surface, so kii keeps the inline `_emit_bg_256_buf`.
+- **External**: `darshana 0.8.1` (pinned; bumped 0.8.0 → 0.8.1 at 1.1.2; was 0.7.1 at 1.0.1, 0.5.3 originally) + `cmdit 1.1.0`. M6 uses `tty_winsize` (darshana v0.3.0+) in addition to the M5 ANSI primitives; the BG-256 twin is still absent from darshana's surface, so kii keeps the inline `_emit_bg_256_buf`.
 
 ## Cycle context
 

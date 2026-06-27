@@ -4,6 +4,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-06-26
+
+**Toolchain + dep refresh.** Maintenance release. No functional change: the PNG →
+terminal-ANSI pipeline is byte-identical and tests stay green.
+
+### Changed
+- **cyrius toolchain pin `6.2.36` → `6.2.44`** (`cyrius.cyml [package].cyrius`); `lib/`
+  re-vendored from the 6.2.44 stdlib snapshot via `cyrius deps` (no hand-edits).
+- **darshana** (`cyrius.cyml [deps.darshana]`): `0.8.0` → `0.8.1`. `[deps.cmdit]` stays at
+  `1.1.0`.
+- `print_version` literal → `kii 1.1.2`.
+
 ## [1.1.1] - 2026-06-25
 
 **cmdit pin advance.** Bumps the `[deps.cmdit]` pin `0.1.0` → **`1.1.0`** — cmdit froze

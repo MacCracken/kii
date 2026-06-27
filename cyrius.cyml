@@ -5,7 +5,7 @@ description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASC
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/cyrius-kii"
 language = "cyrius"
-cyrius = "6.2.36"
+cyrius = "6.2.44"
 
 [build]
 entry = "src/main.cyr"
@@ -34,7 +34,7 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
-tag = "0.8.0"
+tag = "0.8.1"
 modules = ["dist/darshana.cyr"]
 
 # CLI / argument parsing — cmdit (sovereign getopt-long lib, the stdlib flags
