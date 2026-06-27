@@ -237,16 +237,22 @@ fn emit_halfblock(pstruct) {
     if (sh % 2 != 0)      { return 0 - 1; }
     var t_rows = sh / 2;
 
-    # Per-row scratch: at sw=80 with 1–2-digit palette indices in
-    # [0,15], each char = 8 (FG) + 8 (BG) + 3 (glyph) = 19 bytes;
-    # 80 × 19 + 5 (reset + LF) = 1525 bytes. 2048 has 500 B headroom
-    # and tolerates 3-digit indices for the post-v1 256-color path.
-    var line_buf[2048];
+    # Per-row scratch, sized from the ACTUAL width. Each cell is at most
+    # tty_fg_256_buf (≤11) + _emit_bg_256_buf (≤11) + glyph (3) = 25 bytes
+    # (256-color escapes, 3-digit indices); per-row tail is tty_sgr_reset
+    # (≤5) + LF (1). `sw * 26 + 16` bounds it with margin. Heap-alloc
+    # (was a fixed `line_buf[2048]` stack buffer — 2048 BYTES at function
+    # scope, sized for sw=80 — which `emit_halfblock_row_buf` overflowed
+    # for sw ≳ 89, e.g. `kii --width 200`). An absurd width fails the
+    # alloc and returns -1 cleanly rather than smashing the stack.
+    var line_cap = sw * 26 + 16;
+    var line_buf = alloc(line_cap);
+    if (line_buf == 0) { return 0 - 1; }
     var row = 0;
     while (row < t_rows) {
-        var pos = emit_halfblock_row_buf(qbuf, sw, row, &line_buf, 0);
+        var pos = emit_halfblock_row_buf(qbuf, sw, row, line_buf, 0);
         if (pos < 0) { return 0 - 1; }
-        syscall(1, 1, &line_buf, pos);
+        syscall(1, 1, line_buf, pos);
         row = row + 1;
     }
     return 0;

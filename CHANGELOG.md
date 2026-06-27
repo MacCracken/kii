@@ -4,6 +4,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-06-26
+
+**Fix: `emit_halfblock` per-row buffer overflow at large `--width`.** A pre-existing
+bug (in the M6 `--width` feature, unrelated to the v1.2.0 re-fold), surfaced by the
+re-fold's adversarial review.
+
+### Fixed
+- `src/emit.cyr`: the per-row scratch was a fixed `var line_buf[2048]` — 2048 **bytes**
+  at function scope, sized for an 80-column row. Each emitted cell is up to 25 bytes
+  (256-color FG + BG escapes + a 3-byte half-block glyph), so a row wider than ~89
+  cells overran the buffer; `kii --width 200 image.png` wrote ~4 KB/row into 2 KB of
+  stack, clobbering adjacent stack memory (the output looked correct only because the
+  same `write(2)` read the contiguous overflow back). Now the scratch is heap-allocated
+  and sized from the actual width (`sw * 26 + 16`); an absurd width fails the alloc and
+  returns cleanly instead of smashing the stack. **Output is byte-identical** for all
+  widths (verified against v1.2.0 golden frames incl. `--width 200`).
+
 ## [1.2.0] — 2026-06-26
 
 **The PNG re-fold: kii adopts the `chitra` distlib and deletes its own decoder.**

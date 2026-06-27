@@ -5,6 +5,14 @@
 
 ## Version
 
+**1.2.1** — cut 2026-06-26. **Fix: `emit_halfblock` per-row buffer overflow at large
+`--width`.** Pre-existing M6 bug (not from the re-fold): the per-row scratch was a fixed
+`line_buf[2048]` (2048 bytes, sized for 80 cols), so a row wider than ~89 cells overran it
+(`kii --width 200` wrote ~4 KB/row into 2 KB of stack). Now heap-allocated and sized from
+the width (`sw*26+16`). Output byte-identical at every width. (Also folds in the v1.2.0
+test-portability fix: `tests/decode.tcyr` tmp fixtures now write to `/tmp`, not a
+session-specific scratchpad that broke CI.)
+
 **1.2.0** — cut 2026-06-26. **The PNG re-fold — kii adopts the `chitra` distlib and
 deletes its own decoder.** `src/png.cyr` drops from 813 lines to a thin adapter over
 `[deps.chitra]` `0.2.0` (the release that made chitra a strict superset of kii's decoder:
