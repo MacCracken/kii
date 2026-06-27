@@ -21,7 +21,13 @@ include "src/png.cyr"
 include "lib/assert.cyr"
 
 # Scratch dir for the file-I/O error-path fixtures (session-isolated).
-var SCRATCH = "/tmp/claude-1000/-home-macro-Repos-kii/41b04b33-f7eb-4285-b14d-f506b51dae66/scratchpad";
+# Temp dir for the file-based adapter tests. Must be a path that exists +
+# is writable on ANY machine/CI runner — `/tmp` is POSIX-standard and is
+# what tests/kii.fcyr already uses. (Was a session-specific scratchpad,
+# which broke CI: file_write_all to a nonexistent dir failed and every
+# kii_decode_png assertion below saw a missing file.) Filenames are
+# `kii-decode-*`-prefixed so they don't collide in a shared /tmp.
+var SCRATCH = "/tmp";
 
 # ---- Test-only PNG fixture builders --------------------------------
 # Same shape as the old monolith's helpers, but PNG_MAGIC + png_crc32
