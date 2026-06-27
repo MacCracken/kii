@@ -4,6 +4,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-06-26
+
+**Full PNG matrix via chitra 0.2.1.** Re-pins `[deps.chitra]` `0.2.0` → `0.2.1`,
+which completed the PNG bit-depth/interlace matrix. kii now **renders PNGs it
+previously rejected** — sub-byte bit depths 1/2/4 (grayscale + palette) and Adam7
+interlace — at zero code cost: the adapter is format-agnostic (chitra normalizes
+everything to RGBA8, written into the pstruct as ct6), so the depth-8/16
+non-interlaced path stays **byte-identical** (RAMGON + all 5 color-type golden
+frames unchanged).
+
+### Changed
+- `[deps.chitra]` tag `0.2.0` → `0.2.1` (`cyrius.cyml`); `print_version` → `kii 1.2.2`.
+- Error messages corrected for the wider support surface: `PNG_ERR_BITDEPTH` →
+  "unsupported bit depth for this color type (PNG § 11.2.2)" (1/2/4 are no longer
+  rejected; only spec-illegal combos like ct2-at-sub-byte or ct3+depth16 are);
+  `PNG_ERR_INTERLACE` → "unsupported interlace method" (Adam7 now decodes; only an
+  invalid interlace byte ≥2 is rejected).
+
+### Added
+- `tests/decode.tcyr`: capability tests that a sub-byte (gray depth-2) and an Adam7
+  interlaced PNG now decode to `PNG_OK` (were `PNG_ERR_BITDEPTH` / `PNG_ERR_INTERLACE`),
+  with the adapter forcing ct6 and `SRC_COLOR_TYPE` carrying the real source format.
+  Verified end-to-end: a kii-rendered interlaced frame equals the non-interlaced frame.
+
 ## [1.2.1] — 2026-06-26
 
 **Fix: `emit_halfblock` per-row buffer overflow at large `--width`.** A pre-existing

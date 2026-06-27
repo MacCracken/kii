@@ -5,6 +5,13 @@
 
 ## Version
 
+**1.2.2** — cut 2026-06-26. **Full PNG matrix via chitra 0.2.1.** Re-pins
+`[deps.chitra]` `0.2.0` → `0.2.1` (which added sub-byte depths 1/2/4 + Adam7 interlace).
+kii now **renders 1/2/4-bit + interlaced PNGs it used to reject** — zero code change, the
+adapter just forwards chitra's RGBA8. Depth-8/16 frames stay byte-identical (golden
+unchanged). `PNG_ERR_BITDEPTH`/`_INTERLACE` messages corrected for the wider surface;
+capability tests added. `print_version` → `kii 1.2.2`.
+
 **1.2.1** — cut 2026-06-26. **Fix: `emit_halfblock` per-row buffer overflow at large
 `--width`.** Pre-existing M6 bug (not from the re-fold): the per-row scratch was a fixed
 `line_buf[2048]` (2048 bytes, sized for 80 cols), so a row wider than ~89 cells overran it
@@ -102,7 +109,7 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `sankoch`, `thread` (`flags` dropped at the v1.1.0 cmdit re-fold). `sankoch` + `thread` stay post-decoder-re-fold — chitra's dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list, and kii's tests call `zlib_decompress` directly.
-- **External**: `darshana 0.8.1` + `cmdit 1.1.0` + **`chitra 0.2.0`** (PNG decoder, added at the v1.2.0 re-fold). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns PNG decode (`dist/chitra.cyr`).
+- **External**: `darshana 0.8.1` + `cmdit 1.1.0` + **`chitra 0.2.1`** (PNG decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns PNG decode (`dist/chitra.cyr`) — now the **full PNG matrix**: all bit depths 1/2/4/8/16 + Adam7 interlace.
 
 ## Cycle context
 

@@ -54,7 +54,7 @@ fn _ut_put_sig(buf): i64 {
 # Layout: signature (8) + IHDR (25) + IDAT (12 + idat_len) + IEND (12).
 # Returns total byte count = 57 + idat_len.
 fn _ut_build_png_with_idat(buf, w, h, bit_depth, color_type, interlace,
-                            idat_data, idat_len): i64 {
+idat_data, idat_len): i64 {
     _ut_put_sig(buf);
     # ---- IHDR ----
     _ut_put_u32_be(buf, 8, 13);
@@ -98,6 +98,220 @@ fn _scratch_path(out, name): i64 {
     while (m < nl) { store8(out + n, load8(name + m)); n = n + 1; m = m + 1; }
     store8(out + n, 0);
     return n;
+}
+
+# (chitra 0.2.1 fold) kii now renders sub-byte + interlaced PNGs that the
+# native decoder rejected (PNG_ERR_BITDEPTH / PNG_ERR_INTERLACE). The
+# adapter is format-agnostic — chitra normalizes both to RGBA8, written
+# into the pstruct as ct6; SRC_COLOR_TYPE carries the real source format.
+fn test_subbyte_now_renders() {
+    var p[256]; _scratch_path(&p, "kii-decode-sub2.png");
+    var lo = 0; var bytes = fx_k_subbyte(&lo);
+    file_write_all(&p, bytes, lo);
+    var pstr[160];
+    assert_eq(kii_decode_png(&p, &pstr), PNG_OK, "sub-byte gray2 -> PNG_OK (was BITDEPTH)");
+    assert_eq(load64(&pstr + STRUCT_WIDTH_OFFSET), 4, "subbyte w=4");
+    assert_eq(load64(&pstr + STRUCT_HEIGHT_OFFSET), 2, "subbyte h=2");
+    assert_eq(load64(&pstr + STRUCT_COLOR_TYPE_OFFSET), 6, "adapter forces ct6");
+    assert_eq(load64(&pstr + STRUCT_SRC_COLOR_TYPE_OFFSET), 0, "src ctype grayscale");
+    return 0;
+}
+
+fn test_interlace_now_renders() {
+    var p[256]; _scratch_path(&p, "kii-decode-il.png");
+    var lo = 0; var bytes = fx_k_interlaced(&lo);
+    file_write_all(&p, bytes, lo);
+    var pstr[160];
+    assert_eq(kii_decode_png(&p, &pstr), PNG_OK, "Adam7 interlaced -> PNG_OK (was INTERLACE)");
+    assert_eq(load64(&pstr + STRUCT_WIDTH_OFFSET), 6, "interlace w=6");
+    assert_eq(load64(&pstr + STRUCT_HEIGHT_OFFSET), 6, "interlace h=6");
+    assert_eq(load64(&pstr + STRUCT_COLOR_TYPE_OFFSET), 6, "adapter ct6");
+    return 0;
+}
+
+fn fx_k_subbyte(len_out): i64 {
+    var b = alloc(69);
+    store64(len_out, 69);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 4);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 2);
+    store8(b + 24, 2);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 0);
+    store8(b + 29, 16);
+    store8(b + 30, 115);
+    store8(b + 31, 58);
+    store8(b + 32, 30);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 12);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 120);
+    store8(b + 42, 218);
+    store8(b + 43, 99);
+    store8(b + 44, 144);
+    store8(b + 45, 102);
+    store8(b + 46, 120);
+    store8(b + 47, 2);
+    store8(b + 48, 0);
+    store8(b + 49, 1);
+    store8(b + 50, 57);
+    store8(b + 51, 1);
+    store8(b + 52, 0);
+    store8(b + 53, 123);
+    store8(b + 54, 153);
+    store8(b + 55, 66);
+    store8(b + 56, 55);
+    store8(b + 57, 0);
+    store8(b + 58, 0);
+    store8(b + 59, 0);
+    store8(b + 60, 0);
+    store8(b + 61, 73);
+    store8(b + 62, 69);
+    store8(b + 63, 78);
+    store8(b + 64, 68);
+    store8(b + 65, 174);
+    store8(b + 66, 66);
+    store8(b + 67, 96);
+    store8(b + 68, 130);
+    return b;
+}
+
+fn fx_k_interlaced(len_out): i64 {
+    var b = alloc(104);
+    store64(len_out, 104);
+    store8(b + 0, 137);
+    store8(b + 1, 80);
+    store8(b + 2, 78);
+    store8(b + 3, 71);
+    store8(b + 4, 13);
+    store8(b + 5, 10);
+    store8(b + 6, 26);
+    store8(b + 7, 10);
+    store8(b + 8, 0);
+    store8(b + 9, 0);
+    store8(b + 10, 0);
+    store8(b + 11, 13);
+    store8(b + 12, 73);
+    store8(b + 13, 72);
+    store8(b + 14, 68);
+    store8(b + 15, 82);
+    store8(b + 16, 0);
+    store8(b + 17, 0);
+    store8(b + 18, 0);
+    store8(b + 19, 6);
+    store8(b + 20, 0);
+    store8(b + 21, 0);
+    store8(b + 22, 0);
+    store8(b + 23, 6);
+    store8(b + 24, 8);
+    store8(b + 25, 0);
+    store8(b + 26, 0);
+    store8(b + 27, 0);
+    store8(b + 28, 1);
+    store8(b + 29, 178);
+    store8(b + 30, 160);
+    store8(b + 31, 128);
+    store8(b + 32, 2);
+    store8(b + 33, 0);
+    store8(b + 34, 0);
+    store8(b + 35, 0);
+    store8(b + 36, 47);
+    store8(b + 37, 73);
+    store8(b + 38, 68);
+    store8(b + 39, 65);
+    store8(b + 40, 84);
+    store8(b + 41, 8);
+    store8(b + 42, 215);
+    store8(b + 43, 37);
+    store8(b + 44, 200);
+    store8(b + 45, 65);
+    store8(b + 46, 17);
+    store8(b + 47, 0);
+    store8(b + 48, 33);
+    store8(b + 49, 12);
+    store8(b + 50, 4);
+    store8(b + 51, 176);
+    store8(b + 52, 236);
+    store8(b + 53, 28);
+    store8(b + 54, 142);
+    store8(b + 55, 234);
+    store8(b + 56, 233);
+    store8(b + 57, 60);
+    store8(b + 58, 161);
+    store8(b + 59, 3);
+    store8(b + 60, 79);
+    store8(b + 61, 53);
+    store8(b + 62, 80);
+    store8(b + 63, 3);
+    store8(b + 64, 60);
+    store8(b + 65, 200);
+    store8(b + 66, 51);
+    store8(b + 67, 90);
+    store8(b + 68, 167);
+    store8(b + 69, 104);
+    store8(b + 70, 149);
+    store8(b + 71, 77);
+    store8(b + 72, 126);
+    store8(b + 73, 86);
+    store8(b + 74, 145);
+    store8(b + 75, 226);
+    store8(b + 76, 235);
+    store8(b + 77, 57);
+    store8(b + 78, 115);
+    store8(b + 79, 38);
+    store8(b + 80, 27);
+    store8(b + 81, 111);
+    store8(b + 82, 112);
+    store8(b + 83, 1);
+    store8(b + 84, 24);
+    store8(b + 85, 11);
+    store8(b + 86, 10);
+    store8(b + 87, 124);
+    store8(b + 88, 136);
+    store8(b + 89, 154);
+    store8(b + 90, 129);
+    store8(b + 91, 64);
+    store8(b + 92, 0);
+    store8(b + 93, 0);
+    store8(b + 94, 0);
+    store8(b + 95, 0);
+    store8(b + 96, 73);
+    store8(b + 97, 69);
+    store8(b + 98, 78);
+    store8(b + 99, 68);
+    store8(b + 100, 174);
+    store8(b + 101, 66);
+    store8(b + 102, 96);
+    store8(b + 103, 130);
+    return b;
 }
 
 fn main() {
@@ -166,14 +380,14 @@ fn main() {
     test_group("re-fold — kii_decode_png e2e (RAMGON.png)");
     var pstr_ram[160];
     assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_ram), PNG_OK,
-              "RAMGON.png → PNG_OK");
+    "RAMGON.png → PNG_OK");
     assert_eq(load64(&pstr_ram + STRUCT_WIDTH_OFFSET),       1152, "RAMGON width = 1152");
     assert_eq(load64(&pstr_ram + STRUCT_HEIGHT_OFFSET),      925,  "RAMGON height = 925");
     assert_eq(load64(&pstr_ram + STRUCT_COLOR_TYPE_OFFSET),  6,    "adapter forces ct6");
     assert_eq(load64(&pstr_ram + STRUCT_SRC_COLOR_TYPE_OFFSET), 6, "RAMGON src color_type = 6 (RGBA)");
     assert_eq(load64(&pstr_ram + STRUCT_BIT_DEPTH_OFFSET),   8,    "bit_depth = 8");
     assert_eq(load64(&pstr_ram + STRUCT_PIXELS_SIZE_OFFSET), 1152 * 925 * 4,
-              "pixels size = 1152 × 925 × 4");
+    "pixels size = 1152 × 925 × 4");
     assert_eq(load64(&pstr_ram + STRUCT_SEEN_IEND_OFFSET),   1,    "saw IEND");
     assert(load64(&pstr_ram + STRUCT_PIXELS_BUF_OFFSET) != 0, "pixels_buf non-null");
 
@@ -224,7 +438,7 @@ fn main() {
     file_write_all(&path_tx, "this is plainly not a png\n", 26);
     var pstr_tx[160];
     assert_eq(kii_decode_png(&path_tx, &pstr_tx), PNG_ERR_NOT_PNG,
-              "non-PNG text file → PNG_ERR_NOT_PNG");
+    "non-PNG text file → PNG_ERR_NOT_PNG");
 
     # (d) an empty file → NOT_PNG (kii_decode_png's sz==0 guard).
     test_group("re-fold — kii_decode_png (empty file → NOT_PNG)");
@@ -233,7 +447,7 @@ fn main() {
     file_write_all(&path_em, "", 0);
     var pstr_em[160];
     assert_eq(kii_decode_png(&path_em, &pstr_em), PNG_ERR_NOT_PNG,
-              "empty file → PNG_ERR_NOT_PNG");
+    "empty file → PNG_ERR_NOT_PNG");
 
     # (d2) a sub-8-byte non-empty file (1..7 bytes) → NOT_PNG. chitra's
     # signature check guards len<8 before any memeq, so the adapter must
@@ -244,7 +458,7 @@ fn main() {
     file_write_all(&path_sh, "\x89PNG", 4);          # 4 bytes: valid prefix, too short
     var pstr_sh[160];
     assert_eq(kii_decode_png(&path_sh, &pstr_sh), PNG_ERR_NOT_PNG,
-              "4-byte file → PNG_ERR_NOT_PNG (no OOB read)");
+    "4-byte file → PNG_ERR_NOT_PNG (no OOB read)");
 
     # (e) a structurally-valid PNG with a bad-zlib IDAT → INFLATE.
     #     CRC over the IDAT data is correct (so we pass the CRC gate),
@@ -261,7 +475,7 @@ fn main() {
     file_write_all(&path_bz, &pbuf_bz, bz_len);
     var pstr_bz[160];
     assert_eq(kii_decode_png(&path_bz, &pstr_bz), PNG_ERR_INFLATE,
-              "bad-zlib IDAT → PNG_ERR_INFLATE");
+    "bad-zlib IDAT → PNG_ERR_INFLATE");
 
     # (f) a missing path → OPEN.
     test_group("re-fold — kii_decode_png (missing path → OPEN)");
@@ -269,8 +483,10 @@ fn main() {
     _scratch_path(&path_mi, "kii-decode-missing-zzy42.png");
     var pstr_mi[160];
     assert_eq(kii_decode_png(&path_mi, &pstr_mi), PNG_ERR_OPEN,
-              "nonexistent path → PNG_ERR_OPEN");
+    "nonexistent path → PNG_ERR_OPEN");
 
+    test_subbyte_now_renders();
+    test_interlace_now_renders();
     return assert_summary();
 }
 
