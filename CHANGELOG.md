@@ -4,6 +4,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-06-26
+
+**Character-glyph ASCII mode (`--mode ascii`).** A second rendering lane beside
+the half-block default — kii's `jp2a` / namesake "ASCII art" lane: render the
+image as text glyphs chosen by luminance, drawn in each cell's quantized color.
+The two modes share the whole decode → downscale → quantize front and fork only
+at emit. The default (half-block) is **byte-identical** (RAMGON + all color-type
+goldens unchanged). See [ADR 0007](docs/adr/0007-rendering-mode-taxonomy.md).
+
+### Added
+- **`--mode {halfblock|ascii}`** (`-m`), default `halfblock`. `ascii` maps each
+  downscaled cell to a density ramp `" .:-=+*#%@"` by Rec.709 relative luminance
+  (`0.2126/0.7152/0.0722`, integer 54/183/19 ÷256 — W3C/Wikipedia standard), and
+  colors the glyph with the cell's 16-color foreground. One cell per character
+  (vs half-block's two stacked rows), so the source is downscaled to half the
+  rows — keeping aspect right in the terminal's ~2:1 cells.
+- `src/ascii.cyr`: `_ascii_luma` / `_ascii_glyph` / `emit_ascii_row_buf` (buffer
+  variant, testable) / `emit_ascii`. Per-row buffer is heap-allocated and sized
+  from the width (no fixed-stack overflow — the v1.2.1 lesson).
+- `tests/ascii.tcyr` (luma, glyph, exact row bytes, emit guards) + `--mode`
+  validation in `tests/cli.tcyr`.
+
+### Deferred (tracked)
+- The **advanced shape-vector glyph matching** (Alex Harri's blog — edge-aware
+  `/ \ | -` via per-cell coverage vectors + contrast) is a follow-up; it needs
+  glyph-coverage data and would be **attributed**. The luminance ramp is the
+  complete, dependency-free floor. See `docs/development/roadmap.md` § Post-v1.
+
 ## [1.2.2] — 2026-06-26
 
 **Full PNG matrix via chitra 0.2.1.** Re-pins `[deps.chitra]` `0.2.0` → `0.2.1`,

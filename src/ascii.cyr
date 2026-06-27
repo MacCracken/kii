@@ -1,0 +1,104 @@
+# ascii.cyr — character-glyph ("ASCII art") rendering mode (kii 1.3.0).
+#
+# The jp2a / namesake lane: render each downscaled cell as a TEXT glyph
+# chosen by the cell's luminance, colored with the cell's quantized
+# foreground. A second rendering lane beside the half-block default
+# (ADR 0007). Unlike half-block (2 source rows per character via ▀ fg/bg),
+# ASCII uses ONE cell per character — so main.cyr downscales to
+# (cols × rows) rather than (cols × 2·rows), which keeps the aspect right
+# in the terminal's ~2:1 character cells.
+#
+# This is the rendering FLOOR: a luminance → density-ramp mapping. The
+# advanced shape-vector glyph matching (Alex Harri,
+# https://alexharri.com/blog/ascii-rendering — attribute if adopted)
+# is a tracked follow-up; it needs per-glyph coverage data and a contrast
+# pass. See docs/development/roadmap.md § Post-v1.
+#
+# Stdlib (alloc/syscalls) + darshana (tty_fg_256_buf / tty_sgr_reset_buf)
+# auto-resolve from cyrius.cyml; png.cyr supplies the STRUCT_*_OFFSET
+# pstruct contract.
+
+include "src/png.cyr"
+
+# Density ramp, dark → bright (10 levels), all single-byte ASCII (no
+# UTF-8 cell-width ambiguity, unlike the half-block glyphs). Space is the
+# darkest (the terminal background shows through); '@' is the densest ink.
+var ASCII_RAMP     = " .:-=+*#%@";
+var ASCII_RAMP_LEN = 10;
+
+# Rec.709 relative luminance, integer-scaled: round(0.2126/0.7152/0.0722
+# × 256) = 54/183/19 (sum 256), so the >>8 is an exact /256. Returns
+# 0..255. The coefficients are the W3C/Wikipedia standard (multi-source,
+# not from any single blog — see roadmap § char-ASCII attribution note).
+fn _ascii_luma(r, g, b): i64 {
+    return (54 * r + 183 * g + 19 * b) >> 8;
+}
+
+# Map luminance 0..255 → a ramp glyph byte: idx = luma·(len-1)/255, so
+# luma 0 → ' ' and luma 255 → '@'.
+fn _ascii_glyph(luma): i64 {
+    var idx = (luma * (ASCII_RAMP_LEN - 1)) / 255;
+    return load8(ASCII_RAMP + idx);
+}
+
+# emit_ascii_row_buf — render ONE row of colored ASCII glyphs into a
+# caller-owned byte buffer; returns the new pos (bytes appended) or -1.
+# `rgb` is the packed RGB-triple buffer (luminance source), `qbuf` the
+# parallel palette-index buffer (fg color), both `sw` cells wide. Buffer-
+# targeting (not an fd write) so tests can assert the exact bytes — the
+# same split as emit_halfblock_row_buf.
+fn emit_ascii_row_buf(rgb, qbuf, sw, row, buf, pos): i64 {
+    var col = 0;
+    while (col < sw) {
+        var ci = row * sw + col;
+        var o = rgb + ci * 3;
+        var luma = _ascii_luma(load8(o + 0), load8(o + 1), load8(o + 2));
+        var fg = load8(qbuf + ci);
+        pos = tty_fg_256_buf(buf, pos, fg);
+        if (pos < 0) { return 0 - 1; }
+        store8(buf + pos, _ascii_glyph(luma));
+        pos = pos + 1;
+        col = col + 1;
+    }
+    # Reset SGR + newline per row (same SIGPIPE-clean discipline as
+    # emit_halfblock — a truncated write never leaves a colored TTY).
+    pos = tty_sgr_reset_buf(buf, pos);
+    store8(buf + pos, 10);
+    pos = pos + 1;
+    return pos;
+}
+
+# emit_ascii — render the downscaled frame as colored ASCII glyphs to
+# fd 1 (stdout). Luminance comes from the true downscaled RGB
+# (STRUCT_DOWNSCALED_BUF, before color quantization); the per-cell
+# foreground color is the quantized palette index (STRUCT_QUANTIZED_BUF).
+# Both buffers are DOWNSCALED_W × DOWNSCALED_H. One write(2) per row.
+#
+# Returns 0 on success; -1 if downscale/quantize weren't run (null bufs)
+# or dimensions are invalid.
+#
+# The line buffer is heap-allocated and sized from the width — each cell
+# is at most an fg escape (≤11 B) + 1 glyph byte, plus a per-row reset
+# (≤5) + LF; `sw·14 + 16` bounds it with margin. (Fixed-stack buffers are
+# the v1.2.1 overflow trap — never size a per-row buffer by a constant.)
+fn emit_ascii(pstruct): i64 {
+    var rgb  = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
+    var sw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
+    var sh   = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
+    if (rgb == 0 || qbuf == 0)   { return 0 - 1; }
+    if (sw <= 0 || sh <= 0)      { return 0 - 1; }
+
+    var line_cap = sw * 14 + 16;
+    var line_buf = alloc(line_cap);
+    if (line_buf == 0) { return 0 - 1; }
+
+    var row = 0;
+    while (row < sh) {
+        var pos = emit_ascii_row_buf(rgb, qbuf, sw, row, line_buf, 0);
+        if (pos < 0) { return 0 - 1; }
+        syscall(1, 1, line_buf, pos);
+        row = row + 1;
+    }
+    return 0;
+}

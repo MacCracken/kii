@@ -30,6 +30,7 @@ var KII_EXIT_USAGE = 2;
 var KII_F_WIDTH   = 0 - 1;
 var KII_F_COLOR   = 0 - 1;
 var KII_F_VERBOSE = 0 - 1;
+var KII_F_MODE    = 0 - 1;
 
 # Register kii's flag surface into a cmdit context `fs` (caller owns
 # cmdit_new + cmdit_parse). cmdit_new already registered --help/-h (h=104)
@@ -45,6 +46,9 @@ fn kii_register_flags(fs): i64 {
     # the M4 dimensions / format summary moves behind this flag and
     # rides stderr — pipe-pure by default.
     KII_F_VERBOSE = cmdit_bool(fs, 118, "verbose", "print decode summary to stderr after the frame");
+    # --mode / -m (109): rendering lane. "halfblock" (default) = the ▀ fg/bg
+    # floor; "ascii" = text-glyph art (luminance ramp, colored fg). See ADR 0007.
+    KII_F_MODE    = cmdit_str (fs, 109, "mode", "halfblock", "render mode: halfblock (default) or ascii");
     return 0;
 }
 
@@ -55,6 +59,21 @@ fn kii_validate_color(color): i64 {
     if (color == 8)  { return 1; }
     if (color == 16) { return 1; }
     return 0;
+}
+
+# --mode validation. "halfblock" (the ▀ floor) and "ascii" (text glyphs)
+# are the two rendering lanes. Returns 1 if valid, 0 otherwise.
+fn kii_validate_mode(mode): i64 {
+    if (streq(mode, "halfblock") == 1) { return 1; }
+    if (streq(mode, "ascii") == 1)     { return 1; }
+    return 0;
+}
+
+# True (1) iff `mode` selects the character-glyph lane. (halfblock is the
+# default, so a null/empty/unknown mode is treated as NOT ascii — but
+# kii_validate_mode rejects unknowns before this is reached.)
+fn kii_mode_is_ascii(mode): i64 {
+    return streq(mode, "ascii");
 }
 
 # ANSI-injection defense for stderr path-echo. Returns 1 if `path`
