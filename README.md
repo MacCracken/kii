@@ -2,13 +2,13 @@
 
 **kii** (Hawaiian: *image / picture / likeness*) — image → ANSI/ASCII-art converter for terminal display.
 
-Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](https://github.com/Talinx/jp2a) / [`viu`](https://github.com/atanunq/viu). Reads raster image input (PNG today; JPEG / GIF / BMP planned), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to the terminal's cols × rows.
+Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](https://github.com/Talinx/jp2a) / [`viu`](https://github.com/atanunq/viu). Reads raster image input (PNG and baseline JPEG today; GIF / BMP planned), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to the terminal's cols × rows.
 
 ## Status
 
 **v1.0.3** (2026-06-22). The full PNG → 16-color half-block ANSI pipeline is locked in (v1.0 freeze at v1.0.0). Builds on host and on the AGNOS target (`--agnos`).
 
-Today `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA at bit-depth 8 or 16, non-interlaced), quantizes to the 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
+Today `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not) or a **baseline JPEG** (`kii photo.jpg` — grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0), quantizes to the 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
 ```
 $ kii tests/fixtures/RAMGON.png        # renders half-block ANSI to the terminal
@@ -34,9 +34,8 @@ See [`docs/development/state.md`](docs/development/state.md) for the per-release
 
 ### Not yet supported (deferred per scope)
 
-- **Adam7 interlacing** — rejected with `interlaced PNGs (Adam7) not supported in v0.x`
-- **1/2/4-bit sub-byte depths** — rejected with `unsupported bit depth or color type`
-- **JPEG / GIF / BMP** — PNG only at v1.0
+- **GIF / BMP** — not yet supported (baseline JPEG landed at v1.4.0 via chitra 0.3.0; PNG is the full 1/2/4/8/16-bit + Adam7 matrix since v1.2.2)
+- **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra 0.3.0 is baseline-only)
 - **256-color + truecolor + dithering** — tier-2; explicit post-v1 work
 - **Sixel / Kitty / iTerm2 image protocols** — tier-3; explicit post-v1 work
 
@@ -58,7 +57,7 @@ The world prior art (`chafa`) ships every tier from monochrome through 24-bit tr
 
 - [`sankoch`](https://github.com/MacCracken/sankoch) — DEFLATE/zlib decompression. **Wired at v0.4.0** for PNG IDAT decompression. (Now folded into Cyrius stdlib at v5.8.65, so it's a stdlib-list add, not an external git dep.)
 - [`darshana`](https://github.com/MacCracken/darshana) — TTY/ANSI primitives (color escape sequences, cursor positioning, `tty_winsize`). External dep since v0.6.0 / M5 when ANSI emit went live.
-- **In-repo PNG decoder** (`src/png.cyr`) — signature + IHDR + CRC32 + chunk walker + IDAT inflate + filter undo (filter types 0–4) + PLTE capture. Multi-source convergent port from the W3C spec + `libpng` + `stb_image.h` + `lodepng`. Graduates to a separate Sanskrit-named substrate lib (`chitra` / `rupa` / TBD) once a second consumer surfaces, per the `mihi → iam/chakshu` extract-on-2nd-consumer pattern.
+- [`chitra`](https://github.com/MacCracken/chitra) — the image-decode substrate (pure-Cyrius PNG + baseline-JPEG → canonical RGBA8). **Forked from kii's own `src/png.cyr` and adopted back** at v1.2.0 (the PNG re-fold, [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)) when `mabda` became the second consumer; `src/png.cyr` is now a thin adapter calling `chitra_image_decode`. JPEG arrived on the `chitra 0.3.0` re-pin at v1.4.0 ([ADR 0008](docs/adr/0008-jpeg-via-chitra.md)). Pinned via `[deps.chitra]`.
 - **In-repo palette + quantizer** (`src/palette.cyr` + `src/quant.cyr`) — Linux-console 16-color RGB table + nearest-neighbor Euclidean quantization.
 
 ## Multi-source prior art
@@ -86,8 +85,8 @@ Toolchain pin: `cyrius = "6.2.44"` (in [`cyrius.cyml`](cyrius.cyml)).
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 471 assertions across the M1–M8 surface
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # arg-parser + PNG-decoder fuzz
+cyrius test                           # 431 assertions across 5 suites (cli/quant/render/ascii/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 6 fuzz surfaces, 4,011,000 iters (arg/path/geom/emit/PNG/JPEG)
 cyrius build tests/kii.bcyr build/kii-bench && ./build/kii-bench # quantization micro-bench
 ```
 

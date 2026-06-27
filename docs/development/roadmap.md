@@ -2,7 +2,7 @@
 
 > Sequencing — what ships, in what order, against what dependency gates.
 > State lives in [`state.md`](state.md). **kii is post-v1** (current:
-> v1.3.1); this file keeps the v1.0 record, the post-v1 shipped log, and
+> v1.4.0); this file keeps the v1.0 record, the post-v1 shipped log, and
 > the not-yet-committed roadmap ahead.
 
 The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a single coherent cycle that ships a working binary doing demonstrably more than the last.
@@ -47,7 +47,7 @@ in CHANGELOG, [`docs/audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md),
 and ADRs 0002–0005. The per-milestone acceptance detail lived here pre-execution;
 it's retired now that the work shipped (the table above + CHANGELOG are the record).
 
-## Post-v1 shipped (v1.1.x – v1.3.x)
+## Post-v1 shipped (v1.1.x – v1.4.x)
 
 Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 
@@ -59,6 +59,7 @@ Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 | v1.2.2 | Re-pinned `chitra 0.2.1` → kii renders the **full PNG matrix** (bit depths 1/2/4/8/16 + Adam7 interlace) |
 | v1.3.0 | **`--mode ascii`** — character-glyph rendering lane (luminance ramp), [ADR 0007](../adr/0007-rendering-mode-taxonomy.md) |
 | v1.3.1 | ASCII **shape-vector** glyph matching (orientation-aware; Alex Harri attribution) |
+| v1.4.0 | **Baseline JPEG** via `chitra 0.3.0` — adapter switched to `chitra_image_decode` (signature dispatch); PNG byte-identical ([ADR 0008](../adr/0008-jpeg-via-chitra.md)) |
 
 **Carry-forward debt** (none blocking; inherited from the v1.0 freeze):
 
@@ -71,7 +72,7 @@ Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 
 Durable boundaries on what kii is (not a v1.0-only gate):
 
-- **JPEG / GIF / BMP decoders in-repo** — kii does not carry format decoders; it consumes them from the `chitra` substrate on a `[deps.chitra]` re-pin (PNG already does; JPEG arrives at chitra 0.3). See [ADR 0006](../adr/0006-adopt-chitra-decoder.md).
+- **JPEG / GIF / BMP decoders in-repo** — kii does not carry format decoders; it consumes them from the `chitra` substrate on a `[deps.chitra]` re-pin (PNG since v1.2.0, baseline JPEG since v1.4.0 via chitra 0.3.0; GIF/BMP would arrive the same way). See [ADR 0006](../adr/0006-adopt-chitra-decoder.md) + [ADR 0008](../adr/0008-jpeg-via-chitra.md).
 - **Animated GIF / video-frame-pipe** — explicit post-v2 scope.
 - **Output to stdout-other-than-TTY-styled file formats** — e.g. no HTML output, no SVG output. kii is image → ANSI, full stop.
 - **Image transformations** — no crop, no rotate, no scale-other-than-fit-terminal. Use upstream tools (ImageMagick) to pre-transform; kii consumes the result.
@@ -84,9 +85,10 @@ Ordered roughly by readiness. Decoder substrate (PNG) and both render lanes
 (half-block + ASCII) are done; what remains is color fidelity, the next
 format, and richer glyph vocabularies.
 
-- **Tier 2 — 256-color + truecolor** (next; likely v1.4.0) — `--color 256` and `--color tc` (24-bit SGR) emit, then ordered / Floyd-Steinberg dithering as `--dither` choices. Orthogonal to `--mode` (composes with both half-block and ASCII). Self-contained in the emit/quant layer; amends ADR 0003's tier-1-only stance.
-- **JPEG (and beyond) via `chitra 0.3+`** — JFIF baseline (Huffman + IDCT + chroma upsample) lands in chitra; kii picks it up on a `[deps.chitra]` re-pin, exactly as it gained the full PNG matrix at v1.2.2. No in-repo decoder (ADR 0006).
+- **Tier 2 — 256-color + truecolor** (next; likely v1.5.0) — `--color 256` and `--color tc` (24-bit SGR) emit, then ordered / Floyd-Steinberg dithering as `--dither` choices. Orthogonal to `--mode` (composes with both half-block and ASCII). Self-contained in the emit/quant layer; amends ADR 0003's tier-1-only stance.
+- **Beyond baseline JPEG via `chitra 0.3+`** — baseline JFIF (Huffman + IDCT + chroma upsample) **shipped at v1.4.0** ([ADR 0008](../adr/0008-jpeg-via-chitra.md)). Progressive-DCT JPEG (and any further formats — GIF / BMP) land in chitra first, then reach kii on a `[deps.chitra]` re-pin, exactly as PNG and baseline JPEG did. No in-repo decoder (ADR 0006).
 - **ASCII shape-vector refinements** (small follow-up to v1.3.1) — the two pieces deferred from Alex Harri's blog: **directional contrast enhancement** (normalize-by-max → power → denormalize on the cell vector before matching, sharpening edges) and a **k-d-tree** lookup to replace the 27-glyph linear scan. See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
+- **Format-neutral rename of the image front-end** (mechanical follow-up to v1.4.0) — now that the adapter decodes PNG **and** JPEG, rename `kii_decode_png` → `kii_decode_image`, `src/png.cyr` → `src/image.cyr` (+ its ~10 include sites), and the `PNG_ERR_*` code space → `IMG_ERR_*`. Deferred from the v1.4.0 cut to keep that change a tight, byte-identical-verifiable functional wiring; the historical `png_`/`PNG_ERR_*` names are retained until this lands. See [ADR 0008](../adr/0008-jpeg-via-chitra.md) § Error-space + naming.
 - **Full Block Elements glyph vocab** (v2.0.0) — expand the half-block emit from `▀` alone to the Unicode Block Elements range (U+2580..U+259F): quarter-blocks (`▘▝▖▗`) for 4-corner color, eighth-blocks (`▁▂▃▄▅▆▇` / `▏▎▍▌▋▊▉`) for sub-cell gradients, shade blocks (`░▒▓`). Closes the byte-verbosity + detail gap with chafa ([`../audit/chafa-comparison.md`](../audit/chafa-comparison.md)). Needs a ~32-arm glyph-dispatch + 4-corner quantize; trades byte-stability (ADR 0003) for fidelity — new ADR superseding ADR 0004 when scoped.
 - **Tier 3 — Sixel / Kitty / iTerm2 protocols** (v2.0.0) — direct-image-protocol output where supported; the ASCII/half-block lanes stay the fallback default. Possibly a major cut depending on CLI-surface impact.
 

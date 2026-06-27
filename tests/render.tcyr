@@ -167,6 +167,38 @@ fn main() {
     }
     assert_eq(d_ram_nonzero, 1, "RAMGON 80x48 downscaled buf has non-zero pixels");
 
+    # ----------------- v1.4.0 JPEG render e2e -------------------
+    # Proves a JPEG (not just PNG) flows through the WHOLE shared back of the
+    # pipeline — decode → downscale → quantize → emit — and produces real ANSI
+    # bytes, not just a populated pstruct. The emit layer is format-blind
+    # (operates on the quantized index buffer), so the JPEG-specific risk is in
+    # feeding chitra's JPEG RGBA8 through downscale+quantize; this exercises it.
+    # gradient.jpg is the 16x16 grayscale horizontal ramp (white left → black
+    # right), so the first char-row's first cell quantizes light, last dark.
+    test_group("v1.4.0 — JPEG render e2e (gradient.jpg → downscale → quantize → emit)");
+    var pstr_jr[160];
+    assert_eq(kii_decode_png("tests/fixtures/gradient.jpg", &pstr_jr), PNG_OK,
+              "gradient.jpg → PNG_OK");
+    assert_eq(downscale_to_rgb(&pstr_jr, 16, 8), 0, "JPEG 16x16 → 16x8 downscale → 0");
+    assert_eq(load64(&pstr_jr + STRUCT_DOWNSCALED_W_OFFSET), 16, "JPEG dst_w = 16");
+    assert_eq(quantize_downscaled(&pstr_jr), 0, "JPEG quantize_downscaled → 0");
+    var jr_qbuf = load64(&pstr_jr + STRUCT_QUANTIZED_BUF_OFFSET);
+    assert(jr_qbuf != 0, "JPEG quantized buf non-null");
+    # Emit the first char-row (2 source rows) of the 16-wide image to a buffer.
+    var jr_line[1024];
+    var jr_pos = emit_halfblock_row_buf(jr_qbuf, 16, 0, &jr_line, 0);
+    assert(jr_pos > 16, "JPEG emit produced a real row (> 1 byte/cell)");
+    assert_eq(load8(&jr_line + 0), 27, "JPEG emit row starts with ESC (SGR)");
+    # Confirm a half-block glyph (U+2580 = E2 96 80) is present — i.e. it
+    # actually rendered cells, not just escapes. Scan for the 0xE2 lead byte.
+    var jr_has_block = 0;
+    var jr_k = 0;
+    while (jr_k < jr_pos) {
+        if (load8(&jr_line + jr_k) == 226) { jr_has_block = 1; }   # 0xE2
+        jr_k = jr_k + 1;
+    }
+    assert_eq(jr_has_block, 1, "JPEG emit row contains a ▀ half-block glyph");
+
     # ============================================================
     # ----------------- M5(c) emit_halfblock ---------------------
     # ============================================================

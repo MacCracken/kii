@@ -12,6 +12,18 @@
 #    gets exercised. Contract: kii_decode_png never crashes; returns
 #    PNG_OK or any PNG_ERR_* cleanly.
 #
+# 3. JPEG decode adapter (v1.4.0, chitra 0.3.0): writes SOI (0xFFD8) +
+#    random bytes to /tmp/kii-fuzz-jpeg.bin + drives the same kii_decode_png
+#    adapter, which now routes JPEG-signature input to chitra's JPEG decoder
+#    via chitra_image_decode. Exercises the format sniff + marker/segment
+#    parser over arbitrary bytes. Crash-safety only. NOTE: a present SOI makes
+#    chitra allocate its frame/quant/huff scratch (~22 KB) before the marker
+#    walk fails, so each PNG/JPEG decode iter calls alloc_reset() to rewind
+#    the never-free bump allocator — without that the heap would grow
+#    unboundedly (~22 GB over 10⁶ JPEG iters). Deep entropy/IDCT decode
+#    fuzzing is chitra's own suite's job (the decoder's owner), matching the
+#    re-fold's division of labor.
+#
 # Determinism: fixed seed (1) + Numerical Recipes LCG. Same byte
 # sequences every CI run; failures bisect cleanly.
 #
@@ -43,6 +55,7 @@ include "src/emit.cyr"
 #   we skip here by reusing the decoded pstruct).
 var FUZZ_ITERS        = 10000;
 var PNG_FUZZ_ITERS    = 1000000;
+var JPEG_FUZZ_ITERS   = 1000000;
 var PATH_FUZZ_ITERS   = 1000000;
 var GEOM_FUZZ_ITERS   = 1000000;
 var EMIT_FUZZ_ITERS   = 1000;
@@ -271,6 +284,38 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
     # PIXELS_BUF@72 and SRC_COLOR_TYPE@144, so pstruct must be ≥160 B.
     var pstruct[160];
     kii_decode_png("/tmp/kii-fuzz-png.bin", &pstruct);
+    # Rewind the bump allocator: kii_decode_png slurps the file (and chitra
+    # allocates per-decode), none of which crosses iterations. Without this
+    # the never-free allocator grows ~1 KB/iter → ~1 GB over 10⁶ iters. Safe
+    # here: the emit loop (the only cross-iter pstruct) has already finished
+    # before the decode loops run, and the per-iter scratch is stack-local.
+    alloc_reset();
+    return 0;
+}
+
+# One JPEG-fuzz iteration. Always prepends SOI (0xFFD8) so the byte stream
+# sniffs as JPEG and routes through chitra's JPEG decoder, then appends a
+# random payload. Random bytes after SOI fail in the marker/segment parser,
+# but chitra_jpeg_scan_markers allocates its frame/quant/huff tables up front
+# (~22 KB) BEFORE that failure — so, like the PNG iter, this MUST rewind the
+# never-free bump allocator each iteration or it grows ~22 KB/iter (~22 GB
+# over 10⁶ iters → OOM). alloc_reset() below does that. Contract: kii_decode_png
+# never crashes; returns PNG_OK or any PNG_ERR_* cleanly.
+fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
+    store8(scratch_buf + 0, 0xFF);            # SOI marker high byte
+    store8(scratch_buf + 1, 0xD8);            # SOI marker low byte
+    var payload = _fuzz_rand_range(PNG_FUZZ_MAX_LEN + 1);
+    var max_fill = scratch_cap - 2;
+    if (payload > max_fill) { payload = max_fill; }
+    var i = 0;
+    while (i < payload) {
+        store8(scratch_buf + 2 + i, _fuzz_rand() & 0xFF);
+        i = i + 1;
+    }
+    file_write_all("/tmp/kii-fuzz-jpeg.bin", scratch_buf, 2 + payload);
+    var pstruct[160];
+    kii_decode_png("/tmp/kii-fuzz-jpeg.bin", &pstruct);
+    alloc_reset();                            # bound the never-free heap (see above)
     return 0;
 }
 
@@ -377,6 +422,17 @@ fn main(): i64 {
         png_iter = png_iter + 1;
     }
 
+    # ---- jpeg-decoder fuzz loop ------------------------------------
+    # SOI + random payload (2 + ≤1024 bytes) through the same adapter,
+    # now routed to chitra's JPEG decoder by the format sniff. Reuses a
+    # 2 KB scratch (SOI prefix is only 2 bytes vs PNG's 33).
+    var jpeg_scratch[2048];
+    var jpeg_iter = 0;
+    while (jpeg_iter < JPEG_FUZZ_ITERS) {
+        fuzz_jpeg_iter(&jpeg_scratch, 2048);
+        jpeg_iter = jpeg_iter + 1;
+    }
+
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
     # walks args by index). One line per fuzz surface; "fuzz: ok"
@@ -403,6 +459,10 @@ fn main(): i64 {
     var args_png = vec_new();
     vec_push(args_png, png_iter);
     fmt_printf("fuzz: %d iterations passed (png-decoder crash-safety)\n", args_png);
+
+    var args_jpeg = vec_new();
+    vec_push(args_jpeg, jpeg_iter);
+    fmt_printf("fuzz: %d iterations passed (jpeg-decoder crash-safety)\n", args_jpeg);
 
     println("fuzz: ok");
     return 0;

@@ -4,6 +4,59 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-27
+
+**Baseline JPEG decode via chitra 0.3.0.** Re-pins `[deps.chitra]` `0.2.1` → `0.3.0`
+and switches the decode adapter from `chitra_png_decode` to the format-sniffing
+`chitra_image_decode`, so `kii photo.jpg` now renders **baseline (SOF0) JPEG** —
+grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 chroma subsampling, DRI/RST restart markers —
+alongside the full PNG matrix. chitra normalizes JPEG to the **same canonical RGBA8**
+it produces for PNG, so the whole downscale → quantize → emit pipeline is untouched and
+**every PNG frame stays byte-identical** (RAMGON golden at 40/80/120/200/default +
+`--verbose`). `--mode ascii`, `--width`, `--verbose`, and terminal-fit all work for JPEG
+identically to PNG. See [ADR 0008](docs/adr/0008-jpeg-via-chitra.md).
+
+### Added
+- **Baseline JPEG input.** `kii image.jpg` / `image.jpeg` decodes through chitra's JPEG
+  path — the formats share everything after decode (one canonical RGBA8 buffer).
+- `src/png.cyr`: the 11 JPEG `ChitraErr` codes mapped onto kii's `PNG_ERR_*` — malformed
+  structure (marker / SOF / DQT / DHT / SOS / entropy) → `PNG_ERR_HEADER`; the five
+  valid-but-unsupported deferred modes (progressive, arithmetic, 12-bit, non-baseline
+  SOF, CMYK 4-component) → a new `PNG_ERR_UNSUPPORTED`. A `KII_FMT_*` format tag
+  (`STRUCT_FORMAT_OFFSET`, set from the pre-decode signature sniff) drives format-aware
+  diagnostics. `png_color_type_name` names the JPEG source sentinels (257 →
+  `greyscale (JPEG)`, 259 → `YCbCr (JPEG)`) for the `--verbose` line.
+- `tests/decode.tcyr`: **+54 assertions** (51 → 105) — the 11 JPEG error mappings, the
+  sentinel names, the format tag, and e2e decode of a grayscale + a YCbCr baseline JPEG
+  (`tests/fixtures/{gradient,color}.jpg`) with decoded-pixel checks against the
+  ImageMagick reference (grayscale R==G==B invariant, a row-equality scan, and red/blue
+  chroma corners), plus a progressive-stub → `UNSUPPORTED` and a malformed-marker →
+  `HEADER` path. `tests/render.tcyr`: **+8** — a JPEG render e2e (gradient.jpg all the way
+  through downscale → quantize → emit, asserting real ANSI bytes + a `▀` glyph). Suite
+  total **431** (was 369).
+- `tests/kii.fcyr`: a **1,000,000-iter JPEG adapter crash-safety** surface (SOI + random
+  bytes). Each PNG/JPEG decode iter calls `alloc_reset()` to rewind the never-free bump
+  allocator (a present SOI makes chitra allocate ~22 KB of marker scratch before failing),
+  keeping the run bounded — peak RSS **~134 MB** over **4,011,000** iters across 6
+  surfaces, all clean.
+
+### Changed
+- `[deps.chitra]` tag `0.2.1` → `0.3.0` (`cyrius.cyml`); `print_version` → `kii 1.4.0`.
+- `src/png.cyr` is now the **image** front-end (the adapter calls `chitra_image_decode`,
+  which routes PNG vs JPEG by signature). PNG decode path is byte-for-byte unchanged.
+- Decode diagnostics in `src/main.cyr` are format-aware where the path is shared:
+  `not a PNG` → `unrecognized image format (expected PNG or JPEG)`; the malformed/truncated
+  branches read `malformed JPEG …` / `truncated JPEG …` for a JPEG and keep their PNG
+  wording for a PNG; `PNG decode failed` → `image decode failed`; `IDAT too large` →
+  `image too large`. PNG-only paths (CRC, IDAT, filter, interlace, IEND warning) keep
+  their PNG wording — chitra routes by signature, so a JPEG never reaches them.
+
+### Note
+- The historical `png_` / `PNG_ERR_*` symbol names and the `src/png.cyr` filename are
+  retained (they predate JPEG); a rename to `image.*` / `IMG_ERR_*` is a tracked
+  follow-up (`docs/development/roadmap.md`), deferred to keep this cut a tight functional
+  wiring per the smallest-first discipline.
+
 ## [1.3.1] — 2026-06-26
 
 **ASCII shape-vector glyph matching.** Upgrades `--mode ascii` from the v1.3.0

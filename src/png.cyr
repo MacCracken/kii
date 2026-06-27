@@ -1,4 +1,15 @@
-# kii — PNG front-end (the chitra adapter).
+# kii — image front-end (the chitra adapter): PNG + JPEG.
+#
+# THE JPEG WIRING (v1.4.0): the adapter now calls chitra_image_decode
+# (chitra 0.3.0), which sniffs the signature and routes to chitra's PNG or
+# baseline-JPEG decoder, normalizing both to the same canonical RGBA8. kii
+# renders .jpg/.jpeg with zero pipeline change — the adapter forwards JPEG's
+# RGBA8 exactly as it does PNG's. Decode failures are phrased per detected
+# format (STRUCT_FORMAT_OFFSET, set from the signature sniff before decode).
+# NOTE: the historical `png_` / `PNG_ERR_*` symbol + `png.cyr` filename names
+# are retained here (they predate JPEG); a rename to `image.*` / `IMG_ERR_*`
+# is a tracked follow-up (docs/development/roadmap.md), deferred to keep this
+# change a tight functional wiring per the project's smallest-first rule.
 #
 # THE PNG RE-FOLD (v1.2.0): kii no longer carries its own PNG decoder.
 # The 813-line native decoder (signature/IHDR/CRC32/chunk-walk/PLTE/
@@ -62,6 +73,21 @@ var PNG_ERR_RATIO_TOO_HIGH = 14; # RESERVED (see header): ratio bomb now -> DIME
 var PNG_ERR_FILE_TOO_LARGE = 15; # Input file exceeds KII_MAX_RAW_BYTES before any decode
                                  # (DoS guard: the slurp holds the whole file in RAM, which
                                  # the old streaming decoder avoided; cap it pre-read)
+var PNG_ERR_UNSUPPORTED    = 16; # Valid image, but an unsupported feature (chitra 0.3.0
+                                 # JPEG: progressive / arithmetic / 12-bit precision /
+                                 # non-baseline SOF mode / CMYK 4-component). Kept distinct
+                                 # from PNG_ERR_BITDEPTH so the diagnostic doesn't cite the
+                                 # PNG §11.2.2 bit-depth table for a JPEG.
+
+# ---- detected input format (for format-aware diagnostics) ----------
+# The adapter sniffs the signature before decode and records the format in
+# STRUCT_FORMAT_OFFSET, so main.cyr can phrase a decode failure per format
+# ("malformed JPEG ..." vs "malformed PNG ...") even though the failed
+# decode returned no image to read the format off. chitra owns the actual
+# routing; this is kii's parallel tag that survives a 0-return.
+var KII_FMT_UNKNOWN = 0;
+var KII_FMT_PNG     = 1;
+var KII_FMT_JPEG    = 2;
 
 # Single-buffer ceiling for the file slurp. kii reads the whole PNG into
 # memory (chitra decodes an in-memory (src,len) span, not a path), so a
@@ -99,18 +125,27 @@ var STRUCT_DOWNSCALED_BUF_OFFSET  = 120;  # populated by downscale_to_rgb (packe
 var STRUCT_DOWNSCALED_W_OFFSET    = 128;
 var STRUCT_DOWNSCALED_H_OFFSET    = 136;
 var STRUCT_SRC_COLOR_TYPE_OFFSET  = 144;  # pre-normalization PNG color_type (for --verbose)
+var STRUCT_FORMAT_OFFSET          = 152;  # detected input format (KII_FMT_*); set by the
+                                          # adapter from the signature sniff BEFORE decode,
+                                          # so main phrases format-aware decode diagnostics.
+                                          # 20th / last slot of the 160-byte pstruct.
 
 # ---- color-type helpers (used by downscale.cyr / quant.cyr / main.cyr)
 # Color-type → human-readable name. Used by the --verbose summary, fed
 # the SOURCE color_type (STRUCT_SRC_COLOR_TYPE_OFFSET) so a palette /
 # greyscale input still reports its real format even though pixels are
-# normalized to RGBA8. Names are the short forms from PNG spec § 11.2.2.
+# normalized to RGBA8. PNG names are the short forms from spec § 11.2.2; the
+# two JPEG cases (257/259) decode chitra's source-color-type sentinel
+# (chitra_image_source_color_type = 256 + component_count) so a JPEG
+# --verbose line names YCbCr/greyscale instead of falling through to "?".
 fn png_color_type_name(color_type): i64 {
     if (color_type == 0) { return "greyscale"; }
     if (color_type == 2) { return "RGB"; }
     if (color_type == 3) { return "palette"; }
     if (color_type == 4) { return "grey+alpha"; }
     if (color_type == 6) { return "RGBA"; }
+    if (color_type == 257) { return "greyscale (JPEG)"; }   # 0x101: 1-component
+    if (color_type == 259) { return "YCbCr (JPEG)"; }       # 0x103: 3-component
     return "?";
 }
 
@@ -149,6 +184,25 @@ fn _kii_map_chitra_err(code): i64 {
     if (code == CHITRA_ERR_DIMENSIONS)  { return PNG_ERR_DIMENSIONS; }
     if (code == CHITRA_ERR_FILTER)      { return PNG_ERR_FILTER; }
     if (code == CHITRA_ERR_NO_IDAT)     { return PNG_ERR_NO_IDAT; }
+    # ---- JPEG (chitra 0.3.0) -------------------------------------------
+    # Malformed / corrupt baseline-JPEG structure -> PNG_ERR_HEADER; main
+    # branches the wording on STRUCT_FORMAT (-> "malformed JPEG ..."). These
+    # never collide with a PNG input — chitra routes by signature first, so
+    # a PNG only ever yields codes 1-12.
+    if (code == CHITRA_ERR_JPEG_MARKER)  { return PNG_ERR_HEADER; }
+    if (code == CHITRA_ERR_JPEG_SOF)     { return PNG_ERR_HEADER; }
+    if (code == CHITRA_ERR_JPEG_DQT)     { return PNG_ERR_HEADER; }
+    if (code == CHITRA_ERR_JPEG_DHT)     { return PNG_ERR_HEADER; }
+    if (code == CHITRA_ERR_JPEG_SOS)     { return PNG_ERR_HEADER; }
+    if (code == CHITRA_ERR_JPEG_ENTROPY) { return PNG_ERR_HEADER; }
+    # Valid but unsupported JPEG features (baseline-only in chitra 0.3.0) ->
+    # a distinct code, so the message reads "unsupported JPEG feature ..."
+    # rather than the PNG §11.2.2 bit-depth wording.
+    if (code == CHITRA_ERR_JPEG_PROGRESSIVE) { return PNG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_ARITHMETIC)  { return PNG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_PRECISION)   { return PNG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_MODE)        { return PNG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_COMPONENTS)  { return PNG_ERR_UNSUPPORTED; }
     return PNG_ERR_HEADER;   # CHITRA_ERR_OTHER + any unknown -> generic malformed
 }
 
@@ -165,12 +219,19 @@ fn kii_file_size(path): i64 {
 }
 
 # ---- the decode front-end ------------------------------------------
-# Slurp `path` (size-capped), decode via chitra → canonical RGBA8, and
-# adapt the result into `pstruct` as a depth-8 color_type=6 image so the
-# existing downscale → quantize → emit pipeline consumes it unchanged.
-# Returns PNG_OK (0) on success, or a PNG_ERR_* code (mapped from
-# ChitraErr or raised by the file layer) on failure.
+# Slurp `path` (size-capped), sniff PNG vs JPEG, decode via
+# chitra_image_decode → canonical RGBA8, and adapt the result into
+# `pstruct` as a depth-8 color_type=6 image so the existing downscale →
+# quantize → emit pipeline consumes it unchanged (a JPEG renders with zero
+# pipeline change — the adapter forwards its RGBA8 exactly as for PNG). The
+# detected format is recorded in STRUCT_FORMAT_OFFSET for format-aware
+# diagnostics. Returns PNG_OK (0) on success, or a PNG_ERR_* code (mapped
+# from ChitraErr or raised by the file layer) on failure.
 fn kii_decode_png(path, pstruct): i64 {
+    # Default the format tag UNKNOWN so the early file-layer error returns
+    # (open / too-large / empty) still leave main a defined value to read.
+    store64(pstruct + STRUCT_FORMAT_OFFSET, KII_FMT_UNKNOWN);
+
     # ---- size cap BEFORE the slurp (the old streaming reader never
     # held the whole file; the in-memory boundary does, so a giant file
     # is an OOM vector — reject pre-read). ----
@@ -186,10 +247,24 @@ fn kii_decode_png(path, pstruct): i64 {
     if (n < 0)  { return PNG_ERR_OPEN; }
     if (n == 0) { return PNG_ERR_NOT_PNG; }
 
-    # ---- decode (chitra owns signature/IHDR/CRC/inflate/unfilter +
-    # canonical RGBA8 + every security guard) ----
+    # ---- sniff the format from the signature so main can phrase a decode
+    # failure per format. chitra_image_decode does the same routing
+    # internally; this parallel tag survives a 0-return (no image to read
+    # the format off of). ----
+    var fmt = KII_FMT_UNKNOWN;
+    if (chitra_png_check_signature(src, n) == 1) {
+        fmt = KII_FMT_PNG;
+    } else {
+        if (chitra_jpeg_check_signature(src, n) == 1) { fmt = KII_FMT_JPEG; }
+    }
+    store64(pstruct + STRUCT_FORMAT_OFFSET, fmt);
+
+    # ---- decode (chitra_image_decode sniffs PNG vs JPEG and owns
+    # signature / IHDR / CRC / inflate / unfilter on the PNG path and
+    # markers / Huffman / IDCT on the JPEG path + canonical RGBA8 + every
+    # security guard) ----
     var err = 0;
-    var img = chitra_png_decode(src, n, &err);
+    var img = chitra_image_decode(src, n, &err);
     if (img == 0) {
         # chitra's contract sets *err on every 0-return; guard the null
         # anyway so a hypothetical OOM that left it 0 can't NULL-deref in

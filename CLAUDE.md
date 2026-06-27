@@ -10,7 +10,7 @@
 
 ## Project Identity
 
-**kii** (Hawaiian: *image / picture / likeness*) — image → ANSI/ASCII-art converter for terminal display. Cyrius-native equivalent of `chafa` / `jp2a` / `viu`. Reads raster image input (PNG, JPEG, GIF, BMP planned), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to terminal cols × rows.
+**kii** (Hawaiian: *image / picture / likeness*) — image → ANSI/ASCII-art converter for terminal display. Cyrius-native equivalent of `chafa` / `jp2a` / `viu`. Reads raster image input (PNG + baseline JPEG; GIF, BMP planned), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to terminal cols × rows.
 
 - **Type**: Binary (user-facing CLI tool)
 - **License**: GPL-3.0-only
@@ -75,7 +75,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 ## Domain-specific rules (kii)
 
 - **Half-block (`▀`/`▄`) glyph aesthetic is the FLOOR** — every output mode renders at half-block density by default; quarter-blocks (`▘`/`▝`/`▖`/`▗`) or full pixels (`█`) are opt-in. Half-block doubles vertical resolution per character row for free.
-- **CRC / signature validation on every image input** — corrupt PNGs are an attack surface; reject malformed files at the spec layer, do not "guess" geometry.
+- **CRC / signature validation on every image input** — corrupt PNGs are an attack surface; reject malformed files at the spec layer, do not "guess" geometry. JPEG has no chunk CRC (and is lossy): the JPEG bar is structural validation — SOI + every marker/segment-length + SOF/DQT/DHT/SOS field bounds + entropy-stream integrity — under the same DoS caps. Validation lives in the `chitra` substrate; kii rejects what chitra rejects. See [ADR 0008](docs/adr/0008-jpeg-via-chitra.md).
 - **No file writes** — kii is a stdin/argument → stdout renderer. Reads input, writes ANSI, exits. No persistent state.
 - **Terminal-size detection via `ioctl TIOCGWINSZ`** at v0.7.0; `--width N` override always available; fall back to 80×24 (BBS-default) if both fail.
 - **Color-quantization defaults to nearest-RGB in 16-color ANSI palette** — Floyd-Steinberg + ordered dither are post-v1 tier-2 work, not v1.0 scope.

@@ -10,6 +10,12 @@
 #   - the error paths the adapter is on the hook for (open / empty /
 #     not-a-PNG / inflate failure / IEND tolerance).
 #
+# v1.4.0 adds the JPEG surface (chitra 0.3.0): the adapter calls
+# chitra_image_decode, so this file also pins the JPEG side of the adapter —
+# the 11 new ChitraErr → PNG_ERR_* mappings, the JPEG src-ctype sentinel
+# names (--verbose), the KII_FMT_* format tag, and e2e decode of a grayscale
+# + a YCbCr baseline JPEG fixture (tests/fixtures/{gradient,color}.jpg).
+#
 # M3(a) sankoch zlib round-trip is kept verbatim: kii's tests still
 # call zlib_decompress directly, and the dep wiring is still load-bearing.
 #
@@ -374,6 +380,33 @@ fn main() {
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_NO_IDAT),     PNG_ERR_NO_IDAT,        "NO_IDAT → NO_IDAT");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_OTHER),       PNG_ERR_HEADER,         "OTHER → HEADER (generic malformed)");
 
+    # ---- JPEG mapping (chitra 0.3.0, v1.4.0 wiring) ----------------
+    # Malformed/corrupt baseline-JPEG codes collapse to PNG_ERR_HEADER
+    # (main phrases them per format → "malformed JPEG ..."); the five
+    # valid-but-unsupported deferred modes get the distinct
+    # PNG_ERR_UNSUPPORTED so the message doesn't cite PNG §11.2.2.
+    test_group("jpeg — _kii_map_chitra_err JPEG codes");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_MARKER),      PNG_ERR_HEADER,      "JPEG_MARKER → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_SOF),         PNG_ERR_HEADER,      "JPEG_SOF → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_DQT),         PNG_ERR_HEADER,      "JPEG_DQT → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_DHT),         PNG_ERR_HEADER,      "JPEG_DHT → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_SOS),         PNG_ERR_HEADER,      "JPEG_SOS → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_ENTROPY),     PNG_ERR_HEADER,      "JPEG_ENTROPY → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_PROGRESSIVE), PNG_ERR_UNSUPPORTED, "JPEG_PROGRESSIVE → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_ARITHMETIC),  PNG_ERR_UNSUPPORTED, "JPEG_ARITHMETIC → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_PRECISION),   PNG_ERR_UNSUPPORTED, "JPEG_PRECISION → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_MODE),        PNG_ERR_UNSUPPORTED, "JPEG_MODE → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_COMPONENTS),  PNG_ERR_UNSUPPORTED, "JPEG_COMPONENTS → UNSUPPORTED");
+
+    # ---- png_color_type_name: JPEG source sentinels (--verbose) ----
+    # chitra_image_source_color_type returns 256+ncomp for a JPEG; the
+    # helper must name them rather than fall through to "?".
+    test_group("jpeg — png_color_type_name sentinels");
+    assert_streq(png_color_type_name(257), "greyscale (JPEG)", "257 (0x101) → greyscale (JPEG)");
+    assert_streq(png_color_type_name(259), "YCbCr (JPEG)",     "259 (0x103) → YCbCr (JPEG)");
+    assert_streq(png_color_type_name(6),   "RGBA",             "PNG ct6 still → RGBA");
+    assert_streq(png_color_type_name(99),  "?",                "true-unknown still → ?");
+
     # ---- kii_decode_png end-to-end on the real RAMGON.png fixture ---
     # The adapter normalizes to depth-8 ct6; SRC_COLOR_TYPE carries the
     # real pre-normalization color_type (RAMGON is RGBA → 6).
@@ -484,6 +517,101 @@ fn main() {
     var pstr_mi[160];
     assert_eq(kii_decode_png(&path_mi, &pstr_mi), PNG_ERR_OPEN,
     "nonexistent path → PNG_ERR_OPEN");
+
+    # ---- JPEG e2e via chitra_image_decode (chitra 0.3.0, v1.4.0) ----
+    # (a) the 16x16 grayscale baseline gradient (chitra's reference fixture,
+    #     decoded byte-identical to ImageMagick). The adapter normalizes JPEG
+    #     to depth-8 ct6 exactly like PNG; SRC_COLOR_TYPE carries the JPEG
+    #     sentinel 257 (0x101 = 1 component), FORMAT = KII_FMT_JPEG, and the
+    #     IEND flag is forced 1 by chitra (JPEG has no IEND).
+    test_group("jpeg — decode e2e (gradient.jpg, 16x16 grayscale)");
+    var pstr_jpg[160];
+    assert_eq(kii_decode_png("tests/fixtures/gradient.jpg", &pstr_jpg), PNG_OK,
+    "gradient.jpg → PNG_OK");
+    assert_eq(load64(&pstr_jpg + STRUCT_WIDTH_OFFSET),        16, "gradient width = 16");
+    assert_eq(load64(&pstr_jpg + STRUCT_HEIGHT_OFFSET),       16, "gradient height = 16");
+    assert_eq(load64(&pstr_jpg + STRUCT_COLOR_TYPE_OFFSET),    6, "adapter forces ct6");
+    assert_eq(load64(&pstr_jpg + STRUCT_BIT_DEPTH_OFFSET),     8, "bit_depth = 8");
+    assert_eq(load64(&pstr_jpg + STRUCT_SRC_COLOR_TYPE_OFFSET), 257, "src ctype 257 (JPEG gray)");
+    assert_eq(load64(&pstr_jpg + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "format = JPEG");
+    assert_eq(load64(&pstr_jpg + STRUCT_SEEN_IEND_OFFSET),     1, "JPEG seen_iend forced 1");
+    assert_eq(load64(&pstr_jpg + STRUCT_PIXELS_SIZE_OFFSET), 16 * 16 * 4, "pixels size = 16×16×4");
+    assert(load64(&pstr_jpg + STRUCT_PIXELS_BUF_OFFSET) != 0, "pixels_buf non-null");
+    # Decoded-pixel correctness through kii (row-0 horizontal ramp; R==G==B
+    # for grayscale, A==255). Locks the e2e against the ImageMagick reference.
+    var jpx = load64(&pstr_jpg + STRUCT_PIXELS_BUF_OFFSET);
+    assert_eq(load8(jpx + 0 * 4),  255, "gradient px0  R = 255 (bright edge)");
+    assert_eq(load8(jpx + 1 * 4),  240, "gradient px1  R = 240");
+    assert_eq(load8(jpx + 7 * 4),  136, "gradient px7  R = 136");
+    assert_eq(load8(jpx + 15 * 4),   0, "gradient px15 R = 0 (dark edge)");
+    assert_eq(load8(jpx + 3),      255, "gradient px0  A = 255 (opaque)");
+    # Grayscale invariant: a 1-component JPEG decodes to R==G==B per pixel.
+    assert_eq(load8(jpx + 0 * 4 + 1), load8(jpx + 0 * 4 + 0), "gradient px0 G == R (grayscale)");
+    assert_eq(load8(jpx + 0 * 4 + 2), load8(jpx + 0 * 4 + 0), "gradient px0 B == R (grayscale)");
+    assert_eq(load8(jpx + 7 * 4 + 1), load8(jpx + 7 * 4 + 0), "gradient px7 G == R (grayscale)");
+    assert_eq(load8(jpx + 7 * 4 + 2), load8(jpx + 7 * 4 + 0), "gradient px7 B == R (grayscale)");
+    # Pure horizontal gradient: row 8 must equal row 0 at EVERY column (no
+    # vertical variation), not just one pixel — actually compare the rows.
+    var grad_row_eq = 1;
+    var grad_c = 0;
+    while (grad_c < 16) {
+        if (load8(jpx + (0 * 16 + grad_c) * 4) != load8(jpx + (8 * 16 + grad_c) * 4)) { grad_row_eq = 0; }
+        grad_c = grad_c + 1;
+    }
+    assert_eq(grad_row_eq, 1, "row 8 == row 0 across all 16 columns (pure horizontal gradient)");
+
+    # (b) a 3-component baseline JPEG (YCbCr 4:4:4) → SRC_COLOR_TYPE 259
+    #     (0x103) exercises the chroma path through the adapter.
+    test_group("jpeg — decode e2e (color.jpg, 8x8 YCbCr)");
+    var pstr_clr[160];
+    assert_eq(kii_decode_png("tests/fixtures/color.jpg", &pstr_clr), PNG_OK,
+    "color.jpg → PNG_OK");
+    assert_eq(load64(&pstr_clr + STRUCT_WIDTH_OFFSET),         8, "color width = 8");
+    assert_eq(load64(&pstr_clr + STRUCT_HEIGHT_OFFSET),        8, "color height = 8");
+    assert_eq(load64(&pstr_clr + STRUCT_SRC_COLOR_TYPE_OFFSET), 259, "src ctype 259 (JPEG YCbCr)");
+    assert_eq(load64(&pstr_clr + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "format = JPEG");
+    assert_eq(load64(&pstr_clr + STRUCT_PIXELS_SIZE_OFFSET), 8 * 8 * 4, "pixels size = 8×8×4");
+    # Chroma correctness through the adapter: color.jpg is a vertical red→blue
+    # gradient, so the top-left pixel decodes red-dominant and the bottom-right
+    # blue-dominant. A swapped/zeroed Cb/Cr would fail these. Ranges, not exact
+    # bytes (JPEG is lossy: the red edge decodes ~254, the blue ~253).
+    var cpx = load64(&pstr_clr + STRUCT_PIXELS_BUF_OFFSET);
+    assert(cpx != 0, "color pixels_buf non-null");
+    assert(load8(cpx + 0) > 200,           "color px0 R high (red top-left)");
+    assert(load8(cpx + 1) < 60,            "color px0 G low (red top-left)");
+    assert(load8(cpx + 2) < 60,            "color px0 B low (red top-left)");
+    assert_eq(load8(cpx + 3), 255,         "color px0 A = 255 (opaque)");
+    assert(load8(cpx + 63 * 4 + 2) > 200,  "color px63 B high (blue bottom-right)");
+    assert(load8(cpx + 63 * 4 + 0) < 60,   "color px63 R low (blue bottom-right)");
+
+    # (c) the format tag for a PNG is KII_FMT_PNG (RAMGON, re-decoded).
+    test_group("jpeg — format tag distinguishes PNG from JPEG");
+    var pstr_fmt[160];
+    assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_fmt), PNG_OK, "RAMGON → PNG_OK");
+    assert_eq(load64(&pstr_fmt + STRUCT_FORMAT_OFFSET), KII_FMT_PNG, "PNG input → format = PNG");
+
+    # (d) a progressive-JPEG stub (SOI + SOF2) is a VALID but unsupported
+    #     JPEG → PNG_ERR_UNSUPPORTED (not 'malformed'), and FORMAT = JPEG so
+    #     main can phrase the unsupported-feature diagnostic.
+    test_group("jpeg — progressive stub → PNG_ERR_UNSUPPORTED");
+    var path_pg[256];
+    _scratch_path(&path_pg, "kii-decode-prog.jpg");
+    file_write_all(&path_pg, "\xFF\xD8\xFF\xC2", 4);          # SOI + SOF2 (progressive)
+    var pstr_pg[160];
+    assert_eq(kii_decode_png(&path_pg, &pstr_pg), PNG_ERR_UNSUPPORTED,
+    "progressive JPEG → PNG_ERR_UNSUPPORTED");
+    assert_eq(load64(&pstr_pg + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "stub tagged JPEG before decode");
+
+    # (e) a JPEG with SOI then a non-marker byte → malformed → PNG_ERR_HEADER
+    #     (main prints "malformed JPEG ..." because FORMAT = JPEG).
+    test_group("jpeg — malformed marker stream → PNG_ERR_HEADER");
+    var path_mj[256];
+    _scratch_path(&path_mj, "kii-decode-badjpeg.jpg");
+    file_write_all(&path_mj, "\xFF\xD8\x00\x00\x00\x00", 6);  # SOI then garbage (no FF marker)
+    var pstr_mj[160];
+    assert_eq(kii_decode_png(&path_mj, &pstr_mj), PNG_ERR_HEADER,
+    "malformed JPEG marker stream → PNG_ERR_HEADER");
+    assert_eq(load64(&pstr_mj + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "tagged JPEG (SOI matched)");
 
     test_subbyte_now_renders();
     test_interlace_now_renders();

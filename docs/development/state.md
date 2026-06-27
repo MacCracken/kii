@@ -5,6 +5,21 @@
 
 ## Version
 
+**1.4.0** — cut 2026-06-27. **Baseline JPEG decode via chitra 0.3.0.** Re-pins
+`[deps.chitra]` `0.2.1` → `0.3.0` and switches the decode adapter from `chitra_png_decode`
+to the format-sniffing `chitra_image_decode`, so `kii photo.jpg` renders **baseline (SOF0)
+JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0 subsampling, DRI/RST restart markers)
+beside the full PNG matrix. chitra normalizes JPEG to the same canonical RGBA8 as PNG, so
+downscale/quant/emit are untouched and **PNG frames stay byte-identical** (RAMGON golden at
+40/80/120/200/default + verbose). The 11 JPEG `ChitraErr` codes map onto `PNG_ERR_*` (a new
+`PNG_ERR_UNSUPPORTED` for the deferred modes — progressive/arithmetic/12-bit/non-baseline/
+CMYK); a `KII_FMT_*` tag (`STRUCT_FORMAT_OFFSET`, set from the signature sniff) drives
+format-aware diagnostics ("malformed JPEG …" vs "malformed PNG …"); `png_color_type_name`
+names the JPEG source sentinels 257/259 for `--verbose`. Historical `png_`/`PNG_ERR_*`/
+`png.cyr` names retained (rename to `image.*`/`IMG_ERR_*` tracked). `print_version` → `kii
+1.4.0`. **431 assertions** (decode 51 → 105, render +8 JPEG e2e); fuzz **4,011,000 iters**
+(+1M JPEG, alloc-reset-bounded, peak ~134 MB). See [ADR 0008](../adr/0008-jpeg-via-chitra.md).
+
 **1.3.1** — cut 2026-06-26. **ASCII shape-vector glyph matching.** Upgrades `--mode ascii`
 from the 1.3.0 luminance ramp to shape-aware selection: each cell sampled in a 2×3 sub-grid,
 matched (6-region nearest-Euclidean) to the glyph whose ink-coverage vector is closest — tracks
@@ -70,9 +85,10 @@ parser productized + extended) — dropped the hand-rolled parsing + `build_argv
 
 ## Surface
 
-Full PNG → terminal-fit ANSI half-block frame pipeline (unchanged at the user-facing layer from v0.7.0):
+Full PNG + baseline JPEG → terminal-fit ANSI half-block frame pipeline (unchanged at the user-facing layer from v0.7.0; v1.4.0 added JPEG as a second input format, same emit surface):
 
 - `kii image.png` in a TTY → detects terminal cols × rows via `tty_winsize(1)`, fits the image into `cols × (rows - 1)` aspect-preservingly, emits a frame sized to that envelope on stdout. Exit 0.
+- `kii photo.jpg` (v1.4.0) → baseline JPEG decodes through chitra's JPEG path (signature-sniffed, not extension-keyed) and renders identically — `--mode ascii`, `--width`, `--verbose`, terminal-fit all apply. `--verbose` reports the source as `greyscale (JPEG)` / `YCbCr (JPEG)`. Progressive / arithmetic / 12-bit / CMYK JPEG reject as `unsupported JPEG feature …` (baseline-only in chitra 0.3.0).
 - `kii image.png > out.ansi` (non-TTY) → falls back to 80×24 BBS-default; identical frame shape regardless of where stdout lands.
 - `kii --width N image.png` → exactly N cells wide; height aspect-derived without a row cap.
 - `kii --verbose image.png` adds the M4-shape summary line to **stderr** after the frame.
@@ -95,13 +111,14 @@ Module map:
 - `src/main.cyr` — I/O glue + dispatch. Two-path geometry resolver (`--width N` → M6(a); else `tty_winsize`-detect → M6(b) fit). M7(c) added `_eprint_path_safe` helper routing path bytes through the sanitizer.
 - `src/cli.cyr` — CLI parse helpers + `KII_F_*` indices (width/color/verbose/**mode**). M7(c) added `kii_path_has_control_bytes(path)`; v1.3.0 added `kii_validate_mode` / `kii_mode_is_ascii` for `--mode`.
 - `src/ascii.cyr` — **character-glyph lane** (v1.3.0 ramp → v1.3.1 shape-vector): `_ascii_luma` (Rec.709), `_ascii_match` (6-region nearest-glyph) + `_ascii_shape_init` (27-glyph coverage table, offline-generated), `emit_ascii_shape_row_buf` (testable) + `emit_ascii_shape`. Per-row buffer heap-allocated from width.
-- `src/png.cyr` — **chitra adapter** (post-re-fold; was the 813-line native decoder). Keeps the `PNG_ERR_*` code space + 20-slot `STRUCT_*_OFFSET` pstruct (160 bytes, +`STRUCT_SRC_COLOR_TYPE_OFFSET`=144) + `_png_color_channels` / `png_color_type_name`. Adds `kii_decode_png(path,&pstruct)` (size-capped slurp → `chitra_png_decode` → RGBA8 as a depth-8 ct6 image), `kii_file_size` (lseek SEEK_END), and `_kii_map_chitra_err` (`ChitraErr`→`PNG_ERR_*`). All signature/IHDR/CRC/inflate/unfilter/PLTE + security caps now live in chitra.
+- `src/png.cyr` — **chitra image adapter** (post-re-fold; was the 813-line native decoder). Now decodes PNG **and** baseline JPEG: `kii_decode_png` sniffs the signature, calls `chitra_image_decode` (v1.4.0; was `chitra_png_decode`), and writes the canonical RGBA8 into the pstruct as a depth-8 ct6 image. Keeps the `PNG_ERR_*` code space (+ `PNG_ERR_UNSUPPORTED`=16 for deferred JPEG modes) + the now-20-slot `STRUCT_*_OFFSET` pstruct (160 bytes; +`STRUCT_SRC_COLOR_TYPE_OFFSET`=144, +`STRUCT_FORMAT_OFFSET`=152) + `KII_FMT_*` + `_png_color_channels` / `png_color_type_name` (extended with JPEG sentinels 257/259) + `kii_file_size` (lseek SEEK_END) + `_kii_map_chitra_err` (`ChitraErr`→`PNG_ERR_*`, incl. the 11 JPEG codes). All signature/IHDR/CRC/inflate/unfilter/PLTE on the PNG path and markers/Huffman/IDCT on the JPEG path + security caps live in chitra. Historical `png_`/`PNG_ERR_*`/filename names retained (rename tracked).
 - `src/palette.cyr` — Linux-console 16-color RGB palette + accessors.
 - `src/quant.cyr` — `quantize_nearest_rgb` (scalar) + `quantize_rgb_buf` / `quantize_downscaled` (production pipeline). The M4 `quantize_nearest_image` was removed at the re-fold (it read native color_type/PLTE that no longer reach the pstruct).
 - `src/downscale.cyr` — Nearest-neighbor RGB resampler. Post-re-fold the live input is always ct6 (chitra RGBA8); the `_extract_rgb` color_type table is retained. Called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`.
 - `src/emit.cyr` — Half-block ANSI emit + geometry primitives (`_kii_compute_target_geometry` for explicit-width, `_kii_compute_fit_geometry` for terminal-fit). Default constants `EMIT_DEFAULT_COLS = 80` / `EMIT_DEFAULT_ROWS = 24`. Local `_emit_bg_256_buf` while darshana's BG-256 twin isn't shipped.
-- `tests/` — split from the monolithic `tests/kii.tcyr` into focused standalone suites at the re-fold (matches chitra's `tests/tcyr/*.tcyr` convention): `tests/cli.tcyr` (cmdit/flags + path-sanitizer), `tests/quant.tcyr` (palette + quantize), `tests/render.tcyr` (downscale + emit + geometry), `tests/decode.tcyr` (`kii_decode_png` e2e + `_kii_map_chitra_err` + adapter + sankoch zlib round-trip). **336 assertions** total (cli 57 + quant 109 + render 129 + decode 41); ~132 decoder-internal assertions retired to chitra (its suite is 322).
-- `tests/kii.fcyr` — fuzz surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG); the PNG surface re-aimed through `kii_decode_png`.
+- `tests/` — split from the monolithic `tests/kii.tcyr` into focused standalone suites at the re-fold (matches chitra's `tests/tcyr/*.tcyr` convention): `tests/cli.tcyr` (cmdit/flags + path-sanitizer), `tests/quant.tcyr` (palette + quantize), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii` shape-vector), `tests/decode.tcyr` (`kii_decode_png` PNG **+ JPEG** e2e + `_kii_map_chitra_err` incl. the 11 JPEG codes + JPEG sentinel names + `KII_FMT_*` tag + sankoch zlib round-trip), and `tests/render.tcyr` gained a JPEG render e2e. **431 assertions** total (cli 63 + quant 109 + render 137 + ascii 17 + decode 105); decode grew 51 → 105 (+54 JPEG) and render +8 (JPEG e2e) at v1.4.0. Decoder-internal coverage lives in chitra's suite.
+- `tests/fixtures/{gradient,color}.jpg` — v1.4.0 JPEG fixtures: 16×16 grayscale (chitra's ImageMagick-verified gradient, src ctype 257) + 8×8 YCbCr 4:4:4 (src ctype 259).
+- `tests/kii.fcyr` — fuzz surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, **JPEG**); PNG + JPEG surfaces aimed through `kii_decode_png` (JPEG = SOI + random bytes, generational/bounded).
 - `tests/kii.bcyr` — benches (quantize + end-to-end RAMGON + decode latency); decode bench re-aimed through `kii_decode_png`.
 - `tests/fixtures/RAMGON.png` — real-world fixture (1152×925 RGBA, ~2 MB).
 
@@ -111,8 +128,8 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 
 ## Tests + bench
 
-- `cyrius test` → **336 assertions, all pass** across 4 split suites (cli 57 / quant 109 / render 129 / decode 41). Down from 468 at v1.1.2: ~132 decoder-internal assertions retired to chitra (322 there) at the v1.2.0 re-fold; `decode.tcyr` adds the `kii_decode_png` adapter + `_kii_map_chitra_err` mapping coverage.
-- Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → **3,011,000 iters, all clean**. Surfaces: 10k arg-parser + 1M path-sanitizer + 1M geometry + 1k emit-pipeline + 1M PNG (re-aimed through `kii_decode_png` → chitra at the re-fold).
+- `cyrius test` → **431 assertions, all pass** across 5 split suites (cli 63 / quant 109 / render 137 / ascii 17 / decode 105). decode grew 51 → 105 at v1.4.0 (+54 JPEG: 11 error mappings + sentinel names + format tag + grayscale & YCbCr e2e with pixel/chroma/row checks + progressive/malformed stubs); render +8 (a JPEG decode→downscale→quantize→emit e2e). Decoder-internal coverage lives in chitra's suite.
+- Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → **4,011,000 iters, all clean** (~40 s, peak RSS **~134 MB**). Surfaces: 10k arg-parser + 1M path-sanitizer + 1M geometry + 1k emit-pipeline + 1M PNG + **1M JPEG** (SOI + random bytes through `kii_decode_png` → chitra). The PNG + JPEG decode iters call `alloc_reset()` to rewind the never-free bump allocator each iteration (a present signature makes chitra allocate marker/header scratch before the input fails) — without it the heap would grow unboundedly.
 - Bench (see [`docs/benchmarks.md`](../benchmarks.md)):
   - `quantize_nearest_rgb @ 1024×1024`: **268 ns/op** (v0.7.0: 269 ns; noise)
   - `end-to-end RAMGON.png → 80×24 frame`: **752 ms/iter**
@@ -127,7 +144,7 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `sankoch`, `thread` (`flags` dropped at the v1.1.0 cmdit re-fold). `sankoch` + `thread` stay post-decoder-re-fold — chitra's dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list, and kii's tests call `zlib_decompress` directly.
-- **External**: `darshana 0.8.1` + `cmdit 1.1.0` + **`chitra 0.2.1`** (PNG decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns PNG decode (`dist/chitra.cyr`) — now the **full PNG matrix**: all bit depths 1/2/4/8/16 + Adam7 interlace.
+- **External**: `darshana 0.8.1` + `cmdit 1.1.0` + **`chitra 0.3.0`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
 
 ## Cycle context
 
@@ -140,7 +157,7 @@ v1.0.0 ships during agnos kernel cycle **1.32.x networking-arc**. kii lands as s
 - `--color 256` and `--color tc` modes (truecolor SGR emit).
 - Floyd-Steinberg + ordered-Bayer dithering as `--dither` choices.
 - `--filter {nearest,bilinear,box}` selection.
-- **JPEG + other formats arrive via chitra** (0.2.1 = sub-byte depths 1/2/4 + Adam7; 0.3+ = JPEG) on a `[deps.chitra]` re-pin — post-re-fold kii consumes new formats from the substrate rather than an in-repo decoder (see ADR 0006).
+- **Baseline JPEG shipped at v1.4.0** (chitra 0.3.0, [ADR 0008](../adr/0008-jpeg-via-chitra.md)). Remaining formats arrive via chitra the same way on a `[deps.chitra]` re-pin: progressive-DCT JPEG, then GIF / BMP — post-re-fold kii consumes new formats from the substrate rather than an in-repo decoder (see ADR 0006).
 - **Character-glyph ASCII mode** (`--mode ascii`) — luminance-ramp floor + shape-vector glyph matching; review item in `docs/development/roadmap.md` § Post-v1 (attribution: Alex Harri's ASCII-rendering blog for the shape-vector/contrast logic).
 - Re-render the chafa visual-review fixture set (deferred from M8) once chafa is installed in the dev environment.
 - Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux) on a wider terminal set.
