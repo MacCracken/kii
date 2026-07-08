@@ -5,6 +5,19 @@
 
 ## Version
 
+**1.4.1** — cut 2026-07-08. **agnos-target build fix + toolchain pin `6.2.44` → `6.4.20` +
+darshana `0.8.1` → `0.8.2`.** darshana 0.8.2 lands AGNOS parity for the TTY-mode primitives
+(`tty_isatty` / `tty_raw` / `tty_cooked` agnos peers); additive superset of the surface kii
+uses, render byte-identical.
+The committed `lib/` snapshot had drifted *behind* the pin: the vendored agnos syscall peer
+(`lib/syscalls_x86_64_agnos.cyr`) predated `SYS_LSEEK = 58`, so `cyrius build --agnos src/main.cyr`
+failed `undefined variable 'SYS_LSEEK'` at `src/png.cyr:216` (the `kii_file_size` `lseek(…, SEEK_END)`
+size probe). Linux was unaffected (`SYS_LSEEK = 8` long-standing in the linux peer). Fixed by
+`cyrius lib sync` re-vendoring the stdlib subset from the advanced pin — **no source change**;
+rendering byte-identical (RAMGON re-verified on Linux **and** agnos-under-mirshi, 137/137 suite green).
+Unblocks kii from the agnosticos agnos-dev docker image (`docker/build-dev.sh`), where it had been
+auto-skipped on the failing `--agnos` build. `print_version` literal → `kii 1.4.1`.
+
 **1.4.0** — cut 2026-06-27. **Baseline JPEG decode via chitra 0.3.0.** Re-pins
 `[deps.chitra]` `0.2.1` → `0.3.0` and switches the decode adapter from `chitra_png_decode`
 to the format-sniffing `chitra_image_decode`, so `kii photo.jpg` renders **baseline (SOF0)
@@ -81,7 +94,7 @@ parser productized + extended) — dropped the hand-rolled parsing + `build_argv
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.44` (in `cyrius.cyml [package].cyrius`). `lib/` re-vendored from the 6.2.44 stdlib snapshot at 1.1.2 (was 6.2.22 / re-vendored at 1.0.1).
+- **Cyrius pin**: `6.4.20` (in `cyrius.cyml [package].cyrius`). `lib/` re-vendored from the 6.4.20 stdlib snapshot at 1.4.1 (was 6.2.44 / re-vendored at 1.1.2).
 
 ## Surface
 
@@ -144,7 +157,7 @@ Build: ~145 KB at v0.8.0 (unchanged from v0.7.0; compiler still reports ~430 unr
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `sankoch`, `thread` (`flags` dropped at the v1.1.0 cmdit re-fold). `sankoch` + `thread` stay post-decoder-re-fold — chitra's dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list, and kii's tests call `zlib_decompress` directly.
-- **External**: `darshana 0.8.1` + `cmdit 1.1.0` + **`chitra 0.3.0`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
+- **External**: `darshana 0.8.2` + `cmdit 1.1.0` + **`chitra 0.3.0`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0). darshana's `tty_winsize` + ANSI primitives drive emit (BG-256 twin still absent → kii keeps the inline `_emit_bg_256_buf`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
 
 ## Cycle context
 

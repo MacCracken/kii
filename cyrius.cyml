@@ -5,7 +5,7 @@ description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASC
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/cyrius-kii"
 language = "cyrius"
-cyrius = "6.2.44"
+cyrius = "6.4.20"
 
 [build]
 entry = "src/main.cyr"
@@ -30,11 +30,13 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 # background twin (tty_bg_256_buf) is not yet in darshana's surface,
 # so kii builds the CSI 48;5;N escape inline for now. Extracts to
 # darshana when a second consumer surfaces. Pinned tag per
-# AGNOS dep-lockin discipline.
+# AGNOS dep-lockin discipline. Pin advanced 0.8.1 → 0.8.2 at kii v1.4.1
+# (0.8.2 = AGNOS parity for the TTY-mode primitives: tty_isatty / tty_raw /
+# tty_cooked agnos peers; additive superset of the surface kii uses).
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
-tag = "0.8.1"
+tag = "0.8.2"
 modules = ["dist/darshana.cyr"]
 
 # CLI / argument parsing — cmdit (sovereign getopt-long lib, the stdlib flags

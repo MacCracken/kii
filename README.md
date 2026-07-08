@@ -80,7 +80,7 @@ cyrius build src/main.cyr build/kii   # compile
 ./build/kii image.png                 # quantize a PNG
 ```
 
-Toolchain pin: `cyrius = "6.2.44"` (in [`cyrius.cyml`](cyrius.cyml)).
+Toolchain pin: `cyrius = "6.4.20"` (in [`cyrius.cyml`](cyrius.cyml)).
 
 ### Running the test + bench + fuzz suites
 

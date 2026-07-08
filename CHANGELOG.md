@@ -4,6 +4,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-07-08
+
+**agnos-target build fix + toolchain pin → `6.4.20`.** The committed `lib/` stdlib
+snapshot had drifted *behind* kii's own pin: the vendored agnos syscall peer
+(`lib/syscalls_x86_64_agnos.cyr`) predated `SYS_LSEEK = 58`, so
+`cyrius build --agnos src/main.cyr` failed with `undefined variable 'SYS_LSEEK'` at
+[`src/png.cyr:216`](src/png.cyr) — the `lseek(fd, 0, SEEK_END)` file-size probe in
+`kii_file_size`. The Linux target was unaffected (`SYS_LSEEK = 8` is long-standing in
+the linux peer). Fixed by re-vendoring the stdlib subset (`cyrius lib sync`) against the
+advanced pin — **no source change**. Unblocks kii from the agnosticos agnos-dev docker
+image ([`docker/build-dev.sh`](https://github.com/MacCracken/agnosticos)), where it had
+been auto-skipped on the failing `--agnos` build. Every PNG/JPEG render path is byte-for-byte
+unchanged (Linux + agnos-under-mirshi both re-verified on RAMGON).
+
+### Changed
+- Toolchain pin `cyrius = "6.2.44"` → `"6.4.20"` — aligns the manifest with the active
+  toolchain and removes the standing pin-drift warning; vendored `lib/` re-synced from the
+  6.4.20 snapshot.
+- `[deps.darshana]` `0.8.1` → `0.8.2` — 0.8.2 is AGNOS parity for the TTY-mode primitives
+  (`tty_isatty` / `tty_raw` / `tty_cooked` agnos peers, the same `#ifdef CYRIUS_TARGET_AGNOS`
+  pattern as `tty_winsize`). Additive superset of the surface kii uses; render byte-identical.
+
+### Fixed
+- `cyrius build --agnos` no longer fails on `SYS_LSEEK` — the vendored agnos syscall peer
+  now carries the full frozen syscall set including `#58 lseek`.
+
 ## [1.4.0] — 2026-06-27
 
 **Baseline JPEG decode via chitra 0.3.0.** Re-pins `[deps.chitra]` `0.2.1` → `0.3.0`
