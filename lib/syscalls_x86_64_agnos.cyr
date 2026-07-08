@@ -54,6 +54,15 @@ enum SysNrAgnos {
     SYS_RENAME = 31;               # rename(old, oldlen, new, newlen) → 0 / -1  (uses a4=r10)
     SYS_LINK = 32;                 # link(target, targetlen, linkpath, linkpathlen) → 0 / -1 (a4)
     SYS_STAT = 33;                 # stat(path, pathlen, statbuf) → 0 / -1
+    SYS_UNAME = 34;                # uname(buf, len=64) → 0; 4×16-byte fields (§4.3)
+    SYS_SYSINFO = 35;             # sysinfo(buf, len=40) → 0; 5×u64, byte-direct (§4.4)
+    SYS_LSEEK = 58;               # lseek(fd, offset, whence) → new pos / -1; whence 0=SET/1=CUR/2=END
+    #   (agnos 1.46.x — repositions the VFS_EXT2_FILE cursor). Linux peer = 8.
+    SYS_FLOCK = 59;               # flock(fd, op) → 0 / -1; op SH=1/EX=2/UN=8 (+NB=4); inode-keyed advisory
+    #   lock, non-blocking (contended → -1), released on close#6 + exit (agnos 1.46.x). Linux peer = 73.
+    SYS_WINSIZE = 60;             # winsize() → (cols<<16)|rows / -1; no args, live FB char grid (agnos 1.45.13).
+    #   NOTE: #60 == the Linux exit number, so `_agnos_emit_gate` was reworked to verify
+    #   the actual program-exit syscall (#0) rather than scan for any `mov eax,60`.
 }
 
 # ================================================================
@@ -135,6 +144,41 @@ enum SysNrAgnosNet {
     SYS_ICMP_ECHO = 55;    # icmp_echo(dst_ip) → RTT ms (≥0) / -1; BLOCKS ~3s
     SYS_SOCK_LISTEN = 56;  # sock_listen(port) → listen_id 0..7 / -1; merges bind+listen, non-blocking (1.45.5)
     SYS_SOCK_ACCEPT = 57;  # sock_accept(listen_id) → conn_id / -1 (WOULD_BLOCK / bad id); non-blocking (1.45.5)
+    SYS_NET_CONFIG = 61;   # net_config(field) → packed IPv4 / 0 unset / -1 bad field (agnos 1.45.16)
+}
+
+# ================================================================
+# Signals — agnos kernel uses POSIX/Linux numbering (SIGCHLD=17 is
+# hard-coded in the kernel; kill#16 sets `1<<sig`; signalfd#18 returns
+# the bit position AS the signal number — kernel vfs_read_signalfd).
+# The MECHANISM (SYS_KILL/SIGPROCMASK/SIGNALFD + sys_* wrappers) was
+# already present; these are the userland number/flag constants the
+# Linux/macOS/aarch64 peers carry but agnos lacked. From
+# 2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md.
+# ================================================================
+enum AgnosSignal {
+    SIGHUP = 1;
+    SIGINT = 2;
+    SIGQUIT = 3;
+    SIGKILL = 9;
+    SIGUSR1 = 10;
+    SIGUSR2 = 12;
+    SIGTERM = 15;
+    SIGCHLD = 17;
+    SIGCONT = 18;
+    SIGSTOP = 19;
+    SIGPWR = 30;
+}
+
+enum AgnosSigAction {
+    SIG_BLOCK = 0;
+    SIG_UNBLOCK = 1;
+    SIG_SETMASK = 2;
+}
+
+enum AgnosSfdFlag {
+    SFD_NONBLOCK = 2048;
+    SFD_CLOEXEC = 524288;
 }
 
 # ----------------------------------------------------------------
@@ -244,6 +288,17 @@ fn sys_chmod(path, mode): i64 { return 0; }
 # compatible (kernel ignores a3 until then). Explicit length, no NUL.
 fn sys_open(name, namelen, flags): i64 { return syscall(SYS_OPEN, name, namelen, flags); }
 
+# lseek(fd, offset, whence) — reposition a VFS_EXT2_FILE cursor (agnos 1.46.x).
+# whence 0=SEEK_SET / 1=SEEK_CUR / 2=SEEK_END. Returns the new absolute pos / -1.
+# Same arg order as Linux lseek (the agnos kernel handler reads a1/a2/a3), so a
+# raw `syscall(SYS_LSEEK, fd, off, whence)` is ABI-correct on agnos too.
+fn sys_lseek(fd, off, whence): i64 { return syscall(SYS_LSEEK, fd, off, whence); }
+
+# flock(fd, op) — advisory whole-file lock (agnos 1.46.x). op = LOCK_SH(1) /
+# LOCK_EX(2) / LOCK_UN(8) (+ LOCK_NB(4)). Returns 0 / -1. NON-BLOCKING on agnos
+# (contended → -1 WOULD_BLOCK; the caller poll-spins), released on close#6 + exit.
+fn sys_flock(fd, op): i64 { return syscall(SYS_FLOCK, fd, op); }
+
 # Duplicate `fd` (stub: returns `fd` unchanged today).
 fn sys_dup(fd): i64 { return syscall(SYS_DUP, fd); }
 
@@ -271,6 +326,32 @@ fn WIFSIGNALED(status): i64 { return 0; }
 # The terminating signal — always 0 on agnos (signals aren't encoded in the status).
 fn WTERMSIG(status): i64 { return 0; }
 
+# Allocate an 8-byte (64-bit) pending-signal mask, zeroed.
+fn sigset_new(): i64 {
+    var set = alloc(8);
+    store64(set, 0);
+    return set;
+}
+
+# Set signal `signum` in `set`. LOAD-BEARING: agnos's kernel mask is
+# bit-per-signal-NUMBER (`1<<sig`) — NOT libc's `1<<(sig-1)` that the Linux
+# peer uses — because kill#16 sets `1<<sig` and signalfd#18 returns the bit
+# position AS the signal number (kernel vfs_read_signalfd). Mirroring the
+# Linux -1 here would silently desync sigset_add from kill/signalfd.
+fn sigset_add(set, signum): i64 {
+    var mask = load64(set);
+    mask = mask | (1 << signum);
+    store64(set, mask);
+    return 0;
+}
+
+# True iff signal `signum` is set in `set` (same `1<<sig` convention).
+fn sigset_has(set, signum): i64 {
+    var mask = load64(set);
+    if ((mask & (1 << signum)) != 0) { return 1; }
+    return 0;
+}
+
 # Send signal `sig` to process `pid` (pid 0 protected; self/child only).
 fn sys_kill(pid, sig): i64 { return syscall(SYS_KILL, pid, sig); }
 
@@ -279,6 +360,11 @@ fn sys_pause(): i64 { return syscall(SYS_PAUSE); }
 
 # Return the current uid (stub: always 0 / root).
 fn sys_getuid(): i64 { return syscall(SYS_GETUID); }
+
+# Effective uid. agnos has no separate euid (capability-gated, not euid-perms),
+# so it routes to getuid — giving the portable `sys_geteuid` surface (present in
+# the Linux/macOS peers) a uniform agnos definition. See lib/sys.cyr is_root.
+fn sys_geteuid(): i64 { return syscall(SYS_GETUID); }
 
 # Halt the machine (does not return).
 fn sys_reboot(): i64 { return syscall(SYS_REBOOT); }
@@ -308,6 +394,16 @@ fn sys_getdents(dir_fd, buf, bufsize): i64 { return syscall(SYS_GETDENTS, dir_fd
 # Stat `path` (length `pathlen`) into `statbuf` (AgnosStat, ≥0x200000).
 # Returns 0, or -1.
 fn sys_stat(path, pathlen, statbuf): i64 { return syscall(SYS_STAT, path, pathlen, statbuf); }
+
+# agnos has no access(2). sigil's ~20 call sites all probe TPM / IMA /
+# secureboot / cert paths with mode=0 (F_OK), none of which exist on
+# agnos, and treat !=0 as absent — so report absent for every probe.
+# `mode` is ignored (agnos has no ring-3 permission model). Fail-closed:
+# a security probe that cannot confirm presence must report absent.
+# UPGRADE PATH (consumer needing existence-true on agnos): strlen(path),
+# then `syscall(SYS_STAT, path, len, scratch) == 0 ? 0 : -1` with a
+# ≥STAT_BUFSZ scratch buffer. (issue 2026-06-21 C2.)
+fn sys_access(path, mode): i64 { return 0 - 1; }
 
 # Rename `old`→`new` within one filesystem (4-arg: a4 rides r10 §1a).
 fn sys_rename(old, oldlen, new, newlen): i64 { return syscall(SYS_RENAME, old, oldlen, new, newlen); }
@@ -419,6 +515,29 @@ fn sys_udp_unbind(listener_id): i64 { return syscall(SYS_UDP_UNBIND, listener_id
 # resolution so a sub-10ms reply reads 0) or -1 (timeout/NIC down).
 # BLOCKS ~3s. dst_ip is the kernel ip4() form (resolve via dig first).
 fn sys_icmp_echo(dst_ip): i64 { return syscall(SYS_ICMP_ECHO, dst_ip); }
+
+# winsize() — live framebuffer character grid (#60). Returns (cols<<16)|rows,
+# or -1. No args, non-blocking, IF=0-safe. Consumed by agnsh / darshana tty
+# sizing / kii / the desktop terminal grid. (agnos 1.45.13)
+fn sys_winsize(): i64 { return syscall(SYS_WINSIZE); }
+
+# net_config(field) — kernel network-config getter (#61). Each field is a
+# packed IPv4 (oct1<<24|...|oct4): 0=net_ip, 1=net_netmask, 2=net_gateway,
+# 3=net_dns_server. Returns the packed addr (>=0; 0 if the global is
+# unconfigured) or -1 for an unknown field. No buffer, non-blocking,
+# IF=0-safe (like uptime_ms#40 / winsize#60). Lets a ring-3 resolver target
+# the DHCP-leased on-subnet DNS instead of an off-subnet public IP. Consumers
+# MUST use these wrappers (not bare syscall(61,...)) — on Linux #61 is wait4.
+# See 2026-06-23-agnos-net-config-syscall-wrapper.md.
+fn sys_net_config(field): i64 { return syscall(SYS_NET_CONFIG, field); }
+# Packed IPv4 of this host's interface (net_config field 0).
+fn sys_net_ip(): i64 { return syscall(SYS_NET_CONFIG, 0); }
+# Packed IPv4 netmask (net_config field 1).
+fn sys_net_netmask(): i64 { return syscall(SYS_NET_CONFIG, 1); }
+# Packed IPv4 of the default-route gateway (net_config field 2).
+fn sys_net_gateway(): i64 { return syscall(SYS_NET_CONFIG, 2); }
+# Packed IPv4 of the DHCP-leased DNS resolver, else the gateway (net_config field 3).
+fn sys_net_dns_server(): i64 { return syscall(SYS_NET_CONFIG, 3); }
 
 # Lazily zero the conn table (defensive — globals are zero-init, but the
 # explicit pass mirrors lib/chrono.cyr's _chrono_init_mdays idiom and is
