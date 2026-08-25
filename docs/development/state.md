@@ -227,11 +227,18 @@ v1.0.0 ships during agnos kernel cycle **1.32.x networking-arc**. kii lands as s
 
 **Carry-forward debt at v1.0**: cross-terminal verification, marketplace recipe in zugot, and the sankoch upstream items (now five — see below). The chafa visual review is **closed** (it closed at v1.0.0; this list cited `docs/audit/chafa-comparison-deferred.md`, **a filename that has never existed in the tree** — the real file is `docs/audit/chafa-comparison.md`. Corrected at the v1.5.1 P-1 sweep.)
 
-**Upstream items owed to `sankoch`** (all in vendored `lib/`, which kii must not edit per CLAUDE.md — these are filed against the substrate, not fixed here):
+**Upstream items owed to `sankoch`** — three limitations found by the v1.5.1 P-1
+sweep, all in vendored `lib/` which kii must not edit. Tracked with their
+measurements and review trigger in
+[`roadmap.md` § Upstream: `sankoch` limitations](roadmap.md#upstream-sankoch-limitations--flagged-for-later-review),
+not duplicated here:
 
-1. **`_huff_decode` is O(bits × num_symbols)** (`lib/sankoch.cyr` ~:1205-1215): the symbol scan is nested inside the bit-length loop and rescans from the start at every code length. The v1.5.1 P-1 sweep measured this as **~93% of kii's entire end-to-end render time** — it is the single reason a 1152×925 PNG takes ~660 ms to reach an 80×24 frame. A canonical `mincode`/`maxcode`/`valptr` lookup is output-identical and was measured at ~3.7× end-to-end. **This is the highest-value optimization available to kii and it is not in kii.**
-2. **`DECOMPRESS_MAX_OUTPUT` is 16 MiB** (`lib/sankoch.cyr:49`), far below the 256 MB ceiling kii's own diagnostics advertise. Any PNG above ~5.6 megapixels inflates past it and is reported as `DEFLATE decompression failed (corrupt IDAT)` — a *wrong* diagnostic for a perfectly valid file. kii cannot raise the cap; see "Accepted risk" in the P-1 audit doc.
-3. **`crc32_table` is a lazy-init singleton holding a heap pointer** (`lib/sankoch.cyr:327`) with no invalidation hook, so any consumer that rewinds the bump allocator silently corrupts it. This voided kii's PNG fuzz surface; kii now clears the global itself, but a substrate-side reset hook would be the right fix.
-4-5. The two remaining CVE-class transfers carried since v1.0 (CVE-2004-0797 / 2005-1849 / 2005-2096 class).
+- **S-1** — `_huff_decode` is O(bits × num_symbols); **~93 % of kii's render time**, ~3.7× available. The highest-value optimization for kii, and it is not in kii.
+- **S-2** — the 16 MiB inflate cap makes any PNG above ~5.6 MP report `corrupt IDAT`, a wrong diagnostic for a valid file.
+- **S-3** — `crc32_table` is an un-invalidatable heap-pointer singleton; worked around in kii's fuzz harness, substrate fix still open.
+
+Re-verify all three at the next `cyrius` pin bump. The two remaining CVE-class
+transfers carried since v1.0 (CVE-2004-0797 / 2005-1849 / 2005-2096) are also
+still open as sankoch issues.
 
 **v2.0 horizon**: Tier-3 — Sixel / Kitty / iTerm2 inline-image protocols. Major-version cut depending on CLI surface impact.

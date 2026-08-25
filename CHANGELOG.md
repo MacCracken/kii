@@ -107,11 +107,15 @@ million of which were previously measuring nothing.
   review listed as deferred though it closed at v1.0.0, linked to a filename that
   has never existed, and a binary-size figure **4.6× low**), plus stale headers
   and `--help` wording in `src/`.
-- **`docs/development/state.md` gains an "Upstream items owed to `sankoch`"
-  section** — the Huffman hot spot, the 16 MiB inflate cap that makes any PNG
-  above ~5.6 megapixels report `corrupt IDAT`, and the un-invalidatable
-  `crc32_table` singleton. All three are in vendored `lib/`, which kii must not
-  edit.
+- **Three `sankoch` limitations are now tracked for later review** in
+  [`docs/development/roadmap.md`](docs/development/roadmap.md) § Upstream, with
+  their measurements and an explicit review trigger (re-verify at the next
+  `cyrius` pin bump): the O(bits × num_symbols) Huffman decoder (S-1), the 16 MiB
+  inflate cap that makes any PNG above ~5.6 megapixels report `corrupt IDAT`
+  (S-2), and the un-invalidatable `crc32_table` singleton (S-3). All three are in
+  vendored `lib/`, which kii must not edit — none is a kii defect and none blocks
+  a kii release. S-1 is worth raising as a `sankoch` issue on its own merits:
+  every stdlib consumer that inflates anything pays for it, not just kii.
 - `PNG_ERR_CHUNK`'s inner `if/else` had two byte-identical arms; collapsed. The
   dead `_print` helper — the only unreachable function in `src/` — removed.
 

@@ -69,6 +69,25 @@ Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 - Marketplace recipe in zugot — depends on zugot tooling.
 - Three sankoch upstream CVE-class items (CVE-2004-0797 / 2005-1849 / 2005-2096) — file as sankoch issues.
 
+## Upstream: `sankoch` limitations — flagged for later review
+
+Found by the v1.5.1 P-1 sweep, **all three in vendored `lib/`**, which kii must
+not edit (CLAUDE.md). None is a kii defect and none blocks a kii release; each
+needs a decision from the `sankoch` side, and kii should re-check them on every
+toolchain bump because `sankoch` ships inside the Cyrius stdlib.
+
+| # | Item | Where | Impact on kii | Status |
+|---|---|---|---|---|
+| **S-1** | `_huff_decode` is **O(bits × num_symbols)** — the symbol scan is nested inside the bit-length loop and rescans from the first symbol at every code length, where the canonical `mincode`/`maxcode`/`valptr` form is O(bits). | `lib/sankoch.cyr` ~:1205-1215 | **~93 % of kii's entire end-to-end render time.** It is the single reason RAMGON (1152×925) takes ~660 ms to reach an 80×24 frame; kii's own downscale + quantize + emit are together under 2 %. A drop-in canonical decoder measured **~3.7× end-to-end**, output byte-identical. | Open — highest-value optimization available to kii, and it is not in kii |
+| **S-2** | `DECOMPRESS_MAX_OUTPUT` is **16 MiB** (`enum Limits`), far below the 256 MB ceiling kii's own diagnostics advertise. | `lib/sankoch.cyr:49` | Any PNG above **~5.6 megapixels** inflates past the cap and is reported as `DEFLATE decompression failed (corrupt IDAT)` — a **wrong** diagnostic for a perfectly valid file. kii cannot raise the cap and cannot distinguish the two cases from outside. | Open — accepted risk at v1.5.1 |
+| **S-3** | `crc32_table` is a **lazy-init singleton holding a heap pointer** with no invalidation hook, so any consumer that rewinds the bump allocator silently corrupts it — no error, just wrong CRCs. | `lib/sankoch.cyr:327` + `:334-337` | Voided kii's 1,000,000-iteration PNG fuzz surface: 2999 of every 3000 iterations died at the signature check instead of reaching the decoder. kii now clears the global itself, but that is a consumer working around a substrate invariant it should not have to know. A `sankoch_reset()` hook is the right fix. | Worked around in kii; substrate fix open |
+
+**Review trigger**: re-verify all three at the next `cyrius` pin bump. S-1 is worth
+raising as a `sankoch` issue on its own merits — every stdlib consumer that
+inflates anything pays for it, not just kii. See
+[`docs/audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § 5 and
+[`docs/benchmarks.md`](../benchmarks.md) § v1.5.1 for the measurements.
+
 ## Out of scope (durable scope guards)
 
 Durable boundaries on what kii is (not a v1.0-only gate):
