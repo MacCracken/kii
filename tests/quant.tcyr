@@ -31,39 +31,71 @@ fn main() {
 
     test_group("M4(a) — palette entries 0–7 (normal)");
     # 0: black (0, 0, 0)
-    assert_eq(palette_r(0), 0);   assert_eq(palette_g(0), 0);   assert_eq(palette_b(0), 0);
+    assert_eq(palette_r(0), 0, "entry 0 (black) R = 0");
+    assert_eq(palette_g(0), 0, "entry 0 (black) G = 0");
+    assert_eq(palette_b(0), 0, "entry 0 (black) B = 0");
     # 1: red (170, 0, 0)
-    assert_eq(palette_r(1), 170); assert_eq(palette_g(1), 0);   assert_eq(palette_b(1), 0);
+    assert_eq(palette_r(1), 170, "entry 1 (red) R = 170");
+    assert_eq(palette_g(1),   0, "entry 1 (red) G = 0");
+    assert_eq(palette_b(1),   0, "entry 1 (red) B = 0");
     # 2: green (0, 170, 0)
-    assert_eq(palette_r(2), 0);   assert_eq(palette_g(2), 170); assert_eq(palette_b(2), 0);
+    assert_eq(palette_r(2),   0, "entry 2 (green) R = 0");
+    assert_eq(palette_g(2), 170, "entry 2 (green) G = 170");
+    assert_eq(palette_b(2),   0, "entry 2 (green) B = 0");
     # 3: yellow/brown (170, 85, 0)
-    assert_eq(palette_r(3), 170); assert_eq(palette_g(3), 85);  assert_eq(palette_b(3), 0);
+    assert_eq(palette_r(3), 170, "entry 3 (yellow/brown) R = 170");
+    assert_eq(palette_g(3),  85, "entry 3 (yellow/brown) G = 85");
+    assert_eq(palette_b(3),   0, "entry 3 (yellow/brown) B = 0");
     # 4: blue (0, 0, 170)
-    assert_eq(palette_r(4), 0);   assert_eq(palette_g(4), 0);   assert_eq(palette_b(4), 170);
+    assert_eq(palette_r(4),   0, "entry 4 (blue) R = 0");
+    assert_eq(palette_g(4),   0, "entry 4 (blue) G = 0");
+    assert_eq(palette_b(4), 170, "entry 4 (blue) B = 170");
     # 5: magenta (170, 0, 170)
-    assert_eq(palette_r(5), 170); assert_eq(palette_g(5), 0);   assert_eq(palette_b(5), 170);
+    assert_eq(palette_r(5), 170, "entry 5 (magenta) R = 170");
+    assert_eq(palette_g(5),   0, "entry 5 (magenta) G = 0");
+    assert_eq(palette_b(5), 170, "entry 5 (magenta) B = 170");
     # 6: cyan (0, 170, 170)
-    assert_eq(palette_r(6), 0);   assert_eq(palette_g(6), 170); assert_eq(palette_b(6), 170);
+    assert_eq(palette_r(6),   0, "entry 6 (cyan) R = 0");
+    assert_eq(palette_g(6), 170, "entry 6 (cyan) G = 170");
+    assert_eq(palette_b(6), 170, "entry 6 (cyan) B = 170");
     # 7: white / light gray (170, 170, 170)
-    assert_eq(palette_r(7), 170); assert_eq(palette_g(7), 170); assert_eq(palette_b(7), 170);
+    assert_eq(palette_r(7), 170, "entry 7 (white / light gray) R = 170");
+    assert_eq(palette_g(7), 170, "entry 7 (white / light gray) G = 170");
+    assert_eq(palette_b(7), 170, "entry 7 (white / light gray) B = 170");
 
     test_group("M4(a) — palette entries 8–15 (bright)");
     # 8: bright black / dark gray (85, 85, 85)
-    assert_eq(palette_r(8),  85);  assert_eq(palette_g(8),  85);  assert_eq(palette_b(8),  85);
+    assert_eq(palette_r(8), 85, "entry 8 (bright black / dark gray) R = 85");
+    assert_eq(palette_g(8), 85, "entry 8 (bright black / dark gray) G = 85");
+    assert_eq(palette_b(8), 85, "entry 8 (bright black / dark gray) B = 85");
     # 9: bright red (255, 85, 85)
-    assert_eq(palette_r(9),  255); assert_eq(palette_g(9),  85);  assert_eq(palette_b(9),  85);
+    assert_eq(palette_r(9), 255, "entry 9 (bright red) R = 255");
+    assert_eq(palette_g(9),  85, "entry 9 (bright red) G = 85");
+    assert_eq(palette_b(9),  85, "entry 9 (bright red) B = 85");
     # 10: bright green (85, 255, 85)
-    assert_eq(palette_r(10), 85);  assert_eq(palette_g(10), 255); assert_eq(palette_b(10), 85);
+    assert_eq(palette_r(10),  85, "entry 10 (bright green) R = 85");
+    assert_eq(palette_g(10), 255, "entry 10 (bright green) G = 255");
+    assert_eq(palette_b(10),  85, "entry 10 (bright green) B = 85");
     # 11: bright yellow (255, 255, 85)
-    assert_eq(palette_r(11), 255); assert_eq(palette_g(11), 255); assert_eq(palette_b(11), 85);
+    assert_eq(palette_r(11), 255, "entry 11 (bright yellow) R = 255");
+    assert_eq(palette_g(11), 255, "entry 11 (bright yellow) G = 255");
+    assert_eq(palette_b(11),  85, "entry 11 (bright yellow) B = 85");
     # 12: bright blue (85, 85, 255)
-    assert_eq(palette_r(12), 85);  assert_eq(palette_g(12), 85);  assert_eq(palette_b(12), 255);
+    assert_eq(palette_r(12),  85, "entry 12 (bright blue) R = 85");
+    assert_eq(palette_g(12),  85, "entry 12 (bright blue) G = 85");
+    assert_eq(palette_b(12), 255, "entry 12 (bright blue) B = 255");
     # 13: bright magenta (255, 85, 255)
-    assert_eq(palette_r(13), 255); assert_eq(palette_g(13), 85);  assert_eq(palette_b(13), 255);
+    assert_eq(palette_r(13), 255, "entry 13 (bright magenta) R = 255");
+    assert_eq(palette_g(13),  85, "entry 13 (bright magenta) G = 85");
+    assert_eq(palette_b(13), 255, "entry 13 (bright magenta) B = 255");
     # 14: bright cyan (85, 255, 255)
-    assert_eq(palette_r(14), 85);  assert_eq(palette_g(14), 255); assert_eq(palette_b(14), 255);
+    assert_eq(palette_r(14),  85, "entry 14 (bright cyan) R = 85");
+    assert_eq(palette_g(14), 255, "entry 14 (bright cyan) G = 255");
+    assert_eq(palette_b(14), 255, "entry 14 (bright cyan) B = 255");
     # 15: bright white (255, 255, 255)
-    assert_eq(palette_r(15), 255); assert_eq(palette_g(15), 255); assert_eq(palette_b(15), 255);
+    assert_eq(palette_r(15), 255, "entry 15 (bright white) R = 255");
+    assert_eq(palette_g(15), 255, "entry 15 (bright white) G = 255");
+    assert_eq(palette_b(15), 255, "entry 15 (bright white) B = 255");
 
     test_group("M4(a) — palette bounds (every byte ≤ 255)");
     # Defensive — guard against accidentally writing > 0xFF
