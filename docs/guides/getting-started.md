@@ -16,7 +16,8 @@ cyrius build src/main.cyr build/kii         # compile
 ```
 
 You'll need the Cyrius toolchain pinned in `cyrius.cyml` (currently
-`6.0.1`). If `cyrius` isn't on your PATH yet, see
+`6.5.35` — the manifest is the source of truth, so check it rather than
+trusting this line). If `cyrius` isn't on your PATH yet, see
 [agnosticos/CLAUDE.md](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 for the bootstrap.
 
@@ -48,21 +49,24 @@ frame.ansi` reproduces the render in any 256-color-capable terminal.
 $ ./build/kii --help
 kii — kiʻi (Hawaiian: image / picture / likeness). Image → ANSI art.
 
-Usage:
-  kii [OPTIONS] <image.png>
+Usage: kii [options] [args]
 
 Options:
-  -h, --help                show this help and exit
-  -V, --version             print version and exit
-  -w, --width N             output width in columns (0 = match terminal)
-  -c, --color N             color tier: 8 or 16 (tier-2 modes post-v1)
-  -v, --verbose             print decode summary to stderr after the frame
+  -h, --help	show this help and exit
+  -V, --version	print version and exit
+  -w, --width <int>	output width in columns (0 = match terminal)
+  -c, --color <int>	color tier: 8 or 16 (tier-2 modes post-v1)
+  -v, --verbose	print decode summary to stderr after the frame
+  -m, --mode <str>	render mode: halfblock (default) or ascii (default: halfblock)
 
 Examples:
   kii --version                              # version + etymology
   kii --help                                 # this text
   kii image.png                              # render to terminal (80x24)
+  kii photo.jpg                              # baseline JPEG works too
+  kii art.bmp                                # ...as do BMP and GIF (first frame)
   kii --verbose image.png                    # frame + dimensions/format on stderr
+  kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
   kii image.png > frame.ansi                 # capture pure ANSI bytes
 ```
 
@@ -161,18 +165,32 @@ shell-injection vector), kii substitutes
 `<path containing control bytes — suppressed>` to defend the
 user's terminal — see [ADR 0002](../adr/0002-security-model.md).
 
-## What v1.0 does NOT support
+## What kii does NOT support
 
-By design, deferred to v1.x or v2.0:
+By design, deferred, or refused upstream:
 
-- **JPEG / GIF / BMP** — PNG only at v1.0. Convert via `convert
-  input.jpg input.png` first.
-- **Adam7 interlacing** — non-interlaced PNGs only.
-- **Sub-byte bit depths** (1/2/4) — bit depth 8 or 16 only.
-- **Animated GIFs / video frames** — explicit post-v2 scope.
-- **256-color or truecolor SGR** — tier-2 work (post-v1).
-- **Floyd-Steinberg / ordered dithering** — tier-2 work.
-- **Sixel / Kitty / iTerm2 image protocols** — tier-3 work
+- **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as
+  `unsupported JPEG feature …`. chitra is baseline-only; progressive would arrive
+  on a `[deps.chitra]` re-pin, exactly as the other formats did.
+- **Animated GIF beyond the first frame** — kii is a still-frame renderer and
+  chitra decodes frame 1 by design (chitra ADR 0005). A `.gif` renders its
+  opening frame.
+- **BMP bit depths outside `{1,4,8,16,24,32}`, `BI_JPEG` / `BI_PNG`
+  compression, or a malformed `BI_BITFIELDS` mask** — rejected as
+  `unsupported BMP feature …`.
+- **Ancillary PNG chunks** (`tEXt` / `iTXt` / `zTXt` / `iCCP` / `eXIf` / `sCAL`)
+  and **APNG** — not decoded; skipped or refused per chunk criticality.
+- **256-color or truecolor SGR**, and **Floyd-Steinberg / ordered dithering** —
+  tier-2 work, still post-v1 (see [ADR 0003](../adr/0003-color-tier-discipline.md)).
+- **Sixel / Kitty / iTerm2 image protocols** — tier-3 work.
+
+**Corrected at v1.5.1.** This section was headed "What v1.0 does NOT support" and
+listed **JPEG / GIF / BMP** ("PNG only at v1.0. Convert via `convert input.jpg
+input.png` first"), **Adam7 interlacing** and **sub-byte bit depths** (1/2/4).
+All five have been supported for releases — Adam7 and sub-byte depths since
+v1.2.2, JPEG since v1.4.0, BMP and GIF since v1.5.0 — so the guide was telling
+readers to convert files kii reads natively.
+
   (post-v2).
 - **Filesystem traversal** — kii takes ONE path. Loop in the shell
   (`for f in *.png; do kii "$f" > "${f%.png}.ansi"; done`).

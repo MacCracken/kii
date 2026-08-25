@@ -177,10 +177,10 @@ Module map:
 - `src/quant.cyr` — `quantize_nearest_rgb` (scalar) + `quantize_rgb_buf` / `quantize_downscaled` (production pipeline). The M4 `quantize_nearest_image` was removed at the re-fold (it read native color_type/PLTE that no longer reach the pstruct).
 - `src/downscale.cyr` — Nearest-neighbor RGB resampler. Post-re-fold the live input is always ct6 (chitra RGBA8); the `_extract_rgb` color_type table is retained. Called as `downscale_to_rgb(pstruct, target_w, target_src_rows)`.
 - `src/emit.cyr` — Half-block ANSI emit + geometry primitives (`_kii_compute_target_geometry` for explicit-width, `_kii_compute_fit_geometry` for terminal-fit). Default constants `EMIT_DEFAULT_COLS = 80` / `EMIT_DEFAULT_ROWS = 24`. Local `_emit_bg_256_buf` while darshana's BG-256 twin isn't shipped.
-- `tests/` — split from the monolithic `tests/kii.tcyr` into focused standalone suites at the re-fold (matches chitra's `tests/tcyr/*.tcyr` convention): `tests/cli.tcyr` (cmdit/flags + path-sanitizer), `tests/quant.tcyr` (palette + quantize), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii` shape-vector), `tests/decode.tcyr` (`kii_decode_png` PNG **+ JPEG + BMP + GIF** e2e + `_kii_map_chitra_err` incl. the 11 JPEG and 11 BMP/GIF/budget codes + every source-sentinel name + `KII_FMT_*` tag + sankoch zlib round-trip), and `tests/render.tcyr` carries JPEG, BMP and GIF render e2e. **511 assertions** total (cli 63 + quant 109 + render 156 + ascii 17 + decode 166); at v1.5.0 decode grew 105 → 166 and render 137 → 156. Decoder-internal coverage lives in chitra's suite.
+- `tests/` — split from the monolithic `tests/kii.tcyr` into focused standalone suites at the re-fold (matches chitra's `tests/tcyr/*.tcyr` convention): `tests/cli.tcyr` (cmdit/flags + path-sanitizer), `tests/quant.tcyr` (palette + quantize), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii` shape-vector), `tests/decode.tcyr` (`kii_decode_png` PNG **+ JPEG + BMP + GIF** e2e + `_kii_map_chitra_err` incl. the 11 JPEG and 11 BMP/GIF/budget codes + every source-sentinel name + `KII_FMT_*` tag + sankoch zlib round-trip), and `tests/render.tcyr` carries JPEG, BMP and GIF render e2e. **550 assertions** total (cli 77 + quant 125 + render 164 + ascii 17 + decode 167); at v1.5.0 decode grew 105 → 166 and render 137 → 156. Decoder-internal coverage lives in chitra's suite.
 - `tests/fixtures/gradient.bmp` + `tests/fixtures/color.gif` — v1.5.0 fixtures: 16×16 24-bpp `BI_RGB` white→black ramp (px0=0, px1=17, px2=34, stepping by 17) and a 16×16 GIF89a with four flat quadrants (red / lime / blue / white). Both pixel-verified against ImageMagick as the oracle.
 - `tests/fixtures/{gradient,color}.jpg` — v1.4.0 JPEG fixtures: 16×16 grayscale (chitra's ImageMagick-verified gradient, src ctype 257) + 8×8 YCbCr 4:4:4 (src ctype 259).
-- `tests/kii.fcyr` — fuzz surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, **JPEG**); PNG + JPEG surfaces aimed through `kii_decode_png` (JPEG = SOI + random bytes, generational/bounded).
+- `tests/kii.fcyr` — **eight** fuzz surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, **PNG, JPEG, BMP, GIF**); all four decode surfaces aimed through `kii_decode_png`, each prefixing its format signature so the payload reaches that decoder, and each pairing `alloc_reset()` with `crc32_table = 0` (JPEG = SOI + random bytes, generational/bounded).
 - `tests/kii.bcyr` — benches (quantize + end-to-end RAMGON + decode latency); decode bench re-aimed through `kii_decode_png`.
 - `tests/fixtures/RAMGON.png` — real-world fixture (1152×925 RGBA, ~2 MB).
 
@@ -199,7 +199,7 @@ Build: **668 KB** on host at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DC
   - `end-to-end RAMGON.png → 200×60 frame`: **756 ms/iter**
   - **M7(d) decode-latency matrix** (DoS-bound):
     - `png_decode 256² class` (archlinux-logo 256×256, palette): **1.8 ms**
-    - `png_decode 1024² class` (starfield 1597×1198, RGB): **647 ms**
+    - `png_decode 1024² class` (starfield 1597×1198, RGB): **SKIPPED** — the system fixture no longer ships on the dev host; the bench prints an explicit skip line rather than vanishing (v1.5.1)
     - `png_decode 2048² class` (elarun-bg 2560×1600, RGB): **474 ms**
     - Per-pixel decode throughput is content-dependent (compression-ratio-driven), not strictly size-dependent.
 
@@ -214,31 +214,20 @@ v1.0.0 ships during agnos kernel cycle **1.32.x networking-arc**. kii lands as s
 
 ## Next
 
-**v1.x — Tier-2 (post-v1)**. Sub-bites (not yet scoped to milestones):
+**Sequencing lives in [`roadmap.md`](roadmap.md)** — this file is the current snapshot,
+not a plan, and keeping a second ordered list here is how the two drift apart. The
+roadmap is forward-facing only: anything shipped is deleted from it rather than checked
+off, so if an item appears there it is genuinely still open.
 
-- `--color 256` and `--color tc` modes (truecolor SGR emit).
-- Floyd-Steinberg + ordered-Bayer dithering as `--dither` choices.
-- `--filter {nearest,bilinear,box}` selection.
-- **Baseline JPEG shipped at v1.4.0** (chitra 0.3.0, [ADR 0008](../adr/0008-jpeg-via-chitra.md)); **BMP + GIF shipped at v1.5.0** (chitra 1.0.0, [ADR 0009](../adr/0009-bmp-gif-via-chitra.md)) — the latter with **zero decode change**, which is ADR 0006's thesis fully discharged. The remaining format item is progressive-DCT JPEG, which chitra still refuses; it would arrive the same way, on a re-pin. **The rename `png.*` → `image.*` / `PNG_ERR_*` → `IMG_ERR_*` is now materially overdue** — those names cover four formats.
-- **Character-glyph ASCII mode** (`--mode ascii`) — luminance-ramp floor + shape-vector glyph matching; review item in `docs/development/roadmap.md` § Post-v1 (attribution: Alex Harri's ASCII-rendering blog for the shape-vector/contrast logic).
-- ~~Re-render the chafa visual-review fixture set~~ — **closed**. The review itself closed at v1.0.0 / M8(b3-redo) (`roadmap.md` line 19 has carried `[x]` ever since, and the results are in [`docs/audit/chafa-comparison.md`](../audit/chafa-comparison.md)); this line survived as a phantom follow-up. chafa 1.18.2 is present on the dev host, so the "once chafa is installed" precondition is also moot. Removed at the v1.5.1 P-1 sweep.
-- Cross-terminal verification (Linux console / xterm / Alacritty / kitty / tmux) on a wider terminal set.
-- Three sankoch upstream items (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers) — file as sankoch issues; track impact.
+In brief, what is open as of v1.5.1:
 
-**Carry-forward debt at v1.0**: cross-terminal verification, marketplace recipe in zugot, and the sankoch upstream items (now five — see below). The chafa visual review is **closed** (it closed at v1.0.0; this list cited `docs/audit/chafa-comparison-deferred.md`, **a filename that has never existed in the tree** — the real file is `docs/audit/chafa-comparison.md`. Corrected at the v1.5.1 P-1 sweep.)
-
-**Upstream items owed to `sankoch`** — three limitations found by the v1.5.1 P-1
-sweep, all in vendored `lib/` which kii must not edit. Tracked with their
-measurements and review trigger in
-[`roadmap.md` § Upstream: `sankoch` limitations](roadmap.md#upstream-sankoch-limitations--flagged-for-later-review),
-not duplicated here:
-
-- **S-1** — `_huff_decode` is O(bits × num_symbols); **~93 % of kii's render time**, ~3.7× available. The highest-value optimization for kii, and it is not in kii.
-- **S-2** — the 16 MiB inflate cap makes any PNG above ~5.6 MP report `corrupt IDAT`, a wrong diagnostic for a valid file.
-- **S-3** — `crc32_table` is an un-invalidatable heap-pointer singleton; worked around in kii's fuzz harness, substrate fix still open.
-
-Re-verify all three at the next `cyrius` pin bump. The two remaining CVE-class
-transfers carried since v1.0 (CVE-2004-0797 / 2005-1849 / 2005-2096) are also
-still open as sankoch issues.
-
-**v2.0 horizon**: Tier-3 — Sixel / Kitty / iTerm2 inline-image protocols. Major-version cut depending on CLI surface impact.
+- **Tier 2 colour** (256 / truecolour + dithering) — the likeliest next minor. The
+  `--color` flag already carries a real tier mechanism as of v1.5.1, so this extends an
+  existing seam.
+- **The `png.*` → `image.*` rename** — 28 symbols across 290 call sites; materially
+  overdue now that those names cover four formats. Wants its own cut.
+- **Progressive-DCT JPEG** — the one remaining format gap; arrives via a `chitra` re-pin.
+- **ASCII shape-vector refinements** — directional contrast + k-d-tree lookup.
+- **Three `sankoch` limitations** — see the section above; re-verify at the next pin bump.
+- Cross-terminal verification and the zugot marketplace recipe, both carried from v1.0.
+- **v2.0 horizon**: full Block Elements glyph vocab, then Tier 3 (Sixel / Kitty / iTerm2).

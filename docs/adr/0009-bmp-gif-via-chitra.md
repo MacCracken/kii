@@ -74,8 +74,15 @@ put anywhere. Documented as behavior, not as a deferral.
 chitra 0.7.0 generalized the field from "was there an IEND chunk" to "did the stream end the way
 its format says it should". GIF reports a real `frame_complete`, and a truncated LZW stream is
 *tolerated* as a clean end with the tail zero-filled — so without a warning kii would render a
-half-decoded frame silently. The gate now covers GIF with GIF-specific wording. JPEG and BMP report
-`1` unconditionally and never reach it. The name stays `seen_iend` because chitra kept it, and
+half-decoded frame silently. The gate now covers GIF with GIF-specific wording.
+
+**Corrected at v1.5.1.** This paragraph originally continued "JPEG and BMP report
+`1` unconditionally and never reach it." That is true for BMP and **false for
+JPEG** — chitra sets the flag from a real `closed` decision made by the scan
+driver, so a truncated or EOI-stripped JPEG decoded to a partial frame and kii
+rendered it with no warning at all. The v1.5.1 P-1 sweep caught it as finding
+A-2 (HIGH); the gate now carries a JPEG arm plus a defensive fallback. See
+[`../audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § A-2. The name stays `seen_iend` because chitra kept it, and
 chitra kept it because kii calls it (chitra ADR 0010 § 1).
 
 ## Consequences

@@ -76,7 +76,8 @@ Coverage: fuzz harness scaled to 3M+ iterations across five surfaces
 
 **Positive**:
 
-- **Eliminated CVE classes**: by rejecting Adam7 interlacing, sub-byte
+- **Eliminated CVE classes** *(as scoped at v0.8.0 — see the amendment
+  below)*: by rejecting Adam7 interlacing, sub-byte
   bit depths, ancillary chunks (tEXt/iTXt/zTXt/iCCP/eXIf/sCAL), and
   APNG, kii structurally cannot ship any bug whose root cause lives
   in those code paths. ~60 % of lodepng's published bug surface is
@@ -140,7 +141,9 @@ Coverage: fuzz harness scaled to 3M+ iterations across five surfaces
   index access and substitute black on OOB. No feature regression
   needed.
 - **Stricter C1 0x80–0x9F (C1 control range) rejection in path-echo
-  sanitizer**. Considered and rejected — would break UTF-8 paths
+  sanitizer**. Considered and rejected at v0.8.0 — **this rejection was
+  itself wrong, and was reversed at v1.5.1; see the amendment below.**
+  The v0.8.0 reasoning was that it would break UTF-8 paths
   (AGNOS naming surface uses Hawaiian / Sanskrit / East-Asian
   characters whose continuation bytes routinely land in 0x80–0xBF).
   Adopted the coreutils-`ls` rule instead: reject only C0 + DEL.
@@ -163,6 +166,40 @@ Coverage: fuzz harness scaled to 3M+ iterations across five surfaces
 
 - [`../audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md) — full M7 audit (140 CVE/issue corpus + 10 kii-specific findings)
 - [`../../SECURITY.md`](../../SECURITY.md) — public-facing security policy
-- [`../development/roadmap.md`](../development/roadmap.md) § M7 — acceptance criteria
+- [`../../CHANGELOG.md`](../../CHANGELOG.md) § [0.8.0] — the M7 acceptance criteria and what met them. (This cited `roadmap.md` § M7; that section was deleted when the roadmap became forward-facing only at v1.5.1 — shipped milestones live in the CHANGELOG.)
 - [W3C PNG spec, 2nd ed (Nov 2003)](https://www.w3.org/TR/PNG/) — § 5.6 chunk ordering, § 11.2.2 table 11.1
 - RFC 1951 (DEFLATE), RFC 1950 (zlib), RFC 2083 (PNG-in-zlib constraints)
+
+---
+
+## Amendment — v1.5.1 (P-1 sweep)
+
+This ADR remains **Accepted**; its threat model and its C1–C4 commitments still
+stand. Two statements above have been overtaken by later releases and are
+amended here rather than edited in place, because the reasoning they record is
+part of the decision history.
+
+**1. The "eliminated CVE classes" list no longer describes the decoder.** It was
+written at v0.8.0, when kii carried its own PNG decoder that genuinely refused
+Adam7 and sub-byte depths. The v1.2.0 re-fold ([ADR 0006](0006-adopt-chitra-decoder.md))
+replaced that decoder with `chitra`, and v1.2.2 re-pinned to a chitra that
+**decodes both** — `tests/decode.tcyr` asserts `PNG_OK` for exactly those inputs.
+Ancillary chunks and APNG are still not decoded. The elimination-by-refusal
+argument therefore applies to a narrower set than it claims, and the guards it
+credited now live in chitra rather than in kii. What did not change is the
+posture: unsupported means *refused with a distinct error*, never guessed at.
+
+**2. The C1 rejection was reversed — the alternative was rejected for a reason
+that turned out to be false.** v0.8.0 declined to reject `0x80–0x9F` on the
+grounds that it "would break UTF-8 paths". That is true only of a **flat byte-range
+test**, which is what was imagined. It is not true of a UTF-8-structure-aware
+predicate: a bare `0x80` has no lead byte, so it is not valid UTF-8 at all and no
+legitimate filename produces one. The v1.5.1 sweep found the consequence — a
+filename built from 8-bit C1 introducers delivered a complete
+`OSC 0;PWNED ST` to stderr **byte-for-byte**, through the very sanitizer this ADR
+commits to (finding A-4). `kii_path_has_control_bytes` now walks UTF-8 structure
+and rejects raw C1, the `C2 80`–`C2 9F` UTF-8 spelling, and malformed UTF-8,
+while passing every real multi-byte sequence. The Hawaiian / Sanskrit /
+East-Asian paths this alternative was rejected to protect are covered by test.
+
+See [`../audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § A-4.

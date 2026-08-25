@@ -82,8 +82,9 @@ sub-ADRs covering dither selection.
   PNG quantizes hard into 16 buckets; subtle gradients get banded.
   Users who want photographic terminal display today must use chafa
   or viu instead. Documented in README + getting-started.
-- **`--color 8` reservation without activation**. The flag is
-  defined but currently equivalent to `--color 16` (both route
+- **`--color 8` reservation without activation** *(resolved at v1.5.1 — see
+  the amendment below)*. The flag was
+  defined but equivalent to `--color 16` (both routed
   through the same 256-color-escape-of-16-palette path). Eventual
   activation requires a `palette.cyr` 8-color variant + a code path
   branch. Captured as a v1.x bite when a consumer asks.
@@ -140,3 +141,24 @@ sub-ADRs covering dither selection.
 - [`../../CLAUDE.md`](../../CLAUDE.md) § Color-tier discipline (durable)
 - [`0002-security-model.md`](0002-security-model.md) § Tier-3 expansions
 - [`../audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md) § 3.4 terminal-emulator CVEs
+
+---
+
+## Amendment — v1.5.1: `--color 8` is activated
+
+The "reservation without activation" recorded above lasted from M1 to v1.5.1:
+`kii_validate_color` range-checked the flag and nothing consumed the value, so
+`kii --color 8` emitted output **byte-identical** to `--color 16` while its help
+text promised "color tier: 8 or 16". The v1.5.1 P-1 sweep classed that as a
+defect rather than a reservation — a flag that accepts an argument and silently
+ignores it is not a placeholder, it is a lie — and implemented the tier.
+
+`quant_set_tier` (`src/quant.cyr`) bounds the quantizer's palette search; the low
+8 entries **are** the normal-intensity ANSI colours, so the 8-colour tier needs no
+second table. `--color 16` output is unchanged and byte-identical across every
+golden artifact. This does not disturb the tier discipline this ADR sets: tier 1
+is the 8/16-colour floor, and it is now fully shipped rather than half-shipped.
+Tier 2 (256-colour + truecolour + dithering) remains post-v1 and still amends
+this ADR when it lands.
+
+See [`../audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § A-6.

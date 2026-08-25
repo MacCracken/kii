@@ -14,7 +14,7 @@
 
 - **Type**: Binary (user-facing CLI tool)
 - **License**: GPL-3.0-only
-- **Language**: Cyrius (toolchain pinned in `cyrius.cyml [package].cyrius`, currently `6.0.1`)
+- **Language**: Cyrius — the toolchain pin lives in `cyrius.cyml [package].cyrius` and is the single source of truth; **do not inline the number here** (this line read `6.0.1` for eleven releases past the pin actually being 6.5.35, which is exactly the failure mode the VERSION rule below exists to prevent)
 - **Version**: `VERSION` at the project root is the source of truth — do not inline the number here
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-standards.md) · [First-Party Documentation](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-documentation.md)

@@ -125,7 +125,7 @@ or 1-bit imagery, not 16-color photographic).
 - **Scheduled**: **v2.0.0 — full Block Elements glyph vocab**
   (U+2580..U+259F). Captured in
   [`../development/roadmap.md`](../development/roadmap.md) §
-  Post-v1 considerations. Closes the bytewise + visual-detail gap
+  Roadmap ahead. Closes the bytewise + visual-detail gap
   with chafa documented in
   [`../audit/chafa-comparison.md`](../audit/chafa-comparison.md)
   (kii's 5.9×–69× byte verbosity vs chafa is driven by
