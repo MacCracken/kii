@@ -199,6 +199,63 @@ fn main() {
     }
     assert_eq(jr_has_block, 1, "JPEG emit row contains a ▀ half-block glyph");
 
+    # v1.5.0 — the same e2e for the two formats chitra 1.0.0 brought in. The
+    # point is that decode → downscale → quantize → emit needed NO change to
+    # absorb them: both arrive as canonical RGBA8 and take the identical ct6
+    # path PNG and JPEG already took. If a future chitra re-pin altered that
+    # normalization, these break here rather than in a user's terminal.
+    test_group("v1.5.0 — BMP render e2e (gradient.bmp → downscale → quantize → emit)");
+    var pstr_br[160];
+    assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_br), PNG_OK,
+              "gradient.bmp → PNG_OK");
+    assert_eq(load64(&pstr_br + STRUCT_COLOR_TYPE_OFFSET), 6, "BMP normalized to ct6");
+    assert_eq(downscale_to_rgb(&pstr_br, 16, 8), 0, "BMP 16x16 → 16x8 downscale → 0");
+    assert_eq(load64(&pstr_br + STRUCT_DOWNSCALED_W_OFFSET), 16, "BMP dst_w = 16");
+    assert_eq(quantize_downscaled(&pstr_br), 0, "BMP quantize_downscaled → 0");
+    var br_qbuf = load64(&pstr_br + STRUCT_QUANTIZED_BUF_OFFSET);
+    assert(br_qbuf != 0, "BMP quantized buf non-null");
+    var br_line[1024];
+    var br_pos = emit_halfblock_row_buf(br_qbuf, 16, 0, &br_line, 0);
+    assert(br_pos > 16, "BMP emit produced a real row (> 1 byte/cell)");
+    assert_eq(load8(&br_line + 0), 27, "BMP emit row starts with ESC (SGR)");
+    var br_has_block = 0;
+    var br_k = 0;
+    while (br_k < br_pos) {
+        if (load8(&br_line + br_k) == 226) { br_has_block = 1; }   # 0xE2
+        br_k = br_k + 1;
+    }
+    assert_eq(br_has_block, 1, "BMP emit row contains a ▀ half-block glyph");
+
+    test_group("v1.5.0 — GIF render e2e (color.gif → downscale → quantize → emit)");
+    var pstr_gr[160];
+    assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_gr), PNG_OK,
+              "color.gif → PNG_OK");
+    assert_eq(load64(&pstr_gr + STRUCT_COLOR_TYPE_OFFSET), 6, "GIF normalized to ct6");
+    assert_eq(downscale_to_rgb(&pstr_gr, 16, 8), 0, "GIF 16x16 → 16x8 downscale → 0");
+    assert_eq(quantize_downscaled(&pstr_gr), 0, "GIF quantize_downscaled → 0");
+    var gr_qbuf = load64(&pstr_gr + STRUCT_QUANTIZED_BUF_OFFSET);
+    assert(gr_qbuf != 0, "GIF quantized buf non-null");
+    # The fixture's top-left quadrant is pure red and its top-right pure lime,
+    # so the quantizer must land on the palette's red and green — a real
+    # content check, not just "something rendered". Note these resolve to the
+    # NORMAL entries (1 red = 170,0,0 / 2 green = 0,170,0), not the bright
+    # ones: nearest-RGB puts pure (255,0,0) at distance 85² from entry 1 but
+    # 85²+85² from entry 9 (255,85,85), because the bright entries lift the
+    # two OTHER channels off zero. Same arithmetic for lime.
+    assert_eq(load8(gr_qbuf + 0),  1, "GIF (0,0) quantizes to red (idx 1)");
+    assert_eq(load8(gr_qbuf + 15), 2, "GIF (15,0) quantizes to green (idx 2)");
+    var gr_line[1024];
+    var gr_pos = emit_halfblock_row_buf(gr_qbuf, 16, 0, &gr_line, 0);
+    assert(gr_pos > 16, "GIF emit produced a real row (> 1 byte/cell)");
+    assert_eq(load8(&gr_line + 0), 27, "GIF emit row starts with ESC (SGR)");
+    var gr_has_block = 0;
+    var gr_k = 0;
+    while (gr_k < gr_pos) {
+        if (load8(&gr_line + gr_k) == 226) { gr_has_block = 1; }   # 0xE2
+        gr_k = gr_k + 1;
+    }
+    assert_eq(gr_has_block, 1, "GIF emit row contains a ▀ half-block glyph");
+
     # ============================================================
     # ----------------- M5(c) emit_halfblock ---------------------
     # ============================================================

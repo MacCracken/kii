@@ -12,6 +12,13 @@
 #    gets exercised. Contract: kii_decode_png never crashes; returns
 #    PNG_OK or any PNG_ERR_* cleanly.
 #
+# 3b. BMP + GIF decode adapters (v1.5.0, chitra 1.0.0): the same shape as
+#    the JPEG surface below — prepend the format signature ("BM" / "GIF89a")
+#    so the sniff routes the random payload into chitra's BMP or GIF decoder,
+#    and rewind the bump allocator each iteration. The GIF surface is the
+#    highest-value one of the four: LZW builds a dictionary from
+#    attacker-controlled codes, which is the classic GIF-decoder CVE class.
+#
 # 3. JPEG decode adapter (v1.4.0, chitra 0.3.0): writes SOI (0xFFD8) +
 #    random bytes to /tmp/kii-fuzz-jpeg.bin + drives the same kii_decode_png
 #    adapter, which now routes JPEG-signature input to chitra's JPEG decoder
@@ -56,6 +63,8 @@ include "src/emit.cyr"
 var FUZZ_ITERS        = 10000;
 var PNG_FUZZ_ITERS    = 1000000;
 var JPEG_FUZZ_ITERS   = 1000000;
+var BMP_FUZZ_ITERS    = 1000000;   # v1.5.0 — chitra 1.0.0 BMP path
+var GIF_FUZZ_ITERS    = 1000000;   # v1.5.0 — chitra 1.0.0 GIF/LZW path
 var PATH_FUZZ_ITERS   = 1000000;
 var GEOM_FUZZ_ITERS   = 1000000;
 var EMIT_FUZZ_ITERS   = 1000;
@@ -319,6 +328,61 @@ fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
     return 0;
 }
 
+# One BMP-fuzz iteration (v1.5.0, chitra 1.0.0). Always prepends the "BM"
+# signature so the byte stream sniffs as BMP and routes through chitra's BMP
+# decoder, then appends a random payload — so the DIB-header parser, the
+# palette bounds, the RLE walker and the BI_BITFIELDS mask validator all see
+# arbitrary bytes. Same allocator discipline as the PNG/JPEG surfaces: a
+# matched signature makes chitra allocate header/palette scratch before the
+# parse fails, so rewind the bump allocator each iteration.
+# Contract: kii_decode_png never crashes; returns PNG_OK or any PNG_ERR_*.
+fn fuzz_bmp_iter(scratch_buf, scratch_cap): i64 {
+    store8(scratch_buf + 0, 0x42);            # 'B'
+    store8(scratch_buf + 1, 0x4D);            # 'M'
+    var payload = _fuzz_rand_range(PNG_FUZZ_MAX_LEN + 1);
+    var max_fill = scratch_cap - 2;
+    if (payload > max_fill) { payload = max_fill; }
+    var i = 0;
+    while (i < payload) {
+        store8(scratch_buf + 2 + i, _fuzz_rand() & 0xFF);
+        i = i + 1;
+    }
+    file_write_all("/tmp/kii-fuzz-bmp.bin", scratch_buf, 2 + payload);
+    var pstruct[160];
+    kii_decode_png("/tmp/kii-fuzz-bmp.bin", &pstruct);
+    alloc_reset();                            # bound the never-free heap
+    return 0;
+}
+
+# One GIF-fuzz iteration (v1.5.0, chitra 1.0.0). Prepends the 6-byte
+# "GIF89a" signature, then a random payload — so the logical-screen and
+# image descriptors, the color-table bounds and the LZW dictionary chain all
+# see arbitrary bytes. The LZW path is the interesting one: it builds a
+# dictionary from attacker-controlled codes, which is the classic GIF
+# decoder CVE surface. Same allocator rewind as the other decode surfaces.
+# Contract: kii_decode_png never crashes; returns PNG_OK or any PNG_ERR_*.
+fn fuzz_gif_iter(scratch_buf, scratch_cap): i64 {
+    store8(scratch_buf + 0, 0x47);            # 'G'
+    store8(scratch_buf + 1, 0x49);            # 'I'
+    store8(scratch_buf + 2, 0x46);            # 'F'
+    store8(scratch_buf + 3, 0x38);            # '8'
+    store8(scratch_buf + 4, 0x39);            # '9'
+    store8(scratch_buf + 5, 0x61);            # 'a'
+    var payload = _fuzz_rand_range(PNG_FUZZ_MAX_LEN + 1);
+    var max_fill = scratch_cap - 6;
+    if (payload > max_fill) { payload = max_fill; }
+    var i = 0;
+    while (i < payload) {
+        store8(scratch_buf + 6 + i, _fuzz_rand() & 0xFF);
+        i = i + 1;
+    }
+    file_write_all("/tmp/kii-fuzz-gif.bin", scratch_buf, 6 + payload);
+    var pstruct[160];
+    kii_decode_png("/tmp/kii-fuzz-gif.bin", &pstruct);
+    alloc_reset();                            # bound the never-free heap
+    return 0;
+}
+
 # One fuzz iteration. `scratch` holds the raw bytes of all args
 # packed back-to-back (each null-terminated). `argv_arr` holds
 # pointers into `scratch`, one per arg. argv[0] is always "kii"
@@ -433,6 +497,26 @@ fn main(): i64 {
         jpeg_iter = jpeg_iter + 1;
     }
 
+    # ---- bmp-decoder fuzz loop -------------------------------------
+    # "BM" + random payload through the same adapter, routed to chitra's
+    # BMP decoder by the format sniff (v1.5.0).
+    var bmp_scratch[2048];
+    var bmp_iter = 0;
+    while (bmp_iter < BMP_FUZZ_ITERS) {
+        fuzz_bmp_iter(&bmp_scratch, 2048);
+        bmp_iter = bmp_iter + 1;
+    }
+
+    # ---- gif-decoder fuzz loop -------------------------------------
+    # "GIF89a" + random payload, routed to chitra's GIF/LZW decoder
+    # by the format sniff (v1.5.0).
+    var gif_scratch[2048];
+    var gif_iter = 0;
+    while (gif_iter < GIF_FUZZ_ITERS) {
+        fuzz_gif_iter(&gif_scratch, 2048);
+        gif_iter = gif_iter + 1;
+    }
+
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
     # walks args by index). One line per fuzz surface; "fuzz: ok"
@@ -463,6 +547,14 @@ fn main(): i64 {
     var args_jpeg = vec_new();
     vec_push(args_jpeg, jpeg_iter);
     fmt_printf("fuzz: %d iterations passed (jpeg-decoder crash-safety)\n", args_jpeg);
+
+    var args_bmp = vec_new();
+    vec_push(args_bmp, bmp_iter);
+    fmt_printf("fuzz: %d iterations passed (bmp-decoder crash-safety)\n", args_bmp);
+
+    var args_gif = vec_new();
+    vec_push(args_gif, gif_iter);
+    fmt_printf("fuzz: %d iterations passed (gif-decoder crash-safety)\n", args_gif);
 
     println("fuzz: ok");
     return 0;

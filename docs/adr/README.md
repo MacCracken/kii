@@ -29,3 +29,4 @@ Decisions about kii — what we chose, the context, and the consequences we acce
 | [0006](0006-adopt-chitra-decoder.md) | Accepted | Adopt the chitra distlib; delete the in-repo PNG decoder (completes 0001) |
 | [0007](0007-rendering-mode-taxonomy.md) | Accepted | Rendering-mode taxonomy: half-block + character-glyph (`--mode ascii`) lanes |
 | [0008](0008-jpeg-via-chitra.md) | Accepted | JPEG via chitra 0.3.0: signature-based format dispatch + JPEG validation posture (realizes 0006) |
+| [0009](0009-bmp-gif-via-chitra.md) | Accepted | BMP + GIF via chitra 1.0.0: the re-pin that needed no decode change — a rendered format must be a nameable format (extends 0008) |

@@ -60,6 +60,7 @@ Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 | v1.3.0 | **`--mode ascii`** — character-glyph rendering lane (luminance ramp), [ADR 0007](../adr/0007-rendering-mode-taxonomy.md) |
 | v1.3.1 | ASCII **shape-vector** glyph matching (orientation-aware; Alex Harri attribution) |
 | v1.4.0 | **Baseline JPEG** via `chitra 0.3.0` — adapter switched to `chitra_image_decode` (signature dispatch); PNG byte-identical ([ADR 0008](../adr/0008-jpeg-via-chitra.md)) |
+| v1.5.0 | **BMP + GIF (first frame)** via `chitra 1.0.0` — zero decode change (the adapter already called `chitra_image_decode`); the cut is diagnostics: format tags, sentinel names, 11 new error mappings. Toolchain `6.5.35`, darshana `1.0.0`, cmdit `1.2.4` ([ADR 0009](../adr/0009-bmp-gif-via-chitra.md)) |
 
 **Carry-forward debt** (none blocking; inherited from the v1.0 freeze):
 
@@ -72,7 +73,7 @@ Since the v1.0.0 freeze, per [`../../CHANGELOG.md`](../../CHANGELOG.md):
 
 Durable boundaries on what kii is (not a v1.0-only gate):
 
-- **JPEG / GIF / BMP decoders in-repo** — kii does not carry format decoders; it consumes them from the `chitra` substrate on a `[deps.chitra]` re-pin (PNG since v1.2.0, baseline JPEG since v1.4.0 via chitra 0.3.0; GIF/BMP would arrive the same way). See [ADR 0006](../adr/0006-adopt-chitra-decoder.md) + [ADR 0008](../adr/0008-jpeg-via-chitra.md).
+- **JPEG / GIF / BMP decoders in-repo** — kii does not carry format decoders; it consumes them from the `chitra` substrate on a `[deps.chitra]` re-pin. PNG since v1.2.0, baseline JPEG since v1.4.0 (chitra 0.3.0), **BMP + GIF since v1.5.0** (chitra 1.0.0) — the last of which needed no decode change at all, which is the anti-goal working as designed. See [ADR 0006](../adr/0006-adopt-chitra-decoder.md) + [ADR 0008](../adr/0008-jpeg-via-chitra.md) + [ADR 0009](../adr/0009-bmp-gif-via-chitra.md).
 - **Animated GIF / video-frame-pipe** — explicit post-v2 scope.
 - **Output to stdout-other-than-TTY-styled file formats** — e.g. no HTML output, no SVG output. kii is image → ANSI, full stop.
 - **Image transformations** — no crop, no rotate, no scale-other-than-fit-terminal. Use upstream tools (ImageMagick) to pre-transform; kii consumes the result.

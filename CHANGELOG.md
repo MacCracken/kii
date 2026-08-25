@@ -4,6 +4,106 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-24
+
+**The format broadening — BMP + GIF arrive on a `chitra` re-pin, and kii's diagnostics
+grow to meet them.** Re-pins [`[deps.chitra]`](cyrius.cyml) `0.3.0` → `1.0.0`, which
+carries BMP decode (chitra 0.4.0) and GIF first-frame decode (chitra 0.5.0) alongside
+the PNG + baseline-JPEG surface kii already had. **The decode path needed no change at
+all**: [`src/png.cyr`](src/png.cyr)'s adapter has always called the format-sniffing
+`chitra_image_decode` unconditionally, so both formats normalized to canonical RGBA8 and
+rendered the moment the pin moved — exactly the payoff ADR 0006 predicted when kii
+deleted its own decoder. This is the third consecutive format kii has gained without
+writing a decoder (PNG re-fold v1.2.0 → JPEG v1.4.0 → BMP/GIF v1.5.0).
+
+What did **not** come free is the diagnostics, and that is the bulk of this cut. Because
+BMP and GIF arrived silently, four code sites were factually wrong at runtime rather than
+merely stale: a corrupt `.bmp` reported `malformed PNG (bad chunk, ordering, or palette)`,
+`--verbose` printed `(?)` for every BMP/GIF source type, all eleven new `ChitraErr` codes
+(24–34) collapsed into the generic malformed fallback, and the unrecognized-format message
+still said "expected PNG or JPEG" while `kii art.gif` worked. All four are fixed here.
+
+Also folds in the toolchain and the other two dep pins, all of which had drifted behind
+what the tree was actually building. **PNG and JPEG frames are byte-for-byte unchanged** —
+17/17 golden artifacts identical across RAMGON at 40/80/120/200/default, `--mode ascii` at
+40/80/120, both JPEG fixtures, `--verbose` stderr, and `--help`.
+
+### Added
+- **BMP rendering** — `kii image.bmp`. Via chitra: `BI_RGB` at 1/4/8/16/24/32 bpp, `BI_RLE4`
+  / `BI_RLE8` run-length, and `BI_BITFIELDS` with V4/V5 headers. `--verbose` names the source
+  precisely (`24bpp (BMP)`, `4bpp palette (BMP)`, …) from chitra's `0x200 | bpp` sentinel.
+- **GIF rendering** — `kii image.gif`. Via chitra: GIF87a/89a, LZW, interlaced frames.
+  **First frame only** (chitra ADR 0005) — an animation renders its opening frame, which is
+  the correct behavior for a still-frame terminal renderer. Source named `palette (GIF)` from
+  the `0x300 | min_code_size` sentinel.
+- `KII_FMT_BMP` / `KII_FMT_GIF` format tags, fed by chitra's frozen `chitra_bmp_check_signature`
+  / `chitra_gif_check_signature` predicates. The pre-decode sniff is now a four-way chain in
+  the same PNG→JPEG→BMP→GIF order chitra routes internally.
+- `_kii_map_chitra_err` arms for the eleven `ChitraErr` codes chitra added (BMP 24–27 + 32–33,
+  GIF 28–31, `CHITRA_ERR_BUDGET` 34). Structural corruption maps to `PNG_ERR_HEADER`; a bpp
+  outside `{1,4,8,16,24,32}`, `BI_JPEG`/`BI_PNG`, and a bad `BI_BITFIELDS` mask are "valid file,
+  chitra declines it" → `PNG_ERR_UNSUPPORTED`; GIF LZW → `PNG_ERR_INFLATE`; a GIF with no image
+  descriptor → `PNG_ERR_NO_IDAT` (the GIF analogue of a zero-IDAT PNG).
+- `png_color_type_name` learns nine new source sentinels: the six BMP `0x200 | bpp` values, the
+  GIF `0x300 | min_code_size` range, and JPEG's `0x113` **RGB** sentinel (chitra 0.6.1 — an
+  Adobe `transform=0` file that previously reported as YCbCr).
+- **Two new fuzz surfaces** — 1M BMP + 1M GIF iterations through `kii_decode_png`, signature-
+  prefixed so the payload actually reaches each decoder. Total **6,011,000 iterations, all
+  clean** (was 4,011,000), peak RSS ~136 MB. The GIF surface is the highest-value of the four:
+  LZW builds a dictionary from attacker-controlled codes, the classic GIF-decoder CVE class.
+- **BMP + GIF test fixtures + coverage** — `tests/fixtures/gradient.bmp` (16×16 24-bpp `BI_RGB`
+  ramp) and `tests/fixtures/color.gif` (16×16 GIF89a, four flat quadrants), both pixel-verified
+  against ImageMagick as the oracle. **511 assertions** (was 431): decode 105 → 166, render
+  137 → 156.
+
+### Changed
+- Toolchain pin `cyrius = "6.4.20"` → `"6.5.35"`, with `lib/` re-vendored from the 6.5.35
+  snapshot. No signature change, removal, or constant change on any stdlib symbol kii calls;
+  `sankoch`'s `zlib_decompress` + `crc32` bodies are byte-identical across the fold.
+- `[deps.darshana]` `0.8.2` → `1.0.0` — **darshana's API freeze**, byte-identical to 0.9.4.
+  All three names kii calls (`tty_fg_256_buf`, `tty_sgr_reset_buf`, `tty_winsize`) are inside
+  the frozen 29. The 0.9.3 pre-freeze break — the seven `_buf` composers now reject a negative
+  incoming `pos` with `-1` instead of laundering it into an out-of-bounds write — reaches zero
+  kii call sites: every `pos` accumulator enters at literal `0` and only grows. Also closes the
+  pin mismatch darshana's own 1.0.0 notes flagged against kii by name.
+- `[deps.cmdit]` `1.1.0` → `1.2.4` — append-only on the frozen 1.0.0 surface (verb introspection,
+  shell completions, `--` forwarding fixes, audit repairs). kii uses none of the verb machinery,
+  and `CMDIT_CTX_SIZE`'s growth 160 → 168 is invisible because kii allocates its handle through
+  `cmdit_new`, never by hand.
+- **`lib/` re-vendored properly**: 104 files → **39**. The tree had been carrying 62 undeclared
+  stdlib bundles (`mabda`, `sigil`, `sandhi`, `patra`, `yukti`, `bayan`, …) that kii references
+  nowhere, left over from an old full-snapshot vendor; they shadowed the pinned versions and
+  produced a standing build warning. `cyrius lib sync` cannot remove them — only
+  `rm -rf lib && mkdir lib && cyrius deps` does, which is now also what CI runs.
+- The `seen_iend` warning gate is no longer PNG-only. chitra 0.7.0 generalized the field to
+  "did the stream end the way its format says it should", and GIF reports a real
+  `frame_complete`; a truncated LZW stream is tolerated as a clean end with the tail
+  zero-filled, so kii now warns `incomplete GIF (truncated frame — tail zero-filled)` instead
+  of rendering a half-decoded frame silently. JPEG and BMP report `1` unconditionally and never
+  reach the warning.
+- **16-bit PNG output changes** — chitra 0.7.x replaced high-byte truncation with the spec
+  § 13.13 rescale. This is a correctness fix kii inherits, not a kii change; depth-8 PNG and
+  every JPEG variant stay byte-identical. Noted here so nobody bisects it later.
+- `ALLOC_MAX` in the vendored allocator rises 256 MiB → 2 GiB with the toolchain. kii's binding
+  input limit is unchanged: `KII_MAX_RAW_BYTES` (256 MB, still matching `CHITRA_MAX_RAW_BYTES`)
+  plus chitra's own dimension and IDAT caps.
+
+### Fixed
+- **CI would have hard-failed on this bump.** Both workflows hand-rolled a flat tarball copy into
+  `~/.cyrius/{bin,lib}`, which never creates the `~/.cyrius/versions/<pin>/lib` layout `cyrius deps`
+  resolves against. That only ever worked because of a pre-6.5.25 bug in `_dep_find_stdlib_dir()`
+  that treated any tree containing `src/main.cyr` as the cyrius repo and silently fell back to the
+  project's **own** `./lib`. 6.5.25 fixed it, so from this pin onward `cyrius deps` exits with
+  `pins version 6.5.35 but it is not installed at …/versions/6.5.35/lib`. Both workflows now use
+  the upstream installer, matching chitra's CI. Reproduced in a simulated CI layout before fixing.
+- **`tests/quant.tcyr` had not compiled since v1.2.0** and its 109 assertions never ran. 48 of the
+  palette-table calls passed two arguments to the three-argument `assert_eq(a, b, name)`; the suite
+  failed with a compile error that the v1.4.1 cut missed because it verified only the render suite
+  ("137/137 green"). Restored to the one-assertion-per-line named form the other suites use — the
+  suite passes at exactly the 109 assertions it always claimed.
+- A corrupt or truncated BMP/GIF no longer reports PNG chunk-ordering wording, and
+  `unrecognized image format` now names all four formats it accepts.
+
 ## [1.4.1] — 2026-07-08
 
 **agnos-target build fix + toolchain pin → `6.4.20`.** The committed `lib/` stdlib

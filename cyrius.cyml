@@ -1,11 +1,11 @@
 [package]
 name = "kii"
 version = "${file:VERSION}"
-description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. 8/16-color tier-1 scope at v1.0; 256-color + truecolor 'high bands' post-v1. Substrate for BBS/MUD MOTD aesthetic + general image-in-terminal viewing."
+description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. Reads PNG, baseline JPEG, BMP and GIF (first frame) via the chitra substrate. 8/16-color tier-1 scope at v1.0; 256-color + truecolor 'high bands' post-v1. Substrate for BBS/MUD MOTD aesthetic + general image-in-terminal viewing."
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/cyrius-kii"
 language = "cyrius"
-cyrius = "6.4.20"
+cyrius = "6.5.35"
 
 [build]
 entry = "src/main.cyr"
@@ -32,11 +32,20 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 # darshana when a second consumer surfaces. Pinned tag per
 # AGNOS dep-lockin discipline. Pin advanced 0.8.1 → 0.8.2 at kii v1.4.1
 # (0.8.2 = AGNOS parity for the TTY-mode primitives: tty_isatty / tty_raw /
-# tty_cooked agnos peers; additive superset of the surface kii uses).
+# tty_cooked agnos peers; additive superset of the surface kii uses), then
+# 0.8.2 → 1.0.0 at kii v1.5.0 — THE API FREEZE. darshana 1.0.0 is byte-identical
+# to 0.9.4 and freezes 29 functions + 37 constants (ADR 0003); all four names kii
+# calls (tty_fg_256_buf / tty_sgr_reset / tty_sgr_reset_buf / tty_winsize) sit
+# inside the frozen block. The 0.9.3 pre-freeze break — the seven `_buf`
+# composers now reject a negative incoming `pos` with -1 instead of laundering
+# it into an out-of-bounds write — reaches zero kii call sites: kii's `pos`
+# accumulators start at 0 and only ever grow. Also reconciles the pin mismatch
+# darshana's 1.0.0 notes called out (manifest said 0.8.2, vendored bundle read
+# 0.9.0, because kii resolves via `path`).
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 path = "../darshana"
-tag = "0.8.2"
+tag = "1.0.0"
 modules = ["dist/darshana.cyr"]
 
 # CLI / argument parsing — cmdit (sovereign getopt-long lib, the stdlib flags
@@ -44,11 +53,16 @@ modules = ["dist/darshana.cyr"]
 # flag-set seeded cmdit's design; adopting it back validates the extraction).
 # Pinned per AGNOS dep-lockin discipline. Pin advanced 0.1.0 → 1.1.0 at kii v1.1.1
 # (cmdit froze its API at 1.0.0; 1.1.0 added cmdit_help_flags — both backward-
-# compatible supersets of the 0.1.0 surface kii uses).
+# compatible supersets of the 0.1.0 surface kii uses). Pin advanced 1.1.0 →
+# 1.2.4 at kii v1.5.0: 1.2.0 added verb introspection + shell completions,
+# 1.2.1/1.2.2 fixed the completion generator and verb `--` forwarding, 1.2.3/
+# 1.2.4 are audit repairs. All append-only on the frozen 1.0.0 surface — kii
+# uses none of the verb machinery, and CMDIT_CTX_SIZE's growth (160 → 168) is
+# invisible because kii allocates its context through cmdit_new, never by hand.
 [deps.cmdit]
 git = "https://github.com/MacCracken/cmdit.git"
 path = "../cmdit"
-tag = "1.1.0"
+tag = "1.2.4"
 modules = ["dist/cmdit.cyr"]
 
 # Image decode — chitra (pure-Cyrius CPU raster decoder, the image-substrate
@@ -60,12 +74,23 @@ modules = ["dist/cmdit.cyr"]
 # sub-byte depths 1/2/4 + Adam7 interlace) → 0.3.0 (THE JPEG WIRING, v1.4.0:
 # baseline JFIF JPEG; kii's adapter now calls chitra_image_decode, which
 # sniffs PNG vs JPEG and normalizes both to canonical RGBA8 — zero pipeline
-# change, see ADR 0008). stdlib sankoch + thread STAY in [deps].stdlib above:
-# chitra's strip-include dist resolves zlib_decompress / crc32 / mutex from
-# the consumer's stdlib list, and kii's tests call zlib_decompress directly.
-# See ADR 0006 + ADR 0008.
+# change, see ADR 0008) → 1.0.0 (THE FORMAT BROADENING, v1.5.0: chitra's own
+# v1.0 freeze, carrying BMP (0.4.0) and GIF first-frame (0.5.0) decode. Because
+# kii's adapter calls chitra_image_decode unconditionally, kii renders BMP and
+# GIF WITHOUT a pipeline change — the v1.5.0 work is diagnostics, not decode:
+# KII_FMT_BMP/GIF tags, signature sniffing, and png_color_type_name learning
+# chitra's 0x200|bpp / 0x300|min_code_size sentinels. chitra 1.0.0 freezes 29
+# names + the ChitraImage/ChitraErr layouts + the numeric ChitraErrCode values
+# (ADR 0010); all nine names kii calls are in the frozen block, and
+# ChitraImage's growth to 56 bytes (src_depth @ +48) is append-only, so kii's
+# accessor-only usage is unaffected. Progressive / arithmetic / 12-bit / CMYK
+# JPEG remain refused — that rejection text stays true, only its version
+# reference moved. See ADR 0009). stdlib sankoch + thread STAY in [deps].stdlib
+# above: chitra's strip-include dist resolves zlib_decompress / crc32 / mutex
+# from the consumer's stdlib list, and kii's tests call zlib_decompress directly.
+# See ADR 0006 + ADR 0008 + ADR 0009.
 [deps.chitra]
 git = "https://github.com/MacCracken/chitra.git"
 path = "../chitra"
-tag = "0.3.0"
+tag = "1.0.0"
 modules = ["dist/chitra.cyr"]

@@ -32,10 +32,19 @@ See [`docs/development/state.md`](docs/development/state.md) for the per-release
 - **M7** (v0.8.0): security audit cycle — input-cap / decompression-amplification / ANSI-injection hardening; fuzz scaled to 3M+ iters
 - **M8** (v1.0.0): v1.0 freeze — ADRs, W3C PngSuite walk, chafa visual review
 
+### Supported input formats
+
+All four arrive from the [`chitra`](https://github.com/MacCracken/chitra) substrate — kii carries no decoder of its own (see [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)):
+
+- **PNG** — the full matrix: bit depths 1/2/4/8/16, every color type, Adam7 interlace (since v1.2.2)
+- **Baseline JPEG** — greyscale + YCbCr + RGB, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST restart markers (since v1.4.0)
+- **BMP** — `BI_RGB` 1/4/8/16/24/32 bpp, `BI_RLE4`/`BI_RLE8`, `BI_BITFIELDS` with V4/V5 headers (since v1.5.0)
+- **GIF** — GIF87a/89a, LZW, interlaced; **first frame only** (since v1.5.0)
+
 ### Not yet supported (deferred per scope)
 
-- **GIF / BMP** — not yet supported (baseline JPEG landed at v1.4.0 via chitra 0.3.0; PNG is the full 1/2/4/8/16-bit + Adam7 matrix since v1.2.2)
-- **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra 0.3.0 is baseline-only)
+- **Animated GIF beyond frame 1** — kii is a still-frame renderer; chitra decodes the first frame by design (chitra ADR 0005)
+- **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra is baseline-only)
 - **256-color + truecolor + dithering** — tier-2; explicit post-v1 work
 - **Sixel / Kitty / iTerm2 image protocols** — tier-3; explicit post-v1 work
 
@@ -57,7 +66,7 @@ The world prior art (`chafa`) ships every tier from monochrome through 24-bit tr
 
 - [`sankoch`](https://github.com/MacCracken/sankoch) — DEFLATE/zlib decompression. **Wired at v0.4.0** for PNG IDAT decompression. (Now folded into Cyrius stdlib at v5.8.65, so it's a stdlib-list add, not an external git dep.)
 - [`darshana`](https://github.com/MacCracken/darshana) — TTY/ANSI primitives (color escape sequences, cursor positioning, `tty_winsize`). External dep since v0.6.0 / M5 when ANSI emit went live.
-- [`chitra`](https://github.com/MacCracken/chitra) — the image-decode substrate (pure-Cyrius PNG + baseline-JPEG → canonical RGBA8). **Forked from kii's own `src/png.cyr` and adopted back** at v1.2.0 (the PNG re-fold, [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)) when `mabda` became the second consumer; `src/png.cyr` is now a thin adapter calling `chitra_image_decode`. JPEG arrived on the `chitra 0.3.0` re-pin at v1.4.0 ([ADR 0008](docs/adr/0008-jpeg-via-chitra.md)). Pinned via `[deps.chitra]`.
+- [`chitra`](https://github.com/MacCracken/chitra) — the image-decode substrate (pure-Cyrius PNG + JPEG + BMP + GIF → canonical RGBA8). **Forked from kii's own `src/png.cyr` and adopted back** at v1.2.0 (the PNG re-fold, [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)) when `mabda` became the second consumer; `src/png.cyr` is now a thin adapter calling `chitra_image_decode`. JPEG arrived on the `chitra 0.3.0` re-pin at v1.4.0 ([ADR 0008](docs/adr/0008-jpeg-via-chitra.md)); BMP + GIF on the `chitra 1.0.0` re-pin at v1.5.0, with **no decode change at all** ([ADR 0009](docs/adr/0009-bmp-gif-via-chitra.md)). Pinned via `[deps.chitra]`.
 - **In-repo palette + quantizer** (`src/palette.cyr` + `src/quant.cyr`) — Linux-console 16-color RGB table + nearest-neighbor Euclidean quantization.
 
 ## Multi-source prior art
@@ -80,13 +89,13 @@ cyrius build src/main.cyr build/kii   # compile
 ./build/kii image.png                 # quantize a PNG
 ```
 
-Toolchain pin: `cyrius = "6.4.20"` (in [`cyrius.cyml`](cyrius.cyml)).
+Toolchain pin: `cyrius = "6.5.35"` (in [`cyrius.cyml`](cyrius.cyml)).
 
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 431 assertions across 5 suites (cli/quant/render/ascii/decode)
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 6 fuzz surfaces, 4,011,000 iters (arg/path/geom/emit/PNG/JPEG)
+cyrius test                           # 511 assertions across 5 suites (cli/quant/render/ascii/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 8 fuzz surfaces, 6,011,000 iters (arg/path/geom/emit/PNG/JPEG/BMP/GIF)
 cyrius build tests/kii.bcyr build/kii-bench && ./build/kii-bench # quantization micro-bench
 ```
 

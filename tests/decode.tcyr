@@ -613,6 +613,128 @@ fn main() {
     "malformed JPEG marker stream → PNG_ERR_HEADER");
     assert_eq(load64(&pstr_mj + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "tagged JPEG (SOI matched)");
 
+    # ---- BMP + GIF e2e via chitra_image_decode (chitra 1.0.0, v1.5.0) ----
+    # kii gained both formats without a decode change: the adapter already
+    # called the format-sniffing chitra_image_decode unconditionally, so
+    # re-pinning chitra 0.3.0 -> 1.0.0 (BMP at 0.4.0, GIF at 0.5.0) made them
+    # render. These pin the DIAGNOSTIC half that did not come free: the
+    # KII_FMT_* tag and the source-sentinel decode.
+    #
+    # (a) 16x16 24-bpp BI_RGB BMP — a horizontal white->black ramp, so the
+    #     decoded rows are a known ImageMagick-verified sequence (px0 = 0,
+    #     px1 = 17, px2 = 34, stepping by 17). BMP scanlines are stored
+    #     bottom-up; chitra normalizes to top-down RGBA8, so row 0 here is the
+    #     image's TOP row and the ramp reads left-to-right like the oracle.
+    test_group("bmp — decode e2e (gradient.bmp, 16x16 24bpp BI_RGB)");
+    var pstr_bmp[160];
+    assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_bmp), PNG_OK,
+    "gradient.bmp → PNG_OK");
+    assert_eq(load64(&pstr_bmp + STRUCT_WIDTH_OFFSET),         16, "bmp width = 16");
+    assert_eq(load64(&pstr_bmp + STRUCT_HEIGHT_OFFSET),        16, "bmp height = 16");
+    assert_eq(load64(&pstr_bmp + STRUCT_COLOR_TYPE_OFFSET),     6, "adapter forces ct6");
+    assert_eq(load64(&pstr_bmp + STRUCT_BIT_DEPTH_OFFSET),      8, "bit_depth = 8");
+    assert_eq(load64(&pstr_bmp + STRUCT_SRC_COLOR_TYPE_OFFSET), 536, "src ctype 536 (0x218 = BMP 24bpp)");
+    assert_eq(load64(&pstr_bmp + STRUCT_FORMAT_OFFSET), KII_FMT_BMP, "format = BMP");
+    assert_eq(load64(&pstr_bmp + STRUCT_PIXELS_SIZE_OFFSET), 16 * 16 * 4, "bmp pixels size = 16×16×4");
+    assert(load64(&pstr_bmp + STRUCT_PIXELS_BUF_OFFSET) != 0, "bmp pixels_buf non-null");
+    # Decoded-pixel correctness against the ImageMagick oracle.
+    var bpx = load64(&pstr_bmp + STRUCT_PIXELS_BUF_OFFSET);
+    assert_eq(load8(bpx + 0 * 4),   0, "bmp px0 R = 0 (black edge)");
+    assert_eq(load8(bpx + 1 * 4),  17, "bmp px1 R = 17");
+    assert_eq(load8(bpx + 2 * 4),  34, "bmp px2 R = 34");
+    assert_eq(load8(bpx + 3 * 4),  51, "bmp px3 R = 51");
+    assert_eq(load8(bpx + 3),     255, "bmp px0 A = 255 (opaque)");
+    # Greyscale ramp: R == G == B at every sampled pixel.
+    assert_eq(load8(bpx + 1 * 4 + 1), load8(bpx + 1 * 4 + 0), "bmp px1 G == R");
+    assert_eq(load8(bpx + 1 * 4 + 2), load8(bpx + 1 * 4 + 0), "bmp px1 B == R");
+    # Pure horizontal ramp: row 8 equals row 0 at every column.
+    var bmp_row_eq = 1;
+    var bmp_c = 0;
+    while (bmp_c < 16) {
+        if (load8(bpx + (0 * 16 + bmp_c) * 4) != load8(bpx + (8 * 16 + bmp_c) * 4)) { bmp_row_eq = 0; }
+        bmp_c = bmp_c + 1;
+    }
+    assert_eq(bmp_row_eq, 1, "bmp row 8 == row 0 at every column (no vertical variation)");
+
+    # (b) 16x16 GIF89a, four flat quadrants (red / lime / blue / white). Pins
+    #     the palette path and the 0x300 | min_code_size sentinel. GIF is
+    #     FIRST FRAME ONLY by chitra's ADR 0005 — this fixture is single-frame,
+    #     so that limit is not what is under test here.
+    test_group("gif — decode e2e (color.gif, 16x16 GIF89a palette)");
+    var pstr_gif[160];
+    assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_gif), PNG_OK,
+    "color.gif → PNG_OK");
+    assert_eq(load64(&pstr_gif + STRUCT_WIDTH_OFFSET),      16, "gif width = 16");
+    assert_eq(load64(&pstr_gif + STRUCT_HEIGHT_OFFSET),     16, "gif height = 16");
+    assert_eq(load64(&pstr_gif + STRUCT_COLOR_TYPE_OFFSET),  6, "adapter forces ct6");
+    assert_eq(load64(&pstr_gif + STRUCT_FORMAT_OFFSET), KII_FMT_GIF, "format = GIF");
+    assert_eq(load64(&pstr_gif + STRUCT_PIXELS_SIZE_OFFSET), 16 * 16 * 4, "gif pixels size = 16×16×4");
+    assert(load64(&pstr_gif + STRUCT_PIXELS_BUF_OFFSET) != 0, "gif pixels_buf non-null");
+    # The sentinel is 0x300 | min_code_size; the encoder picks the code size,
+    # so pin the FORMAT byte rather than an exact value the encoder may vary.
+    var gsent = load64(&pstr_gif + STRUCT_SRC_COLOR_TYPE_OFFSET);
+    assert(gsent >= 769 && gsent <= 776, "gif src ctype in 0x300|min_code_size range");
+    # Quadrant colors against the ImageMagick oracle (top-left red, top-right
+    # lime, bottom-left blue, bottom-right white).
+    var gpx = load64(&pstr_gif + STRUCT_PIXELS_BUF_OFFSET);
+    assert_eq(load8(gpx + (0 * 16 + 0) * 4 + 0), 255, "gif (0,0) R = 255 (red)");
+    assert_eq(load8(gpx + (0 * 16 + 0) * 4 + 1),   0, "gif (0,0) G = 0");
+    assert_eq(load8(gpx + (0 * 16 + 0) * 4 + 2),   0, "gif (0,0) B = 0");
+    assert_eq(load8(gpx + (0 * 16 + 15) * 4 + 0),   0, "gif (15,0) R = 0 (lime)");
+    assert_eq(load8(gpx + (0 * 16 + 15) * 4 + 1), 255, "gif (15,0) G = 255");
+    assert_eq(load8(gpx + (15 * 16 + 0) * 4 + 2), 255, "gif (0,15) B = 255 (blue)");
+    assert_eq(load8(gpx + (15 * 16 + 15) * 4 + 0), 255, "gif (15,15) R = 255 (white)");
+    assert_eq(load8(gpx + (15 * 16 + 15) * 4 + 1), 255, "gif (15,15) G = 255 (white)");
+    assert_eq(load8(gpx + (15 * 16 + 15) * 4 + 2), 255, "gif (15,15) B = 255 (white)");
+    assert_eq(load8(gpx + 3), 255, "gif px0 A = 255 (opaque)");
+
+    # (c) the BMP/GIF ChitraErr codes chitra 1.0.0 added (24-34). Before
+    #     v1.5.0 every one of them fell through _kii_map_chitra_err's default,
+    #     so a corrupt BMP reported the PNG chunk/ordering wording.
+    test_group("bmp/gif — _kii_map_chitra_err covers ChitraErr 24-34");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_HEADER),      PNG_ERR_HEADER,      "BMP_HEADER → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_PALETTE),     PNG_ERR_HEADER,      "BMP_PALETTE → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_RLE),         PNG_ERR_HEADER,      "BMP_RLE → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_DEPTH),       PNG_ERR_UNSUPPORTED, "BMP_DEPTH → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_COMPRESSION), PNG_ERR_UNSUPPORTED, "BMP_COMPRESSION → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_MASK),        PNG_ERR_UNSUPPORTED, "BMP_MASK → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_HEADER),      PNG_ERR_HEADER,      "GIF_HEADER → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_PALETTE),     PNG_ERR_HEADER,      "GIF_PALETTE → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_LZW),         PNG_ERR_INFLATE,     "GIF_LZW → INFLATE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_NO_IMAGE),    PNG_ERR_NO_IDAT,     "GIF_NO_IMAGE → NO_IDAT");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BUDGET),          PNG_ERR_IDAT_TOO_LARGE, "BUDGET → IDAT_TOO_LARGE");
+
+    # (d) the source-sentinel names --verbose prints. Before v1.5.0 every
+    #     non-PNG/non-JPEG sentinel rendered as "?".
+    test_group("bmp/gif — png_color_type_name knows the new sentinels");
+    assert_streq(png_color_type_name(275), "RGB (JPEG)",         "275 (0x113) → RGB (JPEG)");
+    assert_streq(png_color_type_name(513), "1bpp palette (BMP)",  "513 (0x201) → 1bpp palette (BMP)");
+    assert_streq(png_color_type_name(516), "4bpp palette (BMP)",  "516 (0x204) → 4bpp palette (BMP)");
+    assert_streq(png_color_type_name(520), "8bpp palette (BMP)",  "520 (0x208) → 8bpp palette (BMP)");
+    assert_streq(png_color_type_name(528), "16bpp (BMP)",         "528 (0x210) → 16bpp (BMP)");
+    assert_streq(png_color_type_name(536), "24bpp (BMP)",         "536 (0x218) → 24bpp (BMP)");
+    assert_streq(png_color_type_name(544), "32bpp (BMP)",         "544 (0x220) → 32bpp (BMP)");
+    assert_streq(png_color_type_name(770), "palette (GIF)",       "770 (0x302) → palette (GIF)");
+    assert_streq(png_color_type_name(776), "palette (GIF)",       "776 (0x308) → palette (GIF)");
+    # The sentinel ranges must not swallow a neighbour: 512 (0x200, bpp=0) and
+    # 768 (0x300, min_code_size=0) are both structurally impossible, and 545 /
+    # 777 sit one past each block. All four stay unknown.
+    assert_streq(png_color_type_name(512), "?", "512 (0x200, bpp=0) → ?");
+    assert_streq(png_color_type_name(545), "?", "545 (one past BMP 32bpp) → ?");
+    assert_streq(png_color_type_name(768), "?", "768 (0x300, mcs=0) → ?");
+    assert_streq(png_color_type_name(777), "?", "777 (one past GIF range) → ?");
+
+    # (e) a non-image file is now refused as "not any of the four", and the
+    #     format tag stays UNKNOWN so main phrases it generically.
+    test_group("bmp/gif — a non-image file tags UNKNOWN");
+    var path_nx[256];
+    _scratch_path(&path_nx, "kii-decode-notimage.txt");
+    file_write_all(&path_nx, "not an image at all, just text\n", 31);
+    var pstr_nx[160];
+    assert_eq(kii_decode_png(&path_nx, &pstr_nx), PNG_ERR_NOT_PNG,
+    "plain text → PNG_ERR_NOT_PNG");
+    assert_eq(load64(&pstr_nx + STRUCT_FORMAT_OFFSET), KII_FMT_UNKNOWN, "format stays UNKNOWN");
+
     test_subbyte_now_renders();
     test_interlace_now_renders();
     return assert_summary();

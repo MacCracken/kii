@@ -26,18 +26,23 @@ jobs:
           test "$FILE_VERSION" = "$TAG_VERSION" || { echo "VERSION ($FILE_VERSION) != tag ($TAG_VERSION)"; exit 1; }
 
       - name: Install Cyrius toolchain
+        # The cyrius.cyml `[package].cyrius` pin stays the single source of
+        # truth — no version is hardcoded in this YAML. Use the upstream
+        # installer so the versioned ~/.cyrius/versions/<ver>/ layout matches
+        # how cyrius resolves the pin. The previous hand-rolled flat copy into
+        # ~/.cyrius/{bin,lib} left the pinned version unresolvable: it only
+        # worked because a pre-6.5.25 bug in _dep_find_stdlib_dir() treated any
+        # tree containing src/main.cyr as the cyrius repo and silently fell back
+        # to the project's OWN ./lib. 6.5.25 fixed that, so from the v1.5.0 pin
+        # (6.5.35) onward `cyrius deps` hard-errors under the flat layout with
+        # "pins version X but it is not installed at ~/.cyrius/versions/X/lib".
         run: |
-          CYRIUS_VERSION="${CYRIUS_VERSION:-$(grep 'cyrius *= *"' cyrius.cyml 2>/dev/null | head -1 | sed 's/.*"\(.*\)"/\1/')}"
+          set -e
+          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
-          CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
-          mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
-          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
-          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
-          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
-          echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
-          echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
+          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
       - name: Build
         # Binary name is `kii` per cyrius.cyml [build].output. See
