@@ -39,12 +39,12 @@ Other deps need a written rationale in the PR (what does it own that we can't do
 
 Every behavior change needs at least:
 
-- One happy-path test in `tests/kii.tcyr`
+- One happy-path test in the suite that owns the area. The monolithic `tests/kii.tcyr` was **retired at v1.2.0** and split into five standalone suites: `tests/cli.tcyr` (flag parsing + the path sanitizer), `tests/quant.tcyr` (palette + quantizer), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii`), `tests/decode.tcyr` (the chitra adapter, per format).
 - One error-path test (malformed input, out-of-range arg, etc.)
-- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` (the file hosts two surfaces — arg-parser fuzz + PNG-decoder fuzz; add to whichever the change touches)
-- For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`
+- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **eight** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF); add to whichever the change touches. If you add a surface that calls `alloc_reset()`, it **must** also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it silently voided a million iterations.
+- For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`. A bench guarded on a system fixture must report a visible SKIP when the fixture is absent, never vanish from the output.
 
-PRs without test coverage will be asked to add it. Current state: 287 unit assertions + 12k fuzz iters/run + 1 bench captured as of v0.5.0.
+PRs without test coverage will be asked to add it. Current state: **550 unit assertions + 6,011,000 fuzz iters/run + 7 benches** as of v1.5.1.
 
 ## Commits and PRs
 

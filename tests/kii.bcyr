@@ -145,6 +145,8 @@ fn main(): i64 {
         }
         bench_batch_stop(bh_dec_256, n_dec_256);
         bench_report(bh_dec_256);
+    } else {
+        println("  png_decode (256² class) — SKIPPED: fixture not present on this host");
     }
 
     # 1024² class: starfield.png is 1597×1198 (~1.9M pixels — between
@@ -162,6 +164,8 @@ fn main(): i64 {
         }
         bench_batch_stop(bh_dec_1k, n_dec_1k);
         bench_report(bh_dec_1k);
+    } else {
+        println("  png_decode (1024² class) — SKIPPED: fixture not present on this host");
     }
 
     # 2048² class: sddm elarun background is 2560×1600 (~4M pixels —
@@ -179,6 +183,8 @@ fn main(): i64 {
         }
         bench_batch_stop(bh_dec_2k, n_dec_2k);
         bench_report(bh_dec_2k);
+    } else {
+        println("  png_decode (2048² class) — SKIPPED: fixture not present on this host");
     }
 
     return 0;

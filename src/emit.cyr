@@ -62,6 +62,16 @@ var EMIT_HALFBLOCK_B2 = 0x80;
 # extract-on-2nd-consumer pattern.
 fn _emit_bg_256_buf(buf, pos, n) {
     if (n < 0 || n > 255) { return 0 - 1; }
+    # P-1 (v1.5.1): reject a negative incoming `pos` too. This helper mirrors
+    # darshana's tty_fg_256_buf, and darshana 0.9.3 added exactly this guard to
+    # all seven of its `_buf` composers after finding that a -1 sentinel fed
+    # back in as a position wrote ESC at `buf - 1` and returned a bogus
+    # positive length. kii's local BG twin never picked the guard up, so the
+    # two halves of the same per-cell escape pair had different contracts —
+    # and the chain in emit_halfblock_row_buf passes fg's result straight into
+    # bg's `pos`. Reachability aside, a composer documented as chainable must
+    # validate what it is chained onto.
+    if (pos < 0) { return 0 - 1; }
     store8(buf + pos, 27);  pos = pos + 1;        # ESC
     store8(buf + pos, 91);  pos = pos + 1;        # '['
     store8(buf + pos, 52);  pos = pos + 1;        # '4'
@@ -227,6 +237,34 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
 #
 # Final \x1b[0m at frame end is redundant (every row ends with one)
 # but cheap, and ensures the terminal is clean even if the caller
+# ---- short-write-safe stdout writer --------------------------------
+# P-1 (v1.5.1). Both frame emitters used to call `syscall(1, 1, buf, n)`
+# and DISCARD the result, so kii returned 0 after a wholly-failed frame:
+# `kii img.png > out.ansi` on a full filesystem exited 0 having written
+# nothing, and a shell `kii ... > out && use out` happily consumed the
+# empty file. write(2) is also permitted to return a SHORT count on a
+# pipe or a slow sink, which would silently truncate the ANSI stream
+# mid-row.
+#
+# This loops until the buffer is drained, retries EINTR, and reports any
+# real error to the caller, which propagates it to a non-zero exit.
+# SIGPIPE keeps its default disposition on purpose — `kii img.png | head`
+# should die by signal like any other Unix filter, so EPIPE is not
+# something this function normally sees.
+fn _kii_write_all(fd, buf, len): i64 {
+    var off = 0;
+    while (off < len) {
+        var n = syscall(1, fd, buf + off, len - off);
+        if (n > 0) { off = off + n; }
+        else {
+            # EINTR (-4) is a retry, not a failure. Anything else — and a
+            # nonsensical 0-byte return on a positive request — is fatal.
+            if (n != 0 - 4) { return 0 - 1; }
+        }
+    }
+    return 0;
+}
+
 # truncates the write.
 fn emit_halfblock(pstruct) {
     var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
@@ -252,7 +290,7 @@ fn emit_halfblock(pstruct) {
     while (row < t_rows) {
         var pos = emit_halfblock_row_buf(qbuf, sw, row, line_buf, 0);
         if (pos < 0) { return 0 - 1; }
-        syscall(1, 1, line_buf, pos);
+        if (_kii_write_all(1, line_buf, pos) != 0) { return 0 - 2; }
         row = row + 1;
     }
     return 0;

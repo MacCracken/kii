@@ -2,13 +2,13 @@
 
 **kii** (Hawaiian: *image / picture / likeness*) — image → ANSI/ASCII-art converter for terminal display.
 
-Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](https://github.com/Talinx/jp2a) / [`viu`](https://github.com/atanunq/viu). Reads raster image input (PNG and baseline JPEG today; GIF / BMP planned), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to the terminal's cols × rows.
+Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](https://github.com/Talinx/jp2a) / [`viu`](https://github.com/atanunq/viu). Reads raster image input (PNG, baseline JPEG, BMP, and GIF first-frame), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to the terminal's cols × rows.
 
 ## Status
 
-**v1.0.3** (2026-06-22). The full PNG → 16-color half-block ANSI pipeline is locked in (v1.0 freeze at v1.0.0). Builds on host and on the AGNOS target (`--agnos`).
+**v1.5.1** (2026-08-25). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
-Today `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not) or a **baseline JPEG** (`kii photo.jpg` — grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0), quantizes to the 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
+`kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to the 8- or 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
 ```
 $ kii tests/fixtures/RAMGON.png        # renders half-block ANSI to the terminal

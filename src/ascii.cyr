@@ -25,6 +25,7 @@
 # the pstruct contract; quant.cyr gives quantize_nearest_rgb (per-cell fg).
 
 include "src/png.cyr"
+include "src/emit.cyr"   # _kii_write_all (shared stdout plumbing)
 include "src/quant.cyr"
 
 # Rec.709 relative luminance, integer-scaled 54/183/19 (sum 256, exact /256
@@ -328,7 +329,7 @@ fn emit_ascii_shape(pstruct): i64 {
     while (cy < rows) {
         var pos = emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, line_buf, 0);
         if (pos < 0) { return 0 - 1; }
-        syscall(1, 1, line_buf, pos);
+        if (_kii_write_all(1, line_buf, pos) != 0) { return 0 - 2; }
         cy = cy + 1;
     }
     return 0;

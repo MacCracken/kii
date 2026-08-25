@@ -142,6 +142,18 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     var bps = bit_depth / 8;
     if (bps <= 0) { return 0 - 1; }
 
+    # Overflow-safe output sizing (P-1, v1.5.1). `dst_w * dst_h * 3` is a
+    # 64-bit product on caller-supplied geometry; if it WRAPS to a small
+    # positive value, alloc() happily returns that tiny buffer (its own
+    # guards only reject `size <= 0` and `size > ALLOC_MAX`) and the
+    # resample loop below then writes `(dy * dst_w + dx) * 3` bytes past
+    # it. main.cyr caps --width, but this guard makes the resampler safe
+    # for ANY caller rather than trusting one call site — the division form
+    # cannot itself overflow, and dst_w > 0 is guaranteed at the top.
+    var max_cells = ALLOC_MAX / 3;
+    if (dst_w > max_cells)            { return 0 - 1; }
+    if (dst_h > max_cells / dst_w)    { return 0 - 1; }
+
     var out_bytes = dst_w * dst_h * 3;
     var out_buf = alloc(out_bytes);
     if (out_buf == 0) { return 0 - 1; }

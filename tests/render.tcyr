@@ -259,6 +259,40 @@ fn main() {
     # ============================================================
     # ----------------- M5(c) emit_halfblock ---------------------
     # ============================================================
+    # ---- P-1 (v1.5.1) hardening regressions ------------------------
+    test_group("P-1 (v1.5.1) — downscale_to_rgb refuses an overflowing size");
+    # `out_bytes = dst_w * dst_h * 3` is a 64-bit product on caller-supplied
+    # geometry. A width above ~2.5e9 WRAPS it to a small positive value, which
+    # alloc() accepts (its own guards only catch <= 0 and > ALLOC_MAX) — and
+    # the resample loop then writes far past the tiny buffer. Reproduced as a
+    # real SIGSEGV before this guard: `kii --width 4611686018427387902` on a
+    # 1x1 PNG wrapped to a 12-byte allocation and dumped core on BOTH lanes.
+    var pstr_ov[160];
+    assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_ov), PNG_OK,
+              "overflow fixture decodes");
+    # 2^62 - 2: (2^62-2)^2 * 3 wraps to exactly 12 mod 2^64.
+    assert_eq(downscale_to_rgb(&pstr_ov, 4611686018427387902, 4611686018427387902), 0 - 1,
+              "wrapping dst_w*dst_h*3 → -1, not a 12-byte alloc");
+    assert_eq(downscale_to_rgb(&pstr_ov, 9223372036854775807, 2), 0 - 1,
+              "i64-max width → -1");
+    assert_eq(downscale_to_rgb(&pstr_ov, 2, 9223372036854775807), 0 - 1,
+              "i64-max height → -1");
+    # The guard must not reject anything alloc would have honoured: a real
+    # geometry still succeeds.
+    assert_eq(downscale_to_rgb(&pstr_ov, 16, 8), 0, "ordinary geometry still succeeds");
+
+    test_group("P-1 (v1.5.1) — _emit_bg_256_buf rejects a negative pos");
+    # darshana 0.9.3 added this guard to all seven of its own `_buf` composers
+    # after finding that a -1 sentinel fed back in as a position wrote ESC at
+    # `buf - 1` and returned a bogus positive length. kii's local BG twin —
+    # which sits in the same per-cell chain as darshana's FG composer — never
+    # picked it up, so the two halves of one escape pair had different
+    # contracts.
+    var bgn_buf[64];
+    assert_eq(_emit_bg_256_buf(&bgn_buf, 0 - 1, 7),   0 - 1, "pos = -1 → -1");
+    assert_eq(_emit_bg_256_buf(&bgn_buf, 0 - 99, 7),  0 - 1, "pos = -99 → -1");
+    assert_eq(_emit_bg_256_buf(&bgn_buf, 0, 7),            9, "pos = 0 still works (9 bytes)");
+
     test_group("M5(c) — _emit_bg_256_buf encodes CSI 48;5;Nm");
     # 1-digit, 2-digit, 3-digit, and bounds-reject paths.
     # 1-digit n: CSI 48;5;Nm = 9 bytes (ESC + '[' + "48;5;" + 1 + 'm')

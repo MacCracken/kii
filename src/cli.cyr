@@ -16,6 +16,23 @@
 #   0 = normal exit (incl. --help / --version paths)
 #   1 = runtime error (decode fail, IO error) — used at M2+
 #   2 = usage error (unknown flag, missing value, bad int, bad color)
+# Upper bound on --width, enforced in main BEFORE the value reaches the
+# geometry layer (P-1, v1.5.1). Not a cosmetic cap: `--width N` flows
+# unvalidated into `_kii_compute_target_geometry` -> `downscale_to_rgb`,
+# where the allocation size is the unchecked 64-bit product
+# `dst_w * dst_h * 3`. A width above ~2.5e9 makes that product WRAP; a
+# wrapped small-positive value passes alloc()'s own `size <= 0` /
+# `size > ALLOC_MAX` guards, and the resampler then writes megabytes past
+# a handful of allocated bytes. `kii --width 4611686018427387902 one.png`
+# (a 1x1 source) wrapped to a 12-byte alloc and SIGSEGV'd, corrupting the
+# bump heap on the way out — on BOTH the half-block and --mode ascii lanes.
+#
+# 100000 columns is ~500x the widest real terminal capture and still leaves
+# every downstream product provably below 2^63, so the wrap is unreachable
+# rather than merely unlikely. CLAUDE.md: "Do not trust external data
+# (image files, args) without validation."
+var KII_MAX_COLS   = 100000;
+
 var KII_EXIT_OK    = 0;
 var KII_EXIT_RUN   = 1;
 var KII_EXIT_USAGE = 2;
@@ -99,10 +116,52 @@ fn kii_path_has_control_bytes(path): i64 {
     var i = 0;
     while (i < len) {
         var b = load8(path + i);
+        # C0 (except TAB/LF) + DEL — the original M7(c) guard.
         if ((b < 0x20 && b != 0x09 && b != 0x0A) || b == 0x7F) {
             return 1;
         }
-        i = i + 1;
+        if (b < 0x80) { i = i + 1; }
+        else {
+            # ---- the high half: C1 controls, in BOTH encodings ----
+            # P-1 (v1.5.1). The original guard covered C0 + DEL only, so the
+            # 8-bit C1 twins walked straight through: 0x9B IS CSI, 0x9D IS OSC,
+            # 0x90 IS DCS, 0x9C IS ST. A filename built from C1 bytes alone
+            # therefore defeated the entire sanitizer — `\x9D 0;PWNED \x9C .png`
+            # reached stderr byte-for-byte (verified with od), a complete OSC
+            # window-title injection through the very guard that exists to stop
+            # it, while its C0 spelling `ESC ] ... BEL` was correctly suppressed.
+            # kii's stated target is BBS/MUD-era terminal compatibility, which
+            # is exactly where 8-bit C1 handling still lives.
+            #
+            # A flat 0x80..0x9F range test is WRONG here and was the first
+            # attempt: those bytes are also legal UTF-8 CONTINUATION bytes, so
+            # it rejects ordinary non-Latin filenames — `画` is E7 94 BB and
+            # `ч` is D1 87, both carrying a 0x80..0x9F byte. This walks the
+            # UTF-8 structure instead, which lets it catch the two real cases
+            # and neither legitimate one:
+            #   (1) a C1 byte standing where a LEAD byte belongs (8-bit mode);
+            #   (2) the 2-byte UTF-8 spelling C2 80..C2 9F, which a UTF-8
+            #       terminal decodes back to U+0080..U+009F and may honour.
+            # Malformed UTF-8 is also refused: if we cannot tell what the
+            # terminal will make of the bytes, we do not echo them.
+            var seq = 0;
+            if (b >= 0xC2 && b <= 0xDF) { seq = 2; }
+            if (b >= 0xE0 && b <= 0xEF) { seq = 3; }
+            if (b >= 0xF0 && b <= 0xF4) { seq = 4; }
+            if (seq == 0)       { return 1; }   # stray C1 / continuation / overlong lead
+            if (i + seq > len)  { return 1; }   # truncated sequence
+            var k = 1;
+            while (k < seq) {
+                var c = load8(path + i + k);
+                if (c < 0x80 || c > 0xBF) { return 1; }
+                k = k + 1;
+            }
+            if (seq == 2 && b == 0xC2) {
+                var c1 = load8(path + i + 1);
+                if (c1 >= 0x80 && c1 <= 0x9F) { return 1; }   # UTF-8-encoded C1
+            }
+            i = i + seq;
+        }
     }
     return 0;
 }

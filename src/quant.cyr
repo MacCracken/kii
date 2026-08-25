@@ -31,8 +31,39 @@ fn _color_dist2(r1, g1, b1, r2, g2, b2): i64 {
     return dr * dr + dg * dg + db * db;
 }
 
+# ---- active colour tier -------------------------------------------
+# How many palette entries quantize_nearest_rgb is allowed to choose
+# from: 16 (default) or 8. P-1 (v1.5.1) — `--color 8` was parsed and
+# validated by kii_validate_color since M1 and then never consumed, so
+# `kii --color 8 img.png` emitted output BYTE-IDENTICAL to `--color 16`.
+# The flag's own help text promised "color tier: 8 or 16", and CLAUDE.md
+# scopes tier-1 as the "8/16-color ANSI palette", so the honest repair is
+# to make the flag do what it says rather than to document a lie.
+#
+# A module-scope setting rather than a threaded parameter: the four
+# functions between the flag and the inner loop (quantize_downscaled ->
+# quantize_rgb_buf -> quantize_nearest_rgb, plus ascii.cyr's per-cell
+# call) all have pinned arities that tests assert on, and this mirrors
+# palette_init()'s existing lazy-module-state idiom in the same file.
+#
+# The low 8 entries ARE the normal-intensity ANSI colours and the high 8
+# the bright ones, so restricting the ceiling to 8 selects exactly the
+# 8-colour tier — no separate table needed.
+var _quant_tier = 16;
+
+# Set the active tier. Accepts only 8 or 16; anything else is ignored so
+# a bad value can never widen the loop past the palette. Returns the tier
+# actually in force.
+fn quant_set_tier(n): i64 {
+    if (n == 8)  { _quant_tier = 8; }
+    if (n == 16) { _quant_tier = 16; }
+    return _quant_tier;
+}
+
+fn quant_tier(): i64 { return _quant_tier; }
+
 # Map one RGB triple to the nearest-distance² palette index in
-# [0, ANSI_PALETTE_SIZE). Ties resolved by lowest index because
+# [0, quant_tier()). Ties resolved by lowest index because
 # the loop's `<` (not `<=`) rejects equal-distance challengers.
 # Caller passes raw byte channel values (0..255).
 fn quantize_nearest_rgb(r, g, b): i64 {
@@ -43,7 +74,10 @@ fn quantize_nearest_rgb(r, g, b): i64 {
     var best_d2  = _color_dist2(r, g, b,
                                 palette_r(0), palette_g(0), palette_b(0));
     var i = 1;
-    while (i < ANSI_PALETTE_SIZE) {
+    # Bounded by the active tier, never past the table itself.
+    var ceiling = _quant_tier;
+    if (ceiling > ANSI_PALETTE_SIZE) { ceiling = ANSI_PALETTE_SIZE; }
+    while (i < ceiling) {
         var d2 = _color_dist2(r, g, b,
                               palette_r(i), palette_g(i), palette_b(i));
         if (d2 < best_d2) {

@@ -4,6 +4,117 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-08-25
+
+**P-1 audit / refactor / hardening / optimization / security sweep.** Five audit
+lenses (correctness, security, refactor, optimization, docs + deferred-item) over
+the full surface, every material finding put through an adversarial refutation
+pass: **41 raised, 2 refuted, 39 folded into 16 work items**. Full report in
+[`docs/audit/2026-08-25-audit.md`](docs/audit/2026-08-25-audit.md).
+
+Rendering is **byte-identical** at the default colour tier — 22/22 golden
+artifacts across four formats, five widths, both render lanes, `--verbose` stderr
+and `--help`. **550 assertions** (was 511); 6,011,000 fuzz iterations clean, one
+million of which were previously measuring nothing.
+
+### Fixed
+- **Memory safety: unbounded `--width` wrapped an allocation and the resampler
+  wrote past it.** `dst_w * dst_h * 3` is an unchecked 64-bit product;
+  `alloc()` rejects only `size <= 0` and `size > ALLOC_MAX`, so a product that
+  wraps to a small positive value was honoured. With a 1×1 PNG,
+  `kii --width 4611686018427387902` wrapped to a **12-byte** allocation and died
+  with **SIGSEGV** — an out-of-bounds heap *write*, on both render lanes. Now
+  capped at `KII_MAX_COLS` in `main.cyr` (with a real usage diagnostic) **and**
+  guarded independently inside `downscale_to_rgb`, so the resampler is safe for
+  any caller. ([`src/main.cyr`](src/main.cyr), [`src/downscale.cyr`](src/downscale.cyr))
+- **A truncated JPEG rendered silently.** The `seen_iend` gate had no JPEG arm,
+  and its comment claimed chitra *"reports 1 unconditionally for JPEG"* — false;
+  chitra sets the flag from a real `closed` decision made by the scan driver. A
+  truncated or EOI-stripped JPEG produced a partial frame, empty stderr, exit 0.
+- **The 1,000,000-iteration PNG fuzz surface had been testing nothing.** The
+  per-iteration `alloc_reset()` that bounds the never-free heap also invalidated
+  `sankoch`'s cached CRC-32 table (a lazy-init singleton holding a heap pointer),
+  so from iteration 2 onward the table aliased live decode memory. A return-code
+  tally showed **2999 of 3000** iterations dying at the signature check instead
+  of reaching the chunk walker, inflate, unfilter or the PLTE bounds. Every
+  `alloc_reset()` is now paired with `crc32_table = 0`; the post-fix tally is
+  identical to a no-reset run.
+- **The ANSI-injection sanitizer covered C0 but not C1.** A filename of
+  `9D 30 3B 50 57 4E 45 44 9C` — a complete C0-free `OSC 0;PWNED ST` — reached
+  stderr **byte-for-byte**, through the guard that exists to stop exactly that,
+  while its C0 spelling was correctly suppressed. The predicate now walks UTF-8
+  structure (rather than testing a flat byte range, which would break ordinary
+  non-Latin filenames) and rejects raw C1, the `C2 80`–`C2 9F` UTF-8 spelling,
+  and malformed UTF-8. A test asserting `a\x80b` was *safe* — justified as a
+  "UTF-8 ergonomics" relaxation — is superseded: a bare `0x80` has no lead byte,
+  so it is not valid UTF-8 and no legitimate filename produces it.
+- **Every `write(2)` to stdout was unchecked.** `kii img.png > out.ansi` on a
+  full filesystem exited **0** having written nothing, so `kii … > out && use out`
+  consumed the empty file. Short writes would have truncated the stream mid-row.
+  New `_kii_write_all` drains the buffer, retries `EINTR`, and both lanes report
+  `failed to write frame to stdout` and exit 1. SIGPIPE keeps its default
+  disposition deliberately.
+- **A JPEG could be told about the PNG § 11.2.2 bit-depth table.**
+  `CHITRA_ERR_UNSUPPORTED` mapped to `PNG_ERR_BITDEPTH`, but that chitra code
+  spans formats — including an Adobe APP14 transform, which is a JPEG. This was
+  the one path producing exactly the outcome `PNG_ERR_UNSUPPORTED`'s own comment
+  says the split prevents. Now maps to `PNG_ERR_UNSUPPORTED`;
+  `CHITRA_ERR_BIT_DEPTH` still maps to `PNG_ERR_BITDEPTH`.
+- **A 1-row terminal discarded its own valid column count.** The winsize result
+  was gated by one combined condition whose `term_rows > 1` clause scoped over
+  the whole assignment, so a successful detection reporting good columns was
+  thrown away wholesale and kii fell back to 80 — emitting a frame wider than the
+  terminal it had just measured.
+- **`_emit_bg_256_buf` diverged from the darshana twin it mirrors**, missing the
+  negative-`pos` guard darshana 0.9.3 added to all seven of its own `_buf`
+  composers — despite sitting in the same per-cell chain, taking the FG
+  composer's return value as its `pos`.
+- **A benchmark vanished instead of failing.** The three fixture-guarded decode
+  benches had no `else`, so the `1024²` row silently disappeared when its system
+  fixture stopped shipping, while `docs/benchmarks.md` kept quoting `647 ms` for
+  it. All three now print an explicit `SKIPPED` line.
+
+### Added
+- **`--color 8` now does something.** It had been parsed and range-validated
+  since M1 and then ignored, so `kii --color 8` emitted output byte-identical to
+  `--color 16` while its help text promised *"color tier: 8 or 16"*. The
+  quantizer's search is now bounded by `quant_set_tier`; the low 8 palette
+  entries *are* the 8-colour tier, so no second table exists. `--color 16` is
+  unchanged. **This changes `--color 8` output** — that is the repair.
+- 39 assertions: C1 sanitizer coverage in both encodings plus malformed-UTF-8
+  and boundary cases, the `--color` tier contract, the `downscale_to_rgb`
+  overflow guard, and the `_emit_bg_256_buf` negative-`pos` guard.
+- **`docs/audit/2026-08-25-audit.md`** — the P-1 report, including a
+  "What the sweep did NOT find" section and the refuted findings.
+
+### Changed
+- **`docs/benchmarks.md` gains a v1.5.1 re-baseline.** Every bench reproduces
+  within noise (a prior audit had speculated the 6.5.x toolchain removed an
+  instrument — it did not). Stage-splitting the render puts **~93 % of wall-clock
+  inside `sankoch`'s Huffman decoder**, which is O(bits × num_symbols) where the
+  canonical form is O(bits); a drop-in replacement measured **~3.7× end-to-end**
+  with byte-identical output. kii's own downscale + quantize + emit are together
+  **under 2 %**. Filed upstream — there is no meaningful latency work inside kii,
+  and the entry says so explicitly so nobody spends a cycle on it.
+- **Documentation corrected across nine files** where claims had outlived the
+  code: `SECURITY.md` (Adam7 + sub-byte depths described as *rejected* — false
+  since v1.2.2), `docs/guides/getting-started.md` (seven of twelve quoted error
+  messages unemittable since v1.2.0), `docs/architecture/README.md` item 005
+  (argued for keeping a function deleted at v1.2.0, citing a test file retired in
+  the same release), `CLAUDE.md` + `README.md` (BMP/GIF still *planned*; Status
+  block reading v1.0.3), `CONTRIBUTING.md` (pointed at the retired
+  `tests/kii.tcyr`, published v0.5.0 counts), `docs/development/state.md` (chafa
+  review listed as deferred though it closed at v1.0.0, linked to a filename that
+  has never existed, and a binary-size figure **4.6× low**), plus stale headers
+  and `--help` wording in `src/`.
+- **`docs/development/state.md` gains an "Upstream items owed to `sankoch`"
+  section** — the Huffman hot spot, the 16 MiB inflate cap that makes any PNG
+  above ~5.6 megapixels report `corrupt IDAT`, and the un-invalidatable
+  `crc32_table` singleton. All three are in vendored `lib/`, which kii must not
+  edit.
+- `PNG_ERR_CHUNK`'s inner `if/else` had two byte-identical arms; collapsed. The
+  dead `_print` helper — the only unreachable function in `src/` — removed.
+
 ## [1.5.0] — 2026-08-24
 
 **The format broadening — BMP + GIF arrive on a `chitra` re-pin, and kii's diagnostics

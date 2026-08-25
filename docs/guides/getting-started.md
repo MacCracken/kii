@@ -123,17 +123,38 @@ kii errors are explicit on stderr and exit 1. Common causes:
 | Stderr line | Cause |
 |---|---|
 | `<path>: cannot open file` | File doesn't exist or no read permission |
-| `<path>: not a PNG` | First 8 bytes don't match the PNG signature |
-| `<path>: malformed PNG header` | IHDR truncated, wrong length, or wrong type |
-| `<path>: CRC check failed` | Per-chunk CRC32 mismatch — file corruption or tampering |
-| `<path>: interlaced PNGs (Adam7) not supported in v0.x` | PNG uses Adam7 interlacing; not implemented at v1.0 |
-| `<path>: unsupported bit depth or color type (tier-1: 8/16-bit only)` | Sub-byte depth (1/2/4) or palette+16-bit (spec violation) |
-| `<path>: no IDAT chunks (nothing to decode)` | Structurally valid PNG with zero pixel data |
-| `<path>: DEFLATE decompression failed (corrupt IDAT)` | Inflate failed or produced wrong byte count |
+| `<path>: unrecognized image format (expected PNG, JPEG, BMP, or GIF)` | Signature matched none of the four |
+| `<path>: file exceeds size ceiling (max 256 MB)` | Input larger than `KII_MAX_RAW_BYTES`, rejected before the read |
+| `<path>: malformed PNG (bad chunk, ordering, or palette)` | PNG chunk length/type/order, IEND length, or palette violation |
+| `<path>: malformed JPEG (bad marker, segment, or entropy data)` | JPEG marker/segment framing or entropy stream |
+| `<path>: malformed BMP (bad DIB header, palette, or RLE stream)` | BMP header, palette bounds, or RLE walk |
+| `<path>: malformed GIF (bad descriptor or color table)` | GIF screen/image descriptor or colour table |
+| `<path>: malformed PNG (truncated chunk stream)` | PNG ended mid-chunk |
+| `<path>: truncated image (unexpected end of data)` | JPEG/BMP/GIF ended mid-stream |
+| `<path>: CRC check failed` | Per-chunk CRC32 mismatch — PNG only; corruption or tampering |
+| `<path>: unsupported JPEG feature (…)` | Progressive, arithmetic, 12-bit, non-baseline, CMYK, or an Adobe colour transform |
+| `<path>: unsupported BMP feature (…)` | Bit depth outside `{1,4,8,16,24,32}`, `BI_JPEG`/`BI_PNG`, or a bad channel mask |
+| `<path>: unsupported image feature (…)` | Unrecognized PNG critical chunk, compression method, or colour type |
+| `<path>: unsupported bit depth for this color type (PNG § 11.2.2)` | A depth/colour-type pair the PNG spec forbids |
+| `<path>: no IDAT chunks (nothing to decode)` | Structurally valid PNG with zero pixel data, or a GIF with no image descriptor |
+| `<path>: DEFLATE decompression failed (corrupt IDAT)` | Inflate failed, produced the wrong byte count, or a GIF LZW stream is corrupt |
 | `<path>: invalid PNG filter type (spec § 9 allows 0–4)` | Filter byte ∉ {0,1,2,3,4} |
-| `<path>: image dimensions exceed kii policy ceiling (max 4096×4096, 256 MB raw)` | IHDR claims too-large dimensions |
-| `<path>: IDAT total exceeds 1.5× inflated size (malformed or decompression bomb)` | IDAT accumulator over policy cap |
-| `<path>: DEFLATE ratio exceeds 1100:1 ceiling (decompression bomb)` | Compression ratio above DEFLATE's theoretical max |
+| `<path>: image dimensions exceed policy ceiling (…)` | Dimensions or ratio past the bomb-defence caps |
+| `<path>: failed to write frame to stdout` | write(2) to stdout failed — e.g. the destination filesystem is full |
+| `<path>: could not compute output geometry` | Degenerate source dimensions |
+
+Two warnings do **not** abort — the frame still renders and kii exits 0:
+
+| Stderr line | Meaning |
+|---|---|
+| `<path>: warning: incomplete PNG (no IEND chunk seen)` | Pixels decoded, but the stream never closed (spec § 5.3 tolerance) |
+| `<path>: warning: incomplete JPEG (truncated scan or no EOI marker)` | Partial scan; the frame is what decoded |
+| `<path>: warning: incomplete GIF (truncated frame — tail zero-filled)` | LZW ended early; the tail is zero-filled |
+
+Interlaced (Adam7) PNGs and sub-byte bit depths **are** supported — since v1.2.2.
+This table listed them as rejections for three releases after that stopped being
+true; corrected at the v1.5.1 P-1 sweep along with six other rows naming messages
+kii has not emitted since the v1.2.0 decoder re-fold.
 
 If the filename itself contains control bytes (a possible
 shell-injection vector), kii substitutes

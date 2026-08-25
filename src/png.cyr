@@ -74,7 +74,12 @@ var PNG_ERR_NOT_PNG   = 3;  # Signature did not match / empty file
 var PNG_ERR_HEADER    = 4;  # Malformed chunk: length/type/order/IEND-len/palette (ChitraErr BAD_CHUNK)
 var PNG_ERR_CRC       = 5;  # Chunk CRC32 mismatch
 var PNG_ERR_CHUNK     = 6;  # Truncated chunk stream (ChitraErr TRUNCATED)
-var PNG_ERR_INTERLACE = 7;  # interlace == 1 (Adam7) — not supported (chitra 0.2.1)
+var PNG_ERR_INTERLACE = 7;  # Unrecognized interlace METHOD (the spec allows only
+                            # 0 = none and 1 = Adam7). NOT "Adam7 unsupported" — this
+                            # comment said that, and blamed chitra 0.2.1, for three
+                            # releases after chitra 0.2.1 was the release that ADDED
+                            # Adam7. kii has decoded interlaced PNG since v1.2.2 and
+                            # tests/decode.tcyr asserts PNG_OK for it. (P-1, v1.5.1)
 var PNG_ERR_BITDEPTH  = 8;  # Sub-byte depth {1,2,4} or unsupported color_type
 var PNG_ERR_NO_IDAT   = 9;  # Zero IDAT chunks (structurally valid but no pixel data)
 var PNG_ERR_INFLATE   = 10; # zlib_decompress failed or produced the wrong size
@@ -203,7 +208,15 @@ fn _kii_map_chitra_err(code): i64 {
     if (code == CHITRA_ERR_SIGNATURE)   { return PNG_ERR_NOT_PNG; }
     if (code == CHITRA_ERR_TRUNCATED)   { return PNG_ERR_CHUNK; }
     if (code == CHITRA_ERR_BAD_CHUNK)   { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_UNSUPPORTED) { return PNG_ERR_BITDEPTH; }
+    # P-1 (v1.5.1): was PNG_ERR_BITDEPTH, which made this the one path that
+    # could tell a JPEG about the PNG § 11.2.2 bit-depth table — the exact
+    # outcome PNG_ERR_UNSUPPORTED's own comment (above) says the split exists
+    # to prevent. CHITRA_ERR_UNSUPPORTED spans formats by design (chitra ADR
+    # 0010 § 3: an unrecognised PNG critical chunk, a non-zero PNG compression
+    # or filter method, an unrecognised colour type, OR an Adobe APP14 colour
+    # transform chitra declines) and its shared meaning is "the file is valid;
+    # chitra declines it" — which is PNG_ERR_UNSUPPORTED's meaning exactly.
+    if (code == CHITRA_ERR_UNSUPPORTED) { return PNG_ERR_UNSUPPORTED; }
     if (code == CHITRA_ERR_INFLATE)     { return PNG_ERR_INFLATE; }
     if (code == CHITRA_ERR_OOM)         { return PNG_ERR_IDAT_TOO_LARGE; }
     if (code == CHITRA_ERR_CRC)         { return PNG_ERR_CRC; }

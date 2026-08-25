@@ -27,7 +27,10 @@
 #    chitra allocate its frame/quant/huff scratch (~22 KB) before the marker
 #    walk fails, so each PNG/JPEG decode iter calls alloc_reset() to rewind
 #    the never-free bump allocator — without that the heap would grow
-#    unboundedly (~22 GB over 10⁶ JPEG iters). Deep entropy/IDCT decode
+#    unboundedly (~22 GB over 10⁶ JPEG iters). Every alloc_reset() is paired
+#    with `crc32_table = 0` — see fuzz_png_iter; without it the reset
+#    invalidates sankoch's cached CRC table and voids the surface.
+#    Deep entropy/IDCT decode
 #    fuzzing is chitra's own suite's job (the decoder's owner), matching the
 #    re-fold's division of labor.
 #
@@ -298,7 +301,21 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
     # the never-free allocator grows ~1 KB/iter → ~1 GB over 10⁶ iters. Safe
     # here: the emit loop (the only cross-iter pstruct) has already finished
     # before the decode loops run, and the per-iter scratch is stack-local.
+    # P-1 (v1.5.1): alloc_reset() alone SILENTLY VOIDED this surface.
+    # sankoch caches its CRC-32 table as a lazy-init singleton holding a HEAP
+    # pointer (lib/sankoch.cyr:327 `var crc32_table = 0;` + :334-337
+    # `if (crc32_table == 0) { crc32_table = _sankoch_alloc(16384); ... }`).
+    # alloc_reset() rewinds the bump allocator underneath that pointer, so from
+    # iteration 2 onward the cached table ALIASED live decode memory and the
+    # decoder mis-parsed everything: a return-code tally showed 2999 of 3000
+    # iterations dying at the signature check (PNG_ERR_NOT_PNG) instead of
+    # reaching the chunk walker, inflate, unfilter or the PLTE bounds. Clearing
+    # the cache forces a re-init into the fresh heap and restores full coverage
+    # — the tally with this line is byte-for-byte the same as with no reset at
+    # all (1515 NOT_PNG from the 50%-random half / 1387 HEADER / 97 CHUNK /
+    # 1 NO_IDAT), while the heap stays bounded.
     alloc_reset();
+    crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
 }
 
@@ -325,6 +342,7 @@ fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
     var pstruct[160];
     kii_decode_png("/tmp/kii-fuzz-jpeg.bin", &pstruct);
     alloc_reset();                            # bound the never-free heap (see above)
+    crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
 }
 
@@ -351,6 +369,7 @@ fn fuzz_bmp_iter(scratch_buf, scratch_cap): i64 {
     var pstruct[160];
     kii_decode_png("/tmp/kii-fuzz-bmp.bin", &pstruct);
     alloc_reset();                            # bound the never-free heap
+    crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
 }
 
@@ -380,6 +399,7 @@ fn fuzz_gif_iter(scratch_buf, scratch_cap): i64 {
     var pstruct[160];
     kii_decode_png("/tmp/kii-fuzz-gif.bin", &pstruct);
     alloc_reset();                            # bound the never-free heap
+    crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
 }
 

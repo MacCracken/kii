@@ -10,7 +10,7 @@
 
 ## Project Identity
 
-**kii** (Hawaiian: *image / picture / likeness*) — image → ANSI/ASCII-art converter for terminal display. Cyrius-native equivalent of `chafa` / `jp2a` / `viu`. Reads raster image input (PNG + baseline JPEG; GIF, BMP planned), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to terminal cols × rows.
+**kii** (Hawaiian: *image / picture / likeness*) — image → ANSI/ASCII-art converter for terminal display. Cyrius-native equivalent of `chafa` / `jp2a` / `viu`. Reads raster image input (PNG, baseline JPEG, BMP, and GIF first-frame — all four via the `chitra` substrate), quantizes to a terminal-renderable color palette + glyph set, emits ANSI escape sequences sized to terminal cols × rows.
 
 - **Type**: Binary (user-facing CLI tool)
 - **License**: GPL-3.0-only

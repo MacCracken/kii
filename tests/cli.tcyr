@@ -217,10 +217,43 @@ fn main() {
     assert_eq(kii_path_has_control_bytes("a\x20b"),             0, "SPACE (0x20) → safe (boundary)");
     # Boundary: 0x7E (~) is the last 7-bit printable byte; must NOT trip.
     assert_eq(kii_path_has_control_bytes("a\x7eb"),             0, "TILDE (0x7E) → safe (boundary)");
-    # Boundary: 0x80 is the first UTF-8 continuation byte — must
-    # NOT trip (the audit doc's initial recommendation to reject
-    # 0x80–0x9F was relaxed for UTF-8 ergonomics).
-    assert_eq(kii_path_has_control_bytes("a\x80b"),             0, "0x80 (UTF-8 continuation) → safe (UTF-8 pass-through)");
+    # Boundary: 0x80. SUPERSEDED at the v1.5.1 P-1 sweep — this used to
+    # assert `safe`, on the stated grounds that "the audit doc's initial
+    # recommendation to reject 0x80–0x9F was relaxed for UTF-8 ergonomics".
+    # That relaxation rested on a false premise: a bare 0x80 has no lead byte,
+    # so it is not valid UTF-8 in the first place and no legitimate filename
+    # produces it. Meanwhile 0x80–0x9F IS the C1 control range, and a terminal
+    # in 8-bit mode reads 0x9B as CSI and 0x9D as OSC — so the "ergonomic"
+    # relaxation was the entire ANSI-injection hole. The predicate now walks
+    # UTF-8 structure instead of testing a flat range, which rejects stray C1
+    # bytes while passing every real multi-byte sequence (asserted above).
+    assert_eq(kii_path_has_control_bytes("a\x80b"),             1, "0x80 (stray C1 / bare continuation) → unsafe");
+
+    test_group("P-1 (v1.5.1) — C1 control bytes in both encodings");
+    # 8-bit-mode C1 introducers: the exact twins of the C0 sequences above.
+    assert_eq(kii_path_has_control_bytes("a\x9Bb"),             1, "0x9B (C1 CSI) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x9Db"),             1, "0x9D (C1 OSC) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x90b"),             1, "0x90 (C1 DCS) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\x9Cb"),             1, "0x9C (C1 ST) → unsafe");
+    # The full OSC window-title injection that reached stderr byte-for-byte
+    # before this fix — the C1 spelling of the CVE-2021-25743 analog above.
+    assert_eq(kii_path_has_control_bytes("\x9D0;PWNED\x9C.png"), 1,
+    "C1 OSC window-title injection → unsafe");
+    # UTF-8-ENCODED C1: C2 80..C2 9F decodes to U+0080..U+009F, which a UTF-8
+    # terminal may honour. Catching only the raw form would leave this open.
+    assert_eq(kii_path_has_control_bytes("a\xC2\x9Bb"),          1, "C2 9B (UTF-8-encoded CSI) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\xC2\x80b"),          1, "C2 80 (UTF-8-encoded C1 low) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\xC2\x9Fb"),          1, "C2 9F (UTF-8-encoded C1 high) → unsafe");
+    # ...but C2 A0 (U+00A0 NBSP) is past the C1 block and stays safe — the
+    # guard must not swallow the rest of Latin-1 Supplement.
+    assert_eq(kii_path_has_control_bytes("a\xC2\xA0b"),          0, "C2 A0 (U+00A0 NBSP) → safe");
+    assert_eq(kii_path_has_control_bytes("caf\xC3\xA9.png"),     0, "C3 A9 (é) → safe");
+    # Malformed UTF-8 is refused: if we cannot tell what the terminal will do
+    # with the bytes, we do not echo them.
+    assert_eq(kii_path_has_control_bytes("a\xC3"),              1, "truncated 2-byte sequence → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\xE7\x94"),           1, "truncated 3-byte sequence → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\xFFb"),             1, "0xFF (never valid UTF-8) → unsafe");
+    assert_eq(kii_path_has_control_bytes("a\xC0\x80b"),          1, "C0 80 (overlong NUL) → unsafe");
 
     return assert_summary();
 }

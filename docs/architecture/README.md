@@ -92,11 +92,24 @@ kii uses darshana 0.5.3 for foreground 256-color escapes (`tty_fg_256_buf`), the
 
 `src/emit.cyr` carries a kii-local `_emit_bg_256_buf` that mirrors `tty_fg_256_buf`'s shape but emits `CSI 48;5;Nm`. The extract-to-darshana trigger is **a second consumer in the AGNOS surface needing the same BG-256 helper** (the standard AGNOS extract-on-2nd-consumer pattern). Until then, the local copy is intentional duplication.
 
-### 005 — quantize_nearest_image kept for M4-test backward compat
+### 005 — the quantizer has one entry point, and `--color` selects the tier
 
-`src/quant.cyr` exposes both `quantize_nearest_image` (the M4 image-wide entry, walks `STRUCT_PIXELS_BUF` with per-color_type dispatch) AND the M5+ `quantize_downscaled` (reads `STRUCT_DOWNSCALED_BUF`, an already-RGB-normalized buffer). The production pipeline (M5+) routes through the latter; the former is no longer in `main.cyr`'s call graph.
+`src/quant.cyr` exposes `quantize_nearest_rgb` (per-pixel, used directly by the
+`--mode ascii` lane for each cell's foreground) and `quantize_downscaled` (the
+pstruct-aware wrapper the half-block pipeline uses). Both read the module-scope
+tier set by `quant_set_tier`, which `main.cyr` drives from `--color`: 16 scans
+the whole palette, 8 restricts to the normal-intensity half. The low 8 entries
+*are* the 8-colour tier, so no second table exists.
 
-**It stays anyway**. The M4 test surface (`tests/kii.tcyr` lines ~1108–1202) exercises the per-color_type pixel-extraction code paths in `quantize_nearest_image`. The same extraction logic now lives in `downscale.cyr`'s `_extract_rgb`, so the M4 tests provide independent coverage of equivalent code paths. Removing `quantize_nearest_image` would lose that coverage without saving meaningful binary size (DCE eliminates it from release builds when `CYRIUS_DCE=1`).
+**Superseded at v1.5.1.** This item used to argue that a third function,
+`quantize_nearest_image`, "stays anyway" for M4-test backward compat, citing
+`tests/kii.tcyr` lines ~1108–1202. Both had already been deleted — the function
+in the v1.2.0 PNG re-fold (its per-`color_type` dispatch had no live inputs once
+chitra normalized everything to RGBA8) and the monolithic test file in the same
+release, when the suite split into five. The item was therefore justifying the
+retention of code that did not exist, on the strength of coverage that did not
+exist, and `src/quant.cyr` carries an explicit tombstone saying so. The genuinely
+load-bearing fact is the one above.
 
 ### 006 — non-TTY default is the BBS-era 80×24 frame
 

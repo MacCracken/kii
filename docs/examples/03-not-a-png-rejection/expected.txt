@@ -1,11 +1,16 @@
 stderr:
-  /etc/hostname: not a PNG
+  /etc/hostname: unrecognized image format (expected PNG, JPEG, BMP, or GIF)
 
 stdout:
   exit code: 1
 
-The `not a PNG` diagnostic fires when the first 8 bytes of the file
-don't match the PNG signature (89 50 4E 47 0D 0A 1A 0A). Per
-`docs/guides/getting-started.md` § When kii rejects an image, this
-is one of ~12 distinct error paths kii can take; each produces a
-specific diagnostic so users can tell what failed.
+The diagnostic fires when the file's leading bytes match none of the
+four signatures kii accepts: PNG (89 50 4E 47 0D 0A 1A 0A), JPEG SOI
+(FF D8), BMP ("BM"), or GIF ("GIF87a" / "GIF89a"). Per
+`docs/guides/getting-started.md` § When kii rejects an image, this is
+one of ~20 distinct error paths; each produces a specific diagnostic so
+users can tell what failed.
+
+(Corrected at the v1.5.1 P-1 sweep: this file expected `not a PNG`, a
+message kii stopped emitting at the v1.2.0 decoder re-fold — so running
+the example's own `run.sh` falsified its own `expected.txt`.)

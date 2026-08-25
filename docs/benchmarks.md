@@ -117,3 +117,51 @@ total** across five surfaces, all clean in **~16.4 s wall-clock**:
 | **png-decoder** | **1,000,000** | `png_decode_structure` against random bytes (50% prefixed with valid sig+IHDR) |
 
 All five report zero crashes / contract violations.
+
+## v1.5.1 — P-1 re-baseline + the real hotspot
+
+Host: x86_64 Linux, Cyrius `6.5.35`, chitra `1.0.0`, measured timer floor
+1.33 µs (subtracted from every sample). Re-run because a dependency audit
+had speculated the 6.5.x toolchain removed a bench instrument — **it did
+not**; every bench reproduces within noise of its recorded value.
+
+| Bench | Iterations | v1.5.1 | Previously recorded | Delta |
+|---|---:|---:|---:|---|
+| `quantize_nearest_rgb @ 1024×1024` | 1,048,576 | **276 ns** | 269 ns | noise |
+| `end-to-end RAMGON.png → 80×24` | 50 | **660 ms** | 761 ms | −13 % (toolchain) |
+| `end-to-end RAMGON.png → 120×40` | 30 | **662 ms** | 769 ms | −14 % |
+| `end-to-end RAMGON.png → 200×60` | 20 | **666 ms** | 771 ms | −14 % |
+| `png_decode (256² class)` — archlinux-logo | 50 | **2.17 ms** | 1.8 ms | +20 % |
+| `png_decode (1024² class)` — starfield | — | **SKIPPED** | 647 ms | fixture absent |
+| `png_decode (2048² class)` — elarun 2560×1600 | 10 | **484 ms** | 474 ms | noise |
+
+### The 1024² row was silently vanishing
+
+`tests/kii.bcyr` guards each system-fixture bench with
+`if (kii_decode_png(path, &probe) == PNG_OK) { ... }` and had **no else**.
+`/usr/share/grub/themes/starfield/starfield.png` no longer ships on this host,
+so that row simply disappeared from the output while this document went on
+quoting `647 ms` for it — a number nobody could reproduce and nothing flagged.
+All three guarded benches now print an explicit `SKIPPED: fixture not present
+on this host` line. A benchmark that can vanish is worse than one that fails.
+
+### Where the time actually goes
+
+Stage-splitting the end-to-end render (RAMGON 1152×925 → 80×24) puts
+**~93 % of wall-clock inside `sankoch`'s Huffman decoder**, not in kii at all.
+`_huff_decode` (`lib/sankoch.cyr` ~:1205-1215) nests its symbol scan inside the
+bit-length loop and rescans from the first symbol at every code length, making
+it O(bits × num_symbols) where the canonical
+`mincode`/`maxcode`/`valptr` form is O(bits). A drop-in replacement was measured
+at **~3.7× end-to-end** with byte-identical output.
+
+kii's own three stages — downscale, quantize, emit — are collectively **under
+2 %** of the render. Concretely: the output cell count grows 6.25× from 80×24 to
+200×60 and wall-clock moves ~1 %, which is the same observation the v0.7.0 entry
+made and the reason its "Implication" line still points the right way.
+
+**Implication**: there is no meaningful latency work available *inside kii*.
+The one high-value optimization is upstream in `sankoch`, and it is filed there
+(see `docs/development/state.md` § Upstream items). Optimizing kii's resampler
+or quantizer would be tuning 2 % of the problem. This entry exists so nobody
+spends a cycle on that.

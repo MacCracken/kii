@@ -23,7 +23,7 @@
 | `CODE_OF_CONDUCT.md` | 1 | 2026-05-22 | Contributor Covenant 2.1 pointer. |
 | `SECURITY.md` | 1 | 2026-05-22 | Fresh. Threat model explicit; image-decoder hardening discipline captured. |
 | `cyrius.cyml` | 1 | 2026-06-27 (v1.4.0) | `[deps.chitra] tag = "0.3.0"` (re-pin comment refreshed for the JPEG wiring); `[deps.darshana] 0.8.1` + `[deps.cmdit] 1.1.0`; version interpolates `${file:VERSION}` = 1.4.0. |
-| `docs/development/state.md` | 1 | 2026-08-24 (v1.5.0) | v1.5.0 snapshot: **511 assertions**, BMP + GIF via chitra 1.0.0 (zero decode change), 6,011,000 fuzz iters across 8 surfaces (~136 MB peak), toolchain 6.5.35, `lib/` 104 → 39 files. **Bump per release.** |
+| `docs/development/state.md` | 1 | 2026-08-25 (v1.5.1) | v1.5.0 snapshot: **511 assertions**, BMP + GIF via chitra 1.0.0 (zero decode change), 6,011,000 fuzz iters across 8 surfaces (~136 MB peak), toolchain 6.5.35, `lib/` 104 → 39 files. **Bump per release.** |
 | `docs/benchmarks.md` | 1 | 2026-05-23 (v0.8.0 — M7d capture) | M4 scalar + M5/M6 end-to-end (3 sizes) + M7(d) decode-latency matrix + M7(b) fuzz-coverage summary. No v1.0 perf-critical changes; no refresh needed. |
 | `docs/development/roadmap.md` | 1 | 2026-06-27 (v1.4.0) | Post-v1 shipped table extended through v1.4.0 (JPEG); "current: v1.4.0"; tier-2 color re-targeted v1.4.0 → v1.5.0; out-of-scope + ahead sections reflect baseline JPEG shipped, progressive/GIF/BMP next via chitra. |
 | `docs/audit/2026-05-22-audit.md` | 1 | 2026-05-23 (v1.0.0 close + Appendix A) | 140 CVE/issue rows + 10 kii-specific findings + § Appendix A W3C PngSuite walk (added at M8 close). Load-bearing reference for ADR 0002. |
@@ -31,6 +31,7 @@
 | `docs/adr/README.md` | 2 | 2026-08-24 (v1.5.0) | Index lists ADRs 0001–0009 (0009 BMP/GIF-via-chitra added). |
 | `docs/adr/0008-jpeg-via-chitra.md` | 2 | 2026-08-24 (v1.5.0) | JPEG via chitra 0.3.0: signature-based format dispatch + JPEG validation posture (no CRC → structural). Realizes ADR 0006's JPEG line. Still accurate at v1.5.0; extended by ADR 0009. |
 | `docs/adr/0009-bmp-gif-via-chitra.md` | 2 | 2026-08-24 (v1.5.0) | **NEW.** BMP + GIF via chitra 1.0.0 — the re-pin that needed no decode change; sets the rule that a format kii renders is a format kii must be able to name in an error. Extends ADR 0008, discharges ADR 0006. |
+| `docs/audit/2026-08-25-audit.md` | 2 | 2026-08-25 (v1.5.1) | **NEW.** The P-1 sweep: 41 findings raised / 2 refuted / 39 folded into 16 work items, plus a "What the sweep did NOT find" section, the refuted findings, and four accepted risks (TAB/LF allow-list, sankoch's 16 MiB inflate cap, the sankoch Huffman hot spot, the deferred `png.*` → `image.*` rename). |
 | `docs/adr/template.md` | 2 | 2026-05-22 (cyrius init template) | Fresh. |
 | `docs/adr/0001-png-decoder-in-repo.md` | 2 | 2026-05-22 (v0.7.0 — first ADR) | First ADR; captures the M3-era decision to keep the PNG decoder in-repo until a 2nd consumer surfaces. |
 | `docs/adr/0002-security-model.md` | 2 | 2026-05-23 (v0.8.0 close) | Threat model + M7(c) hardening commitments (C1–C4) + accepted residual risks. Cross-links audit doc + SECURITY.md. |
@@ -67,7 +68,14 @@
 - **Marketplace recipe in zugot**: depends on zugot tooling.
 - **Three sankoch upstream items** (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers): file as sankoch issues.
 - **CI bench step**: build-only would catch bitrot without per-PR timing noise.
-- **Stale-claim debt found by the v1.5.0 dependency audit (not caused by it)**: `src/png.cyr`'s `PNG_ERR_INTERLACE` comment still reads "Adam7 — not supported (chitra 0.2.1)" and `SECURITY.md` still claims "Adam7 interlacing + 1/2/4-bit depths both rejected with distinct errors". **Both have been false since v1.2.2** — chitra decodes Adam7 and every sub-byte depth, and `tests/decode.tcyr` asserts `PNG_OK` for exactly those cases. Also `tests/decode.tcyr`'s "JPEG seen_iend forced 1" label is stale: chitra 0.7.0 made that value real rather than forced. Fold into the next doc sweep.
+- **P-1 sweep (v1.5.1) closed most of this ledger's debt.** `SECURITY.md`,
+  `CONTRIBUTING.md`, `README.md`, `CLAUDE.md`, `docs/guides/getting-started.md`,
+  `docs/architecture/README.md`, `docs/benchmarks.md` and
+  `docs/development/state.md` were each walked claim-by-claim against the tree and
+  corrected; see [`docs/audit/2026-08-25-audit.md`](audit/2026-08-25-audit.md)
+  § A-11. The stale-claim debt noted below from the v1.5.0 dep audit is **closed**.
+  What remains open is the `docs/examples/` set and ADR 0002's C1–C4 commitment
+  table, whose code anchors moved in the v1.2.0 re-fold.
 - **Ledger reconciliation debt (v1.1 → v1.4)**: this ledger lapsed after the v1.0.0 close — several rows still carry v1.0-era dates/facts (`README.md` Status/Substrate blocks, `benchmarks.md`, `guides/getting-started.md`, `examples/`, `architecture/README.md`, the `0001–0007` ADR rows) that postdate the cmdit re-fold (v1.1), the chitra re-fold (v1.2), and the `--mode ascii` lanes (v1.3). The v1.4.0 cut refreshed only the rows it directly touched (the JPEG wiring). A full walk of every Tier-1/2 row against current reality is owed and tracked here.
 
 ## Refresh discipline

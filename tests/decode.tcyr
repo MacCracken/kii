@@ -369,7 +369,15 @@ fn main() {
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_SIGNATURE),   PNG_ERR_NOT_PNG,        "SIGNATURE → NOT_PNG");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_TRUNCATED),   PNG_ERR_CHUNK,          "TRUNCATED → CHUNK");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_BAD_CHUNK),   PNG_ERR_HEADER,         "BAD_CHUNK → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_UNSUPPORTED), PNG_ERR_BITDEPTH,       "UNSUPPORTED → BITDEPTH");
+    # P-1 (v1.5.1): was PNG_ERR_BITDEPTH. CHITRA_ERR_UNSUPPORTED spans formats
+    # (unrecognised PNG critical chunk / non-zero compression or filter method /
+    # unrecognised colour type / an Adobe APP14 transform chitra declines), so
+    # routing it to BITDEPTH was the one path that could tell a JPEG about the
+    # PNG § 11.2.2 bit-depth table — the exact outcome png.cyr says the split
+    # between these two codes exists to prevent.
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_UNSUPPORTED), PNG_ERR_UNSUPPORTED,    "UNSUPPORTED → UNSUPPORTED (not BITDEPTH)");
+    # The genuine bit-depth code still maps to BITDEPTH — the split is the point.
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BIT_DEPTH),   PNG_ERR_BITDEPTH,       "BIT_DEPTH → BITDEPTH (unchanged)");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE),     PNG_ERR_INFLATE,        "INFLATE → INFLATE");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_OOM),         PNG_ERR_IDAT_TOO_LARGE, "OOM → IDAT_TOO_LARGE");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_CRC),         PNG_ERR_CRC,            "CRC → CRC");

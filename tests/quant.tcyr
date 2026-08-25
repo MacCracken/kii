@@ -238,6 +238,56 @@ fn main() {
     assert_eq(quantize_downscaled(&pstr_qun), 0 - 1,
               "quantize_downscaled rejects DOWNSCALED_BUF == 0");
 
+    # ---- P-1 (v1.5.1): the --color tier is actually consumed --------
+    # Until 1.5.1 `--color 8` was parsed, range-validated, then dropped —
+    # `kii --color 8` emitted output byte-identical to `--color 16`.
+    test_group("P-1 (v1.5.1) — quant tier: setter contract");
+    assert_eq(quant_tier(), 16, "default tier is 16");
+    assert_eq(quant_set_tier(8),  8,  "set 8 → 8");
+    assert_eq(quant_tier(),       8,  "tier now 8");
+    assert_eq(quant_set_tier(16), 16, "set 16 → 16");
+    assert_eq(quant_tier(),       16, "tier back to 16");
+    # A value outside {8,16} must be IGNORED, never widen the loop past the
+    # palette table — the guard that keeps a bad tier from reading OOB.
+    assert_eq(quant_set_tier(0),    16, "0 ignored → stays 16");
+    assert_eq(quant_set_tier(9999), 16, "9999 ignored → stays 16");
+    assert_eq(quant_set_tier(0 - 1),16, "negative ignored → stays 16");
+    assert_eq(quant_tier(),         16, "tier unchanged after bad sets");
+
+    test_group("P-1 (v1.5.1) — quant tier: 8 restricts to the low half");
+    # The bright entries (8..15) must be unreachable at tier 8. Bright white
+    # (255,255,255) is entry 15 at tier 16 and must fall back to entry 7
+    # (170,170,170), the nearest normal-intensity colour.
+    assert_eq(quantize_nearest_rgb(255, 255, 255), 15, "tier 16: pure white → 15");
+    quant_set_tier(8);
+    assert_eq(quantize_nearest_rgb(255, 255, 255),  7, "tier 8: pure white → 7 (bright half excluded)");
+    # These two land on entry 3 (yellow/brown, 170,85,0), not on the
+    # "obvious" hue — worth pinning precisely because it is counter-intuitive.
+    # Bright red (255,85,85): vs entry 1 (170,0,0) = 85²+85²+85² = 21675, but
+    # vs entry 3 (170,85,0) = 85²+0+85² = 14450, because entry 3 already
+    # carries the G=85 the colour has. Entry 3 wins.
+    assert_eq(quantize_nearest_rgb(255,  85,  85),  3, "tier 8: bright red → 3 (yellow/brown is nearer than red)");
+    # Bright green (85,255,85): entry 2 (0,170,0) and entry 6 (0,170,170) tie
+    # at 21675; the loop's strict `<` keeps the lower index.
+    assert_eq(quantize_nearest_rgb( 85, 255,  85),  2, "tier 8: bright green → 2 (ties resolve to lowest index)");
+    # Dark grey (85,85,85): vs entry 0 (0,0,0) = 21675, vs entry 3 = 14450.
+    assert_eq(quantize_nearest_rgb( 85,  85,  85),  3, "tier 8: dark grey → 3 (not black)");
+    # Every tier-8 result must be in [0,7] across the whole RGB cube corners.
+    var tier8_ok = 1;
+    var tc = 0;
+    while (tc < 8) {
+        var cr = 0; if (tc & 1 != 0) { cr = 255; }
+        var cg = 0; if (tc & 2 != 0) { cg = 255; }
+        var cb = 0; if (tc & 4 != 0) { cb = 255; }
+        var qi = quantize_nearest_rgb(cr, cg, cb);
+        if (qi < 0 || qi > 7) { tier8_ok = 0; }
+        tc = tc + 1;
+    }
+    assert_eq(tier8_ok, 1, "tier 8: every cube corner quantizes into [0,7]");
+    # Restore the default so later groups (and any future additions) see 16.
+    quant_set_tier(16);
+    assert_eq(quantize_nearest_rgb(255, 255, 255), 15, "tier restored: white → 15 again");
+
     return assert_summary();
 }
 
