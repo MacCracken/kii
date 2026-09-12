@@ -124,13 +124,13 @@ fn _fuzz_build_arg(buf, max_len): i64 {
         store8(buf + 1, 0x2D);
         off = 2;
     } else { if (mode == 1) {
-        # "-x" / "-xy" shape (bundled rejection path is reachable)
-        store8(buf + 0, 0x2D);
-        off = 1;
-    } else {
-        # bare positional / weird bytes
-        off = 0;
-    } }
+            # "-x" / "-xy" shape (bundled rejection path is reachable)
+            store8(buf + 0, 0x2D);
+            off = 1;
+        } else {
+            # bare positional / weird bytes
+            off = 0;
+        } }
     var body_len = 1 + _fuzz_rand_range(max_len - off - 1);
     var i = 0;
     while (i < body_len) {

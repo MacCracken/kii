@@ -131,7 +131,7 @@ fn main() {
     store64(&pstr_d_un + STRUCT_COLOR_TYPE_OFFSET,  6);
     store64(&pstr_d_un + STRUCT_PIXELS_BUF_OFFSET,  0);
     assert_eq(downscale_to_rgb(&pstr_d_un, 4, 4), 0 - 1,
-              "pixels_buf == 0 → -1 (ungated call)");
+      "pixels_buf == 0 → -1 (ungated call)");
     # Bad dims are rejected before pstruct is even read; a populated
     # ct6 source confirms the dim guard, not a decode failure.
     var pstr_d_bd[160];
@@ -146,9 +146,9 @@ fn main() {
     # dimensions, expected byte count (80 × 48 × 3 = 11,520).
     var pstr_d_ram[160];
     assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_d_ram), PNG_OK,
-              "RAMGON.png → PNG_OK (kii_decode_png)");
+      "RAMGON.png → PNG_OK (kii_decode_png)");
     assert_eq(downscale_to_rgb(&pstr_d_ram, 80, 48), 0,
-              "RAMGON 1152x925 → 80x48 downscale → 0");
+      "RAMGON 1152x925 → 80x48 downscale → 0");
     assert_eq(load64(&pstr_d_ram + STRUCT_DOWNSCALED_W_OFFSET), 80,  "RAMGON dst_w = 80");
     assert_eq(load64(&pstr_d_ram + STRUCT_DOWNSCALED_H_OFFSET), 48,  "RAMGON dst_h = 48");
     var d_ram_buf = load64(&pstr_d_ram + STRUCT_DOWNSCALED_BUF_OFFSET);
@@ -178,7 +178,7 @@ fn main() {
     test_group("v1.4.0 — JPEG render e2e (gradient.jpg → downscale → quantize → emit)");
     var pstr_jr[160];
     assert_eq(kii_decode_png("tests/fixtures/gradient.jpg", &pstr_jr), PNG_OK,
-              "gradient.jpg → PNG_OK");
+      "gradient.jpg → PNG_OK");
     assert_eq(downscale_to_rgb(&pstr_jr, 16, 8), 0, "JPEG 16x16 → 16x8 downscale → 0");
     assert_eq(load64(&pstr_jr + STRUCT_DOWNSCALED_W_OFFSET), 16, "JPEG dst_w = 16");
     assert_eq(quantize_downscaled(&pstr_jr), 0, "JPEG quantize_downscaled → 0");
@@ -207,7 +207,7 @@ fn main() {
     test_group("v1.5.0 — BMP render e2e (gradient.bmp → downscale → quantize → emit)");
     var pstr_br[160];
     assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_br), PNG_OK,
-              "gradient.bmp → PNG_OK");
+      "gradient.bmp → PNG_OK");
     assert_eq(load64(&pstr_br + STRUCT_COLOR_TYPE_OFFSET), 6, "BMP normalized to ct6");
     assert_eq(downscale_to_rgb(&pstr_br, 16, 8), 0, "BMP 16x16 → 16x8 downscale → 0");
     assert_eq(load64(&pstr_br + STRUCT_DOWNSCALED_W_OFFSET), 16, "BMP dst_w = 16");
@@ -229,7 +229,7 @@ fn main() {
     test_group("v1.5.0 — GIF render e2e (color.gif → downscale → quantize → emit)");
     var pstr_gr[160];
     assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_gr), PNG_OK,
-              "color.gif → PNG_OK");
+      "color.gif → PNG_OK");
     assert_eq(load64(&pstr_gr + STRUCT_COLOR_TYPE_OFFSET), 6, "GIF normalized to ct6");
     assert_eq(downscale_to_rgb(&pstr_gr, 16, 8), 0, "GIF 16x16 → 16x8 downscale → 0");
     assert_eq(quantize_downscaled(&pstr_gr), 0, "GIF quantize_downscaled → 0");
@@ -269,14 +269,14 @@ fn main() {
     # 1x1 PNG wrapped to a 12-byte allocation and dumped core on BOTH lanes.
     var pstr_ov[160];
     assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_ov), PNG_OK,
-              "overflow fixture decodes");
+      "overflow fixture decodes");
     # 2^62 - 2: (2^62-2)^2 * 3 wraps to exactly 12 mod 2^64.
     assert_eq(downscale_to_rgb(&pstr_ov, 4611686018427387902, 4611686018427387902), 0 - 1,
-              "wrapping dst_w*dst_h*3 → -1, not a 12-byte alloc");
+      "wrapping dst_w*dst_h*3 → -1, not a 12-byte alloc");
     assert_eq(downscale_to_rgb(&pstr_ov, 9223372036854775807, 2), 0 - 1,
-              "i64-max width → -1");
+      "i64-max width → -1");
     assert_eq(downscale_to_rgb(&pstr_ov, 2, 9223372036854775807), 0 - 1,
-              "i64-max height → -1");
+      "i64-max height → -1");
     # The guard must not reject anything alloc would have honoured: a real
     # geometry still succeeds.
     assert_eq(downscale_to_rgb(&pstr_ov, 16, 8), 0, "ordinary geometry still succeeds");
@@ -421,24 +421,24 @@ fn main() {
     # 1152x925 (RAMGON) with width_flag=80 → 80 cols, 32 rows
     # (= 64 source rows). dst_rows = (925 × 80) / (1152 × 2) = 32.
     assert_eq(_kii_compute_target_geometry(1152, 925, 80, &g_w, &g_sr), 0,
-              "RAMGON 80 → 0");
+      "RAMGON 80 → 0");
     assert_eq(g_w,  80, "RAMGON 80 → dst_w = 80");
     assert_eq(g_sr, 64, "RAMGON 80 → dst_src_rows = 64 (32 term rows)");
     # 1152x925 with width_flag=40 → 40 cols, 16 rows (32 src rows).
     assert_eq(_kii_compute_target_geometry(1152, 925, 40, &g_w, &g_sr), 0,
-              "RAMGON 40 → 0");
+      "RAMGON 40 → 0");
     assert_eq(g_w,  40, "RAMGON 40 → dst_w = 40");
     assert_eq(g_sr, 32, "RAMGON 40 → dst_src_rows = 32");
     # 1152x925 with width_flag=120 → 120 cols, 48 rows (96 src rows).
     assert_eq(_kii_compute_target_geometry(1152, 925, 120, &g_w, &g_sr), 0,
-              "RAMGON 120 → 0");
+      "RAMGON 120 → 0");
     assert_eq(g_w,  120, "RAMGON 120 → dst_w = 120");
     assert_eq(g_sr, 96,  "RAMGON 120 → dst_src_rows = 96");
 
     test_group("M6(a) — geometry: width=0 (--width unset) → default 80");
     # No --width override → falls back to EMIT_DEFAULT_COLS = 80.
     assert_eq(_kii_compute_target_geometry(1152, 925, 0, &g_w, &g_sr), 0,
-              "width=0 → 0");
+      "width=0 → 0");
     assert_eq(g_w, 80, "width=0 → default dst_w = 80");
     # Same 64 source-row count as the explicit 80 case.
     assert_eq(g_sr, 64, "width=0 → default dst_src_rows = 64");
@@ -452,7 +452,7 @@ fn main() {
     #   dst_src_h = (100 × 40) / 100 = 40
     #   dst_rows  = 20 terminal rows
     assert_eq(_kii_compute_target_geometry(100, 100, 40, &g_w, &g_sr), 0,
-              "square 100x100 @ 40 → 0");
+      "square 100x100 @ 40 → 0");
     assert_eq(g_w,  40, "square 100x100 @ 40 → dst_w = 40");
     assert_eq(g_sr, 40, "square 100x100 @ 40 → dst_src_rows = 40 (20 term rows)");
 
@@ -460,7 +460,7 @@ fn main() {
     #   dst_src_h = (50 × 80) / 200 = 20
     #   dst_rows  = 10 terminal rows
     assert_eq(_kii_compute_target_geometry(200, 50, 80, &g_w, &g_sr), 0,
-              "landscape 200x50 @ 80 → 0");
+      "landscape 200x50 @ 80 → 0");
     assert_eq(g_w,  80, "landscape 200x50 @ 80 → dst_w = 80");
     assert_eq(g_sr, 20, "landscape 200x50 @ 80 → dst_src_rows = 20 (10 term rows)");
 
@@ -471,7 +471,7 @@ fn main() {
     #              auto-detected, but explicit --width keeps the
     #              aspect-true rendering for capture-to-file).
     assert_eq(_kii_compute_target_geometry(50, 200, 80, &g_w, &g_sr), 0,
-              "portrait 50x200 @ 80 → 0");
+      "portrait 50x200 @ 80 → 0");
     assert_eq(g_w,  80,  "portrait 50x200 @ 80 → dst_w = 80");
     assert_eq(g_sr, 320, "portrait 50x200 @ 80 → dst_src_rows = 320 (160 term rows)");
 
@@ -480,16 +480,16 @@ fn main() {
     # Use 800×1 source: dst_src_h = (1×80)/(800×2) = 0 → clamp to 1.
     # dst_src_rows = 2. dst_rows would be 1.
     assert_eq(_kii_compute_target_geometry(800, 1, 80, &g_w, &g_sr), 0,
-              "800x1 @ 80 → 0");
+      "800x1 @ 80 → 0");
     assert_eq(g_w,  80, "800x1 @ 80 → dst_w = 80");
     assert_eq(g_sr, 2,  "800x1 @ 80 → dst_src_rows = 2 (clamped, min 1 terminal row)");
     # Source dims invalid → -1, no writes.
     assert_eq(_kii_compute_target_geometry(0, 100, 80, &g_w, &g_sr), 0 - 1,
-              "src_w=0 → -1");
+      "src_w=0 → -1");
     assert_eq(_kii_compute_target_geometry(100, 0, 80, &g_w, &g_sr), 0 - 1,
-              "src_h=0 → -1");
+      "src_h=0 → -1");
     assert_eq(_kii_compute_target_geometry(0 - 1, 100, 80, &g_w, &g_sr), 0 - 1,
-              "src_w<0 → -1");
+      "src_w<0 → -1");
 
     # ============================================================
     # ---- M6(b) _kii_compute_fit_geometry -----------------------
@@ -500,7 +500,7 @@ fn main() {
     #   dst_src_h_at_120 = (100×120)/1000 = 12 → term rows = 6
     #   6 ≤ 40 so width binds. dst_w = 120, dst_src_rows = 12.
     assert_eq(_kii_compute_fit_geometry(1000, 100, 120, 40, &f_w, &f_sr), 0,
-              "1000x100 @ 120x40 → 0");
+      "1000x100 @ 120x40 → 0");
     assert_eq(f_w,  120, "wide-image width-binding: dst_w = 120");
     assert_eq(f_sr, 12,  "wide-image width-binding: dst_src_rows = 12 (6 term rows)");
 
@@ -510,7 +510,7 @@ fn main() {
     #   dst_src_rows = 40 × 2 = 80
     #   dst_cols = (80 × 1152) / 925 = 99.66 → 99
     assert_eq(_kii_compute_fit_geometry(1152, 925, 120, 40, &f_w, &f_sr), 0,
-              "RAMGON @ 120x40 → 0");
+      "RAMGON @ 120x40 → 0");
     assert_eq(f_w,  99, "RAMGON row-binding: dst_w = 99");
     assert_eq(f_sr, 80, "RAMGON row-binding: dst_src_rows = 80 (40 term rows)");
 
@@ -518,7 +518,7 @@ fn main() {
     # dst_src_h = (100×80)/100 = 80, term rows = 40, > 24 → row-bind.
     # dst_src_rows = 48, dst_cols = (48 × 100) / 100 = 48.
     assert_eq(_kii_compute_fit_geometry(100, 100, 80, 24, &f_w, &f_sr), 0,
-              "square 100x100 @ 80x24 → 0");
+      "square 100x100 @ 80x24 → 0");
     assert_eq(f_w,  48, "square row-binding: dst_w = 48");
     assert_eq(f_sr, 48, "square row-binding: dst_src_rows = 48 (24 term rows)");
 
@@ -528,21 +528,21 @@ fn main() {
     # 32 term rows, > 24 → row-bind to dst_src_rows = 48, dst_cols =
     # (48 × 1152) / 925 = 59.79 → 59.
     assert_eq(_kii_compute_fit_geometry(1152, 925, 0, 0, &f_w, &f_sr), 0,
-              "RAMGON @ 0x0 (defaults) → 0");
+      "RAMGON @ 0x0 (defaults) → 0");
     assert_eq(f_w,  59, "non-TTY fallback (80x24): row-binds dst_w = 59");
     assert_eq(f_sr, 48, "non-TTY fallback (80x24): row-binds dst_src_rows = 48");
 
     test_group("M6(b) — fit: edge cases + invalid input");
     # Single-pixel source. Width-binds (1 src row fits easily).
     assert_eq(_kii_compute_fit_geometry(800, 1, 80, 24, &f_w, &f_sr), 0,
-              "800x1 @ 80x24 → 0");
+      "800x1 @ 80x24 → 0");
     assert_eq(f_w,  80, "800x1: width binds → dst_w = 80");
     assert_eq(f_sr, 2,  "800x1: width binds → dst_src_rows = 2 (clamped)");
     # Invalid source dims → -1.
     assert_eq(_kii_compute_fit_geometry(0, 100, 80, 24, &f_w, &f_sr), 0 - 1,
-              "src_w=0 → -1");
+      "src_w=0 → -1");
     assert_eq(_kii_compute_fit_geometry(100, 0, 80, 24, &f_w, &f_sr), 0 - 1,
-              "src_h=0 → -1");
+      "src_h=0 → -1");
 
     return assert_summary();
 }

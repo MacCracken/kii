@@ -236,7 +236,7 @@ fn main() {
     var pstr_qun[160];
     store64(&pstr_qun + STRUCT_DOWNSCALED_BUF_OFFSET, 0);
     assert_eq(quantize_downscaled(&pstr_qun), 0 - 1,
-              "quantize_downscaled rejects DOWNSCALED_BUF == 0");
+      "quantize_downscaled rejects DOWNSCALED_BUF == 0");
 
     # ---- P-1 (v1.5.1): the --color tier is actually consumed --------
     # Until 1.5.1 `--color 8` was parsed, range-validated, then dropped —

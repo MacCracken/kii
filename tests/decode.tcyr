@@ -60,7 +60,7 @@ fn _ut_put_sig(buf): i64 {
 # Layout: signature (8) + IHDR (25) + IDAT (12 + idat_len) + IEND (12).
 # Returns total byte count = 57 + idat_len.
 fn _ut_build_png_with_idat(buf, w, h, bit_depth, color_type, interlace,
-idat_data, idat_len): i64 {
+  idat_data, idat_len): i64 {
     _ut_put_sig(buf);
     # ---- IHDR ----
     _ut_put_u32_be(buf, 8, 13);
@@ -421,14 +421,14 @@ fn main() {
     test_group("re-fold — kii_decode_png e2e (RAMGON.png)");
     var pstr_ram[160];
     assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_ram), PNG_OK,
-    "RAMGON.png → PNG_OK");
+      "RAMGON.png → PNG_OK");
     assert_eq(load64(&pstr_ram + STRUCT_WIDTH_OFFSET),       1152, "RAMGON width = 1152");
     assert_eq(load64(&pstr_ram + STRUCT_HEIGHT_OFFSET),      925,  "RAMGON height = 925");
     assert_eq(load64(&pstr_ram + STRUCT_COLOR_TYPE_OFFSET),  6,    "adapter forces ct6");
     assert_eq(load64(&pstr_ram + STRUCT_SRC_COLOR_TYPE_OFFSET), 6, "RAMGON src color_type = 6 (RGBA)");
     assert_eq(load64(&pstr_ram + STRUCT_BIT_DEPTH_OFFSET),   8,    "bit_depth = 8");
     assert_eq(load64(&pstr_ram + STRUCT_PIXELS_SIZE_OFFSET), 1152 * 925 * 4,
-    "pixels size = 1152 × 925 × 4");
+      "pixels size = 1152 × 925 × 4");
     assert_eq(load64(&pstr_ram + STRUCT_SEEN_IEND_OFFSET),   1,    "saw IEND");
     assert(load64(&pstr_ram + STRUCT_PIXELS_BUF_OFFSET) != 0, "pixels_buf non-null");
 
@@ -479,7 +479,7 @@ fn main() {
     file_write_all(&path_tx, "this is plainly not a png\n", 26);
     var pstr_tx[160];
     assert_eq(kii_decode_png(&path_tx, &pstr_tx), PNG_ERR_NOT_PNG,
-    "non-PNG text file → PNG_ERR_NOT_PNG");
+      "non-PNG text file → PNG_ERR_NOT_PNG");
 
     # (d) an empty file → NOT_PNG (kii_decode_png's sz==0 guard).
     test_group("re-fold — kii_decode_png (empty file → NOT_PNG)");
@@ -488,7 +488,7 @@ fn main() {
     file_write_all(&path_em, "", 0);
     var pstr_em[160];
     assert_eq(kii_decode_png(&path_em, &pstr_em), PNG_ERR_NOT_PNG,
-    "empty file → PNG_ERR_NOT_PNG");
+      "empty file → PNG_ERR_NOT_PNG");
 
     # (d2) a sub-8-byte non-empty file (1..7 bytes) → NOT_PNG. chitra's
     # signature check guards len<8 before any memeq, so the adapter must
@@ -499,7 +499,7 @@ fn main() {
     file_write_all(&path_sh, "\x89PNG", 4);          # 4 bytes: valid prefix, too short
     var pstr_sh[160];
     assert_eq(kii_decode_png(&path_sh, &pstr_sh), PNG_ERR_NOT_PNG,
-    "4-byte file → PNG_ERR_NOT_PNG (no OOB read)");
+      "4-byte file → PNG_ERR_NOT_PNG (no OOB read)");
 
     # (e) a structurally-valid PNG with a bad-zlib IDAT → INFLATE.
     #     CRC over the IDAT data is correct (so we pass the CRC gate),
@@ -516,7 +516,7 @@ fn main() {
     file_write_all(&path_bz, &pbuf_bz, bz_len);
     var pstr_bz[160];
     assert_eq(kii_decode_png(&path_bz, &pstr_bz), PNG_ERR_INFLATE,
-    "bad-zlib IDAT → PNG_ERR_INFLATE");
+      "bad-zlib IDAT → PNG_ERR_INFLATE");
 
     # (f) a missing path → OPEN.
     test_group("re-fold — kii_decode_png (missing path → OPEN)");
@@ -524,7 +524,7 @@ fn main() {
     _scratch_path(&path_mi, "kii-decode-missing-zzy42.png");
     var pstr_mi[160];
     assert_eq(kii_decode_png(&path_mi, &pstr_mi), PNG_ERR_OPEN,
-    "nonexistent path → PNG_ERR_OPEN");
+      "nonexistent path → PNG_ERR_OPEN");
 
     # ---- JPEG e2e via chitra_image_decode (chitra 0.3.0, v1.4.0) ----
     # (a) the 16x16 grayscale baseline gradient (chitra's reference fixture,
@@ -535,7 +535,7 @@ fn main() {
     test_group("jpeg — decode e2e (gradient.jpg, 16x16 grayscale)");
     var pstr_jpg[160];
     assert_eq(kii_decode_png("tests/fixtures/gradient.jpg", &pstr_jpg), PNG_OK,
-    "gradient.jpg → PNG_OK");
+      "gradient.jpg → PNG_OK");
     assert_eq(load64(&pstr_jpg + STRUCT_WIDTH_OFFSET),        16, "gradient width = 16");
     assert_eq(load64(&pstr_jpg + STRUCT_HEIGHT_OFFSET),       16, "gradient height = 16");
     assert_eq(load64(&pstr_jpg + STRUCT_COLOR_TYPE_OFFSET),    6, "adapter forces ct6");
@@ -573,7 +573,7 @@ fn main() {
     test_group("jpeg — decode e2e (color.jpg, 8x8 YCbCr)");
     var pstr_clr[160];
     assert_eq(kii_decode_png("tests/fixtures/color.jpg", &pstr_clr), PNG_OK,
-    "color.jpg → PNG_OK");
+      "color.jpg → PNG_OK");
     assert_eq(load64(&pstr_clr + STRUCT_WIDTH_OFFSET),         8, "color width = 8");
     assert_eq(load64(&pstr_clr + STRUCT_HEIGHT_OFFSET),        8, "color height = 8");
     assert_eq(load64(&pstr_clr + STRUCT_SRC_COLOR_TYPE_OFFSET), 259, "src ctype 259 (JPEG YCbCr)");
@@ -607,7 +607,7 @@ fn main() {
     file_write_all(&path_pg, "\xFF\xD8\xFF\xC2", 4);          # SOI + SOF2 (progressive)
     var pstr_pg[160];
     assert_eq(kii_decode_png(&path_pg, &pstr_pg), PNG_ERR_UNSUPPORTED,
-    "progressive JPEG → PNG_ERR_UNSUPPORTED");
+      "progressive JPEG → PNG_ERR_UNSUPPORTED");
     assert_eq(load64(&pstr_pg + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "stub tagged JPEG before decode");
 
     # (e) a JPEG with SOI then a non-marker byte → malformed → PNG_ERR_HEADER
@@ -618,7 +618,7 @@ fn main() {
     file_write_all(&path_mj, "\xFF\xD8\x00\x00\x00\x00", 6);  # SOI then garbage (no FF marker)
     var pstr_mj[160];
     assert_eq(kii_decode_png(&path_mj, &pstr_mj), PNG_ERR_HEADER,
-    "malformed JPEG marker stream → PNG_ERR_HEADER");
+      "malformed JPEG marker stream → PNG_ERR_HEADER");
     assert_eq(load64(&pstr_mj + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "tagged JPEG (SOI matched)");
 
     # ---- BMP + GIF e2e via chitra_image_decode (chitra 1.0.0, v1.5.0) ----
@@ -636,7 +636,7 @@ fn main() {
     test_group("bmp — decode e2e (gradient.bmp, 16x16 24bpp BI_RGB)");
     var pstr_bmp[160];
     assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_bmp), PNG_OK,
-    "gradient.bmp → PNG_OK");
+      "gradient.bmp → PNG_OK");
     assert_eq(load64(&pstr_bmp + STRUCT_WIDTH_OFFSET),         16, "bmp width = 16");
     assert_eq(load64(&pstr_bmp + STRUCT_HEIGHT_OFFSET),        16, "bmp height = 16");
     assert_eq(load64(&pstr_bmp + STRUCT_COLOR_TYPE_OFFSET),     6, "adapter forces ct6");
@@ -671,7 +671,7 @@ fn main() {
     test_group("gif — decode e2e (color.gif, 16x16 GIF89a palette)");
     var pstr_gif[160];
     assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_gif), PNG_OK,
-    "color.gif → PNG_OK");
+      "color.gif → PNG_OK");
     assert_eq(load64(&pstr_gif + STRUCT_WIDTH_OFFSET),      16, "gif width = 16");
     assert_eq(load64(&pstr_gif + STRUCT_HEIGHT_OFFSET),     16, "gif height = 16");
     assert_eq(load64(&pstr_gif + STRUCT_COLOR_TYPE_OFFSET),  6, "adapter forces ct6");
@@ -740,7 +740,7 @@ fn main() {
     file_write_all(&path_nx, "not an image at all, just text\n", 31);
     var pstr_nx[160];
     assert_eq(kii_decode_png(&path_nx, &pstr_nx), PNG_ERR_NOT_PNG,
-    "plain text → PNG_ERR_NOT_PNG");
+      "plain text → PNG_ERR_NOT_PNG");
     assert_eq(load64(&pstr_nx + STRUCT_FORMAT_OFFSET), KII_FMT_UNKNOWN, "format stays UNKNOWN");
 
     test_subbyte_now_renders();

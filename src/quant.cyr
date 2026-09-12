@@ -72,14 +72,14 @@ fn quantize_nearest_rgb(r, g, b): i64 {
     # The palette has ≥ 1 entry by ANSI_PALETTE_SIZE constraint.
     var best_idx = 0;
     var best_d2  = _color_dist2(r, g, b,
-                                palette_r(0), palette_g(0), palette_b(0));
+      palette_r(0), palette_g(0), palette_b(0));
     var i = 1;
     # Bounded by the active tier, never past the table itself.
     var ceiling = _quant_tier;
     if (ceiling > ANSI_PALETTE_SIZE) { ceiling = ANSI_PALETTE_SIZE; }
     while (i < ceiling) {
         var d2 = _color_dist2(r, g, b,
-                              palette_r(i), palette_g(i), palette_b(i));
+          palette_r(i), palette_g(i), palette_b(i));
         if (d2 < best_d2) {
             best_d2  = d2;
             best_idx = i;

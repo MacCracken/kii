@@ -75,11 +75,11 @@ var PNG_ERR_HEADER    = 4;  # Malformed chunk: length/type/order/IEND-len/palett
 var PNG_ERR_CRC       = 5;  # Chunk CRC32 mismatch
 var PNG_ERR_CHUNK     = 6;  # Truncated chunk stream (ChitraErr TRUNCATED)
 var PNG_ERR_INTERLACE = 7;  # Unrecognized interlace METHOD (the spec allows only
-                            # 0 = none and 1 = Adam7). NOT "Adam7 unsupported" — this
-                            # comment said that, and blamed chitra 0.2.1, for three
-                            # releases after chitra 0.2.1 was the release that ADDED
-                            # Adam7. kii has decoded interlaced PNG since v1.2.2 and
-                            # tests/decode.tcyr asserts PNG_OK for it. (P-1, v1.5.1)
+# 0 = none and 1 = Adam7). NOT "Adam7 unsupported" — this
+# comment said that, and blamed chitra 0.2.1, for three
+# releases after chitra 0.2.1 was the release that ADDED
+# Adam7. kii has decoded interlaced PNG since v1.2.2 and
+# tests/decode.tcyr asserts PNG_OK for it. (P-1, v1.5.1)
 var PNG_ERR_BITDEPTH  = 8;  # Sub-byte depth {1,2,4} or unsupported color_type
 var PNG_ERR_NO_IDAT   = 9;  # Zero IDAT chunks (structurally valid but no pixel data)
 var PNG_ERR_INFLATE   = 10; # zlib_decompress failed or produced the wrong size
@@ -88,15 +88,15 @@ var PNG_ERR_DIMENSIONS= 12; # Dimensions/ratio exceed policy ceiling (lying-IHDR
 var PNG_ERR_IDAT_TOO_LARGE = 13; # OOM / IDAT-accumulator cap (ChitraErr OOM)
 var PNG_ERR_RATIO_TOO_HIGH = 14; # RESERVED (see header): ratio bomb now -> DIMENSIONS
 var PNG_ERR_FILE_TOO_LARGE = 15; # Input file exceeds KII_MAX_RAW_BYTES before any decode
-                                 # (DoS guard: the slurp holds the whole file in RAM, which
-                                 # the old streaming decoder avoided; cap it pre-read)
+# (DoS guard: the slurp holds the whole file in RAM, which
+# the old streaming decoder avoided; cap it pre-read)
 var PNG_ERR_UNSUPPORTED    = 16; # Valid image, but an unsupported feature. JPEG (chitra is
-                                 # baseline-only): progressive / arithmetic / 12-bit precision
-                                 # / non-baseline SOF mode / CMYK 4-component. BMP (v1.5.0):
-                                 # bpp outside {1,4,8,16,24,32} / BI_JPEG / BI_PNG / a bad
-                                 # BI_BITFIELDS mask. Kept distinct from PNG_ERR_BITDEPTH so
-                                 # the diagnostic doesn't cite the PNG §11.2.2 bit-depth
-                                 # table for a non-PNG input.
+# baseline-only): progressive / arithmetic / 12-bit precision
+# / non-baseline SOF mode / CMYK 4-component. BMP (v1.5.0):
+# bpp outside {1,4,8,16,24,32} / BI_JPEG / BI_PNG / a bad
+# BI_BITFIELDS mask. Kept distinct from PNG_ERR_BITDEPTH so
+# the diagnostic doesn't cite the PNG §11.2.2 bit-depth
+# table for a non-PNG input.
 
 # ---- detected input format (for format-aware diagnostics) ----------
 # The adapter sniffs the signature before decode and records the format in
@@ -147,9 +147,9 @@ var STRUCT_DOWNSCALED_W_OFFSET    = 128;
 var STRUCT_DOWNSCALED_H_OFFSET    = 136;
 var STRUCT_SRC_COLOR_TYPE_OFFSET  = 144;  # pre-normalization PNG color_type (for --verbose)
 var STRUCT_FORMAT_OFFSET          = 152;  # detected input format (KII_FMT_*); set by the
-                                          # adapter from the signature sniff BEFORE decode,
-                                          # so main phrases format-aware decode diagnostics.
-                                          # 20th / last slot of the 160-byte pstruct.
+# adapter from the signature sniff BEFORE decode,
+# so main phrases format-aware decode diagnostics.
+# 20th / last slot of the 160-byte pstruct.
 
 # ---- color-type helpers (used by downscale.cyr / quant.cyr / main.cyr)
 # Color-type → human-readable name. Used by the --verbose summary, fed

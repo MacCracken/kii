@@ -172,7 +172,7 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
             var sx = (dx * src_w) / dst_w;
             var dst_off = (dy * dst_w + dx) * 3;
             var rc = _extract_rgb(pixels, sx, sy, src_w, color_type, bps,
-                                  plte_buf, plte_size, out_buf + dst_off);
+              plte_buf, plte_size, out_buf + dst_off);
             if (rc != 0) {
                 # Should never fire — color_type + PLTE are validated
                 # at function entry. If it does, abort the operation
