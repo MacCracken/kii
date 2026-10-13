@@ -42,12 +42,12 @@ The pipeline runs left-to-right; each module owns one stage. The shared `pstruct
 | Module | Owns | M-where |
 |---|---|---|
 | `src/main.cyr` | I/O + orchestration; dispatches each stage; gates `--verbose` summary | M0+, restructured each milestone |
-| `src/cli.cyr` | Flag registration + `kii_validate_color`; `KII_F_*` indices | M1 |
+| `src/cli.cyr` | Flag registration + `kii_validate_color` / `kii_validate_mode`; `KII_F_*` indices; `kii_path_has_control_bytes` (a wrapper over darshana's `tty_has_ctl` since v1.6.0) | M1 + M7(c) |
 | `src/png.cyr` | PNG decoder: signature, IHDR, CRC32, chunk walk, PLTE, IDAT, sankoch inflate, filter undo, pixel buffer; `STRUCT_*_OFFSET` layout | M2 + M3 + M4(c) PLTE |
 | `src/palette.cyr` | Linux-console 16-color ANSI palette + lazy init + accessors | M4(a) |
 | `src/quant.cyr` | RGB → palette-index quantization: scalar `quantize_nearest_rgb`, image-wide `quantize_nearest_image` (M4-test surface), `quantize_rgb_buf` + `quantize_downscaled` (M5+ pipeline) | M4(b)(d) + M5(c) |
 | `src/downscale.cyr` | Nearest-neighbor RGB resampler with per-color_type normalize | M5(b) |
-| `src/emit.cyr` | Half-block ANSI emit + `_kii_compute_target_geometry` + `_kii_compute_fit_geometry`; local `_emit_bg_256_buf` | M5(c) + M6(a)(b) |
+| `src/emit.cyr` | Half-block ANSI emit (darshana composers) + `_kii_compute_target_geometry` + `_kii_compute_fit_geometry` + `_kii_term_envelope` (v1.6.0) + `_kii_write_all` | M5(c) + M6(a)(b) |
 
 ## Items
 
@@ -86,11 +86,31 @@ Rules that enforce this:
 - The missing-IEND warning rides stderr per spec § 5.3 tolerance — stdout still gets the frame, exit 0.
 - Each emit row ends with `\x1b[0m\n` so a SIGPIPE truncation leaves the terminal in a sane (uncolored) state.
 
-### 004 — darshana dep + the BG-256 inline copy
+### 004 — darshana dep: every escape kii writes is darshana's
 
-kii uses darshana 0.5.3 for foreground 256-color escapes (`tty_fg_256_buf`), the SGR reset (`tty_sgr_reset_buf`), and terminal detection (`tty_winsize`). It does **not** use darshana for background 256-color escapes — darshana hadn't shipped a `tty_bg_256_buf` as of v0.5.3, with a comment saying "Background twin not yet shipped — wait for a consumer ask."
+**Rewritten at v1.6.0.** This item used to document a kii-local `_emit_bg_256_buf` —
+kept because darshana had no `tty_bg_256_buf`, with the extract-to-darshana trigger set at
+"a second consumer". That trigger fired (thoth), darshana shipped the composer at 1.2.0, and
+kii v1.6.0 deleted its copy. What stays non-obvious:
 
-`src/emit.cyr` carries a kii-local `_emit_bg_256_buf` that mirrors `tty_fg_256_buf`'s shape but emits `CSI 48;5;Nm`. The extract-to-darshana trigger is **a second consumer in the AGNOS surface needing the same BG-256 helper** (the standard AGNOS extract-on-2nd-consumer pattern). Until then, the local copy is intentional duplication.
+- **The half-block cell is one chained `pos`.** `emit_halfblock_row_buf` feeds
+  `tty_fg_256_buf`'s result straight into `tty_bg_256_buf`'s `pos`. That is safe only
+  because both return -1 for an out-of-range index *or a negative incoming `pos`* and write
+  nothing when they do (darshana 0.9.3). Any composer added to that chain must have the same
+  contract; the row checks `pos < 0` after each colour composer.
+- **The per-row budget is darshana's byte budgets added up**: ≤ 11 (FG) + ≤ 11 (BG) + 3 (▀)
+  per cell, 4 (`tty_sgr_reset_buf`) + 1 (LF) per row — hence `sw * 26 + 16`. darshana writes
+  with wide stores (an 8-byte prefix, then the index field) but never past the length it
+  returns; `tests/render.tcyr` checks that for all 256 indices.
+- **The path sanitizer is `tty_has_ctl`** with `TTY_SANITIZE_UTF8` and `TTY_KEEP_TAB |
+  TTY_KEEP_LF`. darshana shaped that predicate on kii's rule; switching modes or keep bits
+  changes what kii echoes to stderr, so `tests/cli.tcyr` pins the arguments.
+- **Terminal size is `tty_winsize`, not `tty_winsize_or`.** The latter treats a 0 in either
+  dimension as "unknown" and substitutes both defaults; kii decides columns and rows
+  separately (`_kii_term_envelope`), because a half-set winsize — `stty cols 40` on a line
+  whose size was never set reports 0 × 40 — would otherwise get an 80-column frame. On AGNOS
+  `tty_winsize` reads the console grid, which is global, not per-fd: `kii img > file` there
+  still sizes to the console.
 
 ### 005 — the quantizer has one entry point, and `--color` selects the tier
 

@@ -97,6 +97,13 @@ var PNG_ERR_UNSUPPORTED    = 16; # Valid image, but an unsupported feature. JPEG
 # BI_BITFIELDS mask. Kept distinct from PNG_ERR_BITDEPTH so
 # the diagnostic doesn't cite the PNG §11.2.2 bit-depth
 # table for a non-PNG input.
+var PNG_ERR_INFLATE_LIMIT  = 17; # v1.6.0. A VALID PNG whose pixel data inflates past
+# sankoch's DECOMPRESS_MAX_OUTPUT (16 MiB — ~5.6 MP of RGB), so
+# no linked decompressor can emit it. chitra 1.0.1 gave this its
+# own ChitraErr (35, CHITRA_ERR_INFLATE_LIMIT) and refuses it
+# before allocating; kii had no arm for it, so through v1.5.2 the
+# file fell through to the generic fallback and was reported as
+# "malformed PNG". Not a corruption code — the file is fine.
 
 # ---- detected input format (for format-aware diagnostics) ----------
 # The adapter sniffs the signature before decode and records the format in
@@ -270,6 +277,11 @@ fn _kii_map_chitra_err(code): i64 {
     # chitra_image_decode, so this is unreachable today. Mapped to the
     # resource-ceiling code rather than "malformed" in case that changes.
     if (code == CHITRA_ERR_BUDGET)       { return PNG_ERR_IDAT_TOO_LARGE; }
+    # ---- decompressor ceiling (chitra 1.0.1) ---------------------------
+    # A valid image too large for sankoch, refused by chitra before any
+    # allocation. Its own kii code: the generic fallback below would call a
+    # sound file "malformed", and PNG_ERR_INFLATE would call it corrupt.
+    if (code == CHITRA_ERR_INFLATE_LIMIT) { return PNG_ERR_INFLATE_LIMIT; }
     return PNG_ERR_HEADER;   # CHITRA_ERR_OTHER + any unknown -> generic malformed
 }
 

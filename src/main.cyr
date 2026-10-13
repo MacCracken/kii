@@ -10,7 +10,7 @@
 #   M6 v0.7.0  terminal-size auto-detect (ioctl TIOCGWINSZ) + --width override
 #   M7 v1.0.0  CLI surface frozen; soak + docs + audit
 #
-# Status: SHIPPED at v1.5.x — four input formats (PNG, baseline JPEG, BMP,
+# Status: SHIPPED at v1.6.x — four input formats (PNG, baseline JPEG, BMP,
 # GIF first-frame) through the chitra substrate, two render lanes
 # (half-block default, --mode ascii shape-vector), terminal-fit geometry.
 # Pipeline: kii_decode_png (slurp + signature sniff + chitra_image_decode,
@@ -102,7 +102,7 @@ fn _eprint_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 1.5.2");
+    println("kii 1.6.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -325,6 +325,14 @@ fn main(): i64 {
         _eprint_path_msg(path, "out of memory or image too large (possible decompression bomb)");
         return KII_EXIT_RUN;
     }
+    if (rc == PNG_ERR_INFLATE_LIMIT) {
+        # v1.6.0 — a sound file over the decompressor's ceiling; it used to be
+        # reported as "malformed PNG". The 16 MiB figure is sankoch's
+        # DECOMPRESS_MAX_OUTPUT; tests/decode.tcyr pins it so this text cannot
+        # drift from the ceiling it names.
+        _eprint_path_msg(path, "image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)");
+        return KII_EXIT_RUN;
+    }
     if (rc != PNG_OK) {
         _eprint_path_msg(path, "image decode failed");
         return KII_EXIT_RUN;
@@ -360,37 +368,26 @@ fn main(): i64 {
             return KII_EXIT_RUN;
         }
     } else {
-        var fit_cols = 0;
-        var fit_rows = 0;
         # Detection. tty_winsize is darshana surface: on Linux it's the ioctl
         # TIOCGWINSZ; on agnos (darshana 0.8.0+) it's the winsize#60 syscall
         # reading the framebuffer console grid. Both return 0 + set the out slots
-        # on success, -1 on failure (non-TTY / FB-not-up). On failure
-        # fit_cols/fit_rows stay 0 → _kii_compute_fit_geometry uses the
-        # EMIT_DEFAULT_* (80×24) fallback. (The pre-0.8.0 agnos gate is gone:
-        # darshana's agnos branch no longer collides with `kill`#16 — it calls
-        # winsize#60 directly, so kii now sizes to the real console on agnos.)
+        # on success, -1 on failure (non-TTY / FB-not-up). (The pre-0.8.0 agnos
+        # gate is gone: darshana's agnos branch no longer collides with
+        # `kill`#16 — it calls winsize#60 directly, so kii sizes to the real
+        # console on agnos.)
+        #
+        # `_kii_term_envelope` (src/emit.cyr) turns the answer into the fit
+        # envelope: columns and rows decided separately (the v1.5.1 A-8 repair —
+        # a 1-row terminal keeps its column count), one row left for the shell
+        # prompt, and 0 for whatever was not measured. Its comment records why
+        # kii keeps that per-dimension rule rather than darshana's
+        # both-or-neither `tty_winsize_or`.
         var term_rows = 0;
         var term_cols = 0;
         var detect_rc = tty_winsize(1, &term_rows, &term_cols);
-        # P-1 (v1.5.1): the columns and the rows are now decided SEPARATELY.
-        # This used to be one combined gate — `detect_rc == 0 && term_cols > 0
-        # && term_rows > 1` — whose `term_rows > 1` clause exists only so that
-        # `term_rows - 1` stays >= 1, but which scoped over the whole
-        # assignment. On a genuine 1-row terminal (a status line, a CI pty, a
-        # tmux pane dragged to one row) the detection SUCCEEDED and reported a
-        # perfectly good column count, and kii threw it away along with the
-        # rows — falling back to the 80-column default and emitting a frame
-        # wider than the terminal it had just successfully measured.
-        if (detect_rc == 0) {
-            if (term_cols > 0) { fit_cols = term_cols; }
-            # Leave one row for the shell prompt; the visible frame therefore
-            # tops out at (term_rows - 1) terminal rows. A 1-row terminal has
-            # no room to spare, so it keeps its single row rather than
-            # discarding the measurement.
-            if (term_rows > 1) { fit_rows = term_rows - 1; }
-            else { if (term_rows == 1) { fit_rows = 1; } }
-        }
+        var fit_cols = 0;
+        var fit_rows = 0;
+        _kii_term_envelope(detect_rc, term_rows, term_cols, &fit_cols, &fit_rows);
         # fit_cols / fit_rows == 0 here means "non-TTY or pathological
         # ioctl result" — `_kii_compute_fit_geometry` substitutes the
         # EMIT_DEFAULT_* fallback values (80 × 24).

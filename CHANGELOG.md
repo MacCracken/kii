@@ -4,6 +4,141 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-12
+
+**The cyrius 6.7 language minor, darshana 1.3.0, and the end of the `path` overrides.**
+Toolchain `6.6.2` → `6.7.9`; `[deps.darshana]` `1.0.0` → `1.3.0`, with kii adopting two of
+the primitives darshana built on kii's own code; and the manifest's tags reconciled with
+what kii actually compiles. Every rendered frame is **byte-identical** to v1.5.2: 190 frames
+compared (8 fixtures × both lanes × 6 widths, `--color 8`, `--verbose`, plus 54 runs on a
+pty at nine window sizes from 0×0 to 50×200), along with `--help`, nine usage errors and the
+not-an-image / missing-file diagnostics; the `--aarch64` build, run under qemu, produces the
+same bytes as x86_64 on all 187 non-pty cases. Two outputs change on purpose — the path
+sanitizer's verdict on four classes of malformed UTF-8, and the message for a valid PNG too
+large to inflate — both below. **599 assertions** (was 550), passing on x86_64 and under
+`cyrius test --aarch64`; **8,011,000 fuzz iterations**, all clean, peak RSS 137,848 KB (was
+6,011,000).
+
+### Changed
+- **Toolchain `6.6.2` → `6.7.9`.** No kii source needed a repair. The 6.7 series is a
+  language minor, so the tree was audited against each change that alters what compiled code
+  does, not just against the build: no lone `!` (a real operator since 6.7.3, silently dropped
+  before), no unary `-` / `~` on a constant (re-folded at 6.7.9), no typed or narrow-pointer
+  dereference (6.7.8), no compound assignment at all, no `struct` / `enum` / `const` / `trait`,
+  and no identifier that 6.7 reserves. Every target builds with **zero warnings**: host,
+  `--agnos`, `--aarch64`, `tests/kii.fcyr`, `tests/kii.bcyr` and all six test entries.
+  `lib/` re-vendored (`rm -rf lib && mkdir lib && cyrius deps`): 39 → 40 files — `alloc_cx.cyr`
+  and `poison.cyr` arrive with the 6.7.9 allocator, and `flags.cyr` leaves, because chitra
+  1.0.1 dropped `flags` from its `.deps` sidecar and nothing else kii links asks for it. `build/kii` grows
+  683,584 → 898,344 bytes (unstripped, DCE off) with the new toolchain and the larger darshana
+  bundle; nothing in kii's own source grew. End-to-end render time is roughly 5–15 %
+  slower than the v1.5.2 binary run interleaved in the same session (a loaded host, so a
+  range, not a figure; `docs/benchmarks.md` § v1.6.0) — the toolchain's, since the render is
+  ~93 % sankoch's inflate.
+- **The `path = "../X"` overrides are gone, and the tags now say what kii compiles.** Through
+  v1.5.2 each `[deps.X]` named a sibling checkout beside its tag, and the pre-6.7.6 resolver
+  vendored the checkout. So v1.5.2's manifest said darshana 1.0.0 / cmdit 1.2.4 / chitra
+  1.0.0 while the binary was built from **darshana 1.1.2 / cmdit 1.2.5 / chitra 1.0.3**
+  (read from the vendored bundles' headers), and CI, which has no siblings, compiled the
+  tags — local and CI builds were not the same program. From cyrius 6.7.6 a `path` beside a
+  tag is a `--local`-only dev override, and nothing in kii documented a reason for any of the
+  three, so all three are dropped. The tags move to what was really compiled:
+  - `[deps.darshana]` `1.0.0` → **`1.3.0`** (below).
+  - `[deps.cmdit]` `1.2.4` → **`1.2.5`** — not a change of code: 1.2.5 is what v1.5.2 shipped.
+    Leaving the tag would have downgraded the bundle under git-first resolution.
+  - `[deps.chitra]` `1.0.0` → **`1.0.3`** — likewise what v1.5.2 shipped. A 1.0.0 tag would
+    have dropped chitra 1.0.3's repairs (a SIGSEGV on the first PNG decoded under memory
+    pressure, a truncated JPEG scan reported as cleanly closed, every RLE BMP whose width is
+    not a multiple of 4 refused). The suite passes on either tag: the downgrade is the reason,
+    not a build failure.
+  - `cyrius.lock` regenerated; it now carries commit pins for the three deps (cyrius 6.7.6).
+- **`[deps.darshana]` `1.0.0` → `1.3.0`.** darshana 1.1–1.3 is additive on its frozen 1.0
+  surface and changes no byte kii already emitted. ⚠ darshana ≥ 1.3.0 needs cyrius ≥ 6.7.2
+  (its bundle uses `const`), which is why the toolchain moved first.
+- **The background colour composer is darshana's.** `tty_bg_256_buf` (darshana 1.2.0) replaces
+  kii's local `_emit_bg_256_buf`, which kii carried from v0.6.0 because darshana had no
+  background twin. kii was that composer's first consumer; darshana extracted it when thoth
+  became the second — exactly the trigger the local helper's comment named. Its bytes are
+  identical for **all 256 indices**, at a fresh and a chained position, and it writes nothing
+  past the escape it returns (asserted against the retired body, kept verbatim in
+  `tests/render.tcyr`). This also retires the stale comment that cited darshana's
+  `_ansi_emit_u8`, a helper darshana deleted at 1.1.0.
+- **The stderr path-echo sanitizer is darshana's `tty_has_ctl`, and it is slightly stricter.**
+  `kii_path_has_control_bytes` is now `tty_has_ctl(path, strlen(path), TTY_SANITIZE_UTF8,
+  TTY_KEEP_TAB | TTY_KEEP_LF)`. darshana shaped that predicate (1.3.0) on this function, so
+  every class kii already refused is still refused — C0 except TAB/LF, DEL, raw C1, the
+  `C2 80`–`C2 9F` spelling of C1, and malformed UTF-8 — and it adds one: **strict RFC 3629**.
+  ⚠ **Behaviour change**: a filename holding an overlong 3- or 4-byte form (`E0 80`–`9F …`,
+  `F0 80`–`8F …`), a UTF-16 surrogate (`ED A0`–`BF …`) or a code point past U+10FFFF
+  (`F4 90`–`BF …`) is now printed as `<path containing control bytes — suppressed>`; v1.5.2
+  echoed it, because its walk checked only that each continuation byte was `0x80`–`0xBF`. None
+  of these is valid UTF-8, so no legitimate filename carries one, and the overlong forms are a
+  live vector: `E0 82 9B` is an overlong spelling of U+009B (CSI), which a lenient UTF-8
+  decoder in the terminal turns back into the control the C1 rule exists to stop. A
+  1,000,000-iteration differential fuzz surface proves that set is the **only** change: on
+  every input the new verdict equals the v1.5.2 walk's, except exactly where the input holds
+  one of those four forms (≈ 203,000 such inputs and ≈ 284,000 accepted by both, per run).
+- **The terminal-size rule moved into `_kii_term_envelope` (`src/emit.cyr`)** so it can be
+  tested; it computed the same values inline in `main.cyr`, untested. darshana's
+  `tty_winsize_or` (1.2.0), which exists to replace hand-written zero guards, was considered
+  and **not adopted**: it treats a 0 in *either* dimension as "size unknown" and substitutes
+  both defaults, while kii decides columns and rows separately (the v1.5.1 A-8 repair). On a
+  serial or BBS-style line after `stty cols 40` with no `stty rows`, `tty_winsize` reports
+  0 × 40; kii keeps the 40 columns, where the both-or-neither rule would draw an 80-column
+  frame onto a 40-column line. Output is unchanged at all nine pty sizes tested.
+
+### Fixed
+- **A valid PNG too large to inflate was reported as "malformed PNG".** chitra 1.0.1 gave
+  this case its own code, `CHITRA_ERR_INFLATE_LIMIT` (35): an image whose pixel data inflates
+  past sankoch's 16 MiB `DECOMPRESS_MAX_OUTPUT` (about 5.6 megapixels of RGB) is refused
+  before anything is allocated. `_kii_map_chitra_err` had no arm for 35, so a 2370×2370 RGB
+  PNG that ImageMagick reads without complaint fell through to the generic fallback and kii
+  printed `malformed PNG (bad chunk, ordering, or palette)` — present in v1.5.2, which
+  already compiled chitra 1.0.3, and found by re-reading chitra 1.0.1–1.0.3 for this pin.
+  New `PNG_ERR_INFLATE_LIMIT` (17) → `image too large to decode (pixel data inflates past the
+  decompressor's 16 MiB ceiling)`, exit 1. A test pins `DECOMPRESS_MAX_OUTPUT` at 16 MiB so
+  the message cannot drift from the ceiling it quotes. New fixture
+  `tests/fixtures/oversize.png` (2370×2370 black RGB, 16,447 bytes, verified with ImageMagick).
+- **The fuzz harness could not fail on a contract violation.** Each surface tallied a `bad`
+  count, printed it, and the harness still said `fuzz: ok` and exited 0 — so CI's
+  `./build/kii-fuzz` step could go red on a crash and on nothing else. It now prints
+  `fuzz: FAIL` and exits 1 when any surface reports a bad iteration.
+- `emit_halfblock`'s docstring had been split in two by `_kii_write_all`, which v1.5.1
+  inserted into the middle of it, and promised an end-of-frame reset the function has never
+  emitted (each row ends with its own reset). Comment-only; reassembled and corrected.
+- `kii_path_has_control_bytes`'s docstring still said the C1 range is *not* rejected — false
+  since v1.5.1. Rewritten with the predicate.
+
+### Added
+- **49 assertions** (550 → 599): cli 77 → 98 (strict RFC 3629 boundaries on both sides of each
+  forbidden range, the two overlong CSI spellings, and the wiring to `tty_has_ctl`'s mode and
+  keep bits), render 164 → 188 (the 256-index byte-identity sweep against the retired
+  composer, and `_kii_term_envelope` including the 1-row and half-set cases), decode
+  167 → 171 (`PNG_ERR_INFLATE_LIMIT` mapping, the oversize fixture end to end, its format tag,
+  and the ceiling pin).
+- **Two fuzz surfaces**, run after the existing eight so those see exactly the random stream
+  they did through v1.5.2: the path-sanitizer differential against the v1.5.2 walk (1M, with a
+  UTF-8-shaped generator, since random bytes are almost never valid text) and the terminal
+  envelope feeding the fit geometry (1M; the frame is never wider than a measured column
+  count). Both were checked to fire: the old walk fails the differential on every
+  strict-only input, and a both-or-neither envelope fails the envelope surface.
+
+### Upstream re-verification (the review trigger in `roadmap.md`)
+- **sankoch S-1** (O(bits × symbols) Huffman slow path): unchanged at sankoch 2.8.3 — open.
+- **sankoch S-2** (16 MiB inflate cap): the cap stands; its wrong-diagnostic half is the
+  fix above.
+- **sankoch S-3** (`crc32_table` invalidated by `alloc_reset()`): **fixed upstream** by
+  sankoch's arena canary (2.7.10+). 20,000 decode + `alloc_reset()` cycles with kii's
+  `crc32_table = 0` workaround removed: every decode succeeded and no pixel byte differed. The
+  workaround stays in the fuzz harness as a harmless second line; the row leaves the roadmap.
+
+### Documentation
+- `docs/development/state.md` was not refreshed at v1.5.2 (it still read 1.5.1, toolchain
+  6.5.35); refreshed for 1.6.0. `roadmap.md` drops the three darshana items and the cyrius
+  6.7.6 note this release acts on, and records the sankoch re-verification. README, SECURITY,
+  `docs/architecture/README.md` item 004, ADR 0002 (amendment), CONTRIBUTING and
+  `docs/doc-health.md` updated to match.
+
 ## [1.5.2] - 2026-09-11
 
 ### Changed

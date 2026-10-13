@@ -518,6 +518,28 @@ fn main() {
     assert_eq(kii_decode_png(&path_bz, &pstr_bz), PNG_ERR_INFLATE,
       "bad-zlib IDAT → PNG_ERR_INFLATE");
 
+    # (e2) v1.6.0 — a VALID PNG too large for the decompressor. Through v1.5.2
+    #     chitra's CHITRA_ERR_INFLATE_LIMIT (35, chitra 1.0.1) had no arm in
+    #     _kii_map_chitra_err, so this file fell to the generic fallback and kii
+    #     printed "malformed PNG (bad chunk, ordering, or palette)" for an image
+    #     ImageMagick reads without complaint. tests/fixtures/oversize.png is a
+    #     2370x2370 8-bit RGB PNG of black (16,853,070 bytes inflated, 16,447 on
+    #     disk) — just past sankoch's 16 MiB DECOMPRESS_MAX_OUTPUT, the bracket
+    #     chitra's own 1.0.1 notes measure (2200x2200 decodes, 2370x2370 does not).
+    test_group("v1.6.0 — a valid PNG over the decompressor ceiling → INFLATE_LIMIT");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE_LIMIT), PNG_ERR_INFLATE_LIMIT,
+      "INFLATE_LIMIT → INFLATE_LIMIT (not the generic malformed fallback)");
+    var pstr_ol[160];
+    assert_eq(kii_decode_png("tests/fixtures/oversize.png", &pstr_ol), PNG_ERR_INFLATE_LIMIT,
+      "oversize.png (2370x2370 RGB) → PNG_ERR_INFLATE_LIMIT");
+    assert_eq(load64(&pstr_ol + STRUCT_FORMAT_OFFSET), KII_FMT_PNG,
+      "oversize.png is tagged PNG (the sniff ran before the refusal)");
+    # main.cyr's diagnostic names the ceiling as "16 MiB". Pin the number it
+    # quotes, so a sankoch that moves the ceiling fails here instead of
+    # leaving kii's message wrong.
+    assert_eq(DECOMPRESS_MAX_OUTPUT, 16777216,
+      "sankoch's DECOMPRESS_MAX_OUTPUT is still the 16 MiB main.cyr quotes");
+
     # (f) a missing path → OPEN.
     test_group("re-fold — kii_decode_png (missing path → OPEN)");
     var path_mi[256];

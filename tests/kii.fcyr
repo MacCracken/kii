@@ -71,6 +71,8 @@ var GIF_FUZZ_ITERS    = 1000000;   # v1.5.0 — chitra 1.0.0 GIF/LZW path
 var PATH_FUZZ_ITERS   = 1000000;
 var GEOM_FUZZ_ITERS   = 1000000;
 var EMIT_FUZZ_ITERS   = 1000;
+var PATH_DIFF_FUZZ_ITERS = 1000000;   # v1.6.0 — tty_has_ctl vs the v1.5.2 walk
+var ENV_FUZZ_ITERS       = 1000000;   # v1.6.0 — _kii_term_envelope + fit geometry
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -201,6 +203,181 @@ fn fuzz_path_iter(buf, max_len): i64 {
     # main loop tallies the bad-return count).
     if (rc == 0 || rc == 1) { return 0; }
     return 0 - 1;
+}
+
+# ---- v1.6.0 path-sanitizer DIFFERENTIAL surface -------------------
+# kii_path_has_control_bytes became a wrapper over darshana's tty_has_ctl
+# at v1.6.0. The intended difference from the walk kii shipped through
+# v1.5.2 is exactly one class: sequences that are structurally UTF-8 but
+# forbidden by RFC 3629 (overlong E0 80-9F / F0 80-8F, surrogates
+# ED A0-BF, past U+10FFFF F4 90-BF). This surface proves that is the ONLY
+# difference: on every input, the new verdict must equal
+#   1                      if the v1.5.2 walk rejected it, else
+#   strict_only(input)     (1 iff it holds one of those four forms).
+# The generator builds strings from UTF-8-shaped tokens (valid sequences of
+# every length, the four strict-only forms, C0/DEL, stray high bytes,
+# truncated sequences) so a large share of inputs is valid text — random
+# bytes alone almost never are, and would leave the "both accept" and
+# "strict-only" cells empty. The report tallies both.
+fn _ref_path_walk_v152(path): i64 {
+    var len = strlen(path);
+    var i = 0;
+    while (i < len) {
+        var b = load8(path + i);
+        if ((b < 0x20 && b != 0x09 && b != 0x0A) || b == 0x7F) {
+            return 1;
+        }
+        if (b < 0x80) { i = i + 1; }
+        else {
+            var seq = 0;
+            if (b >= 0xC2 && b <= 0xDF) { seq = 2; }
+            if (b >= 0xE0 && b <= 0xEF) { seq = 3; }
+            if (b >= 0xF0 && b <= 0xF4) { seq = 4; }
+            if (seq == 0)       { return 1; }
+            if (i + seq > len)  { return 1; }
+            var k = 1;
+            while (k < seq) {
+                var c = load8(path + i + k);
+                if (c < 0x80 || c > 0xBF) { return 1; }
+                k = k + 1;
+            }
+            if (seq == 2 && b == 0xC2) {
+                var c1 = load8(path + i + 1);
+                if (c1 >= 0x80 && c1 <= 0x9F) { return 1; }
+            }
+            i = i + seq;
+        }
+    }
+    return 0;
+}
+
+# For a string the v1.5.2 walk accepted: 1 iff some sequence in it is one
+# of the four RFC 3629 second-byte violations, else 0.
+fn _ref_strict_only(path): i64 {
+    var len = strlen(path);
+    var i = 0;
+    while (i < len) {
+        var b = load8(path + i);
+        if (b < 0x80) { i = i + 1; }
+        else {
+            var c1 = load8(path + i + 1);
+            if (b == 0xE0 && c1 < 0xA0) { return 1; }
+            if (b == 0xED && c1 > 0x9F) { return 1; }
+            if (b == 0xF0 && c1 < 0x90) { return 1; }
+            if (b == 0xF4 && c1 > 0x8F) { return 1; }
+            var seq = 2;
+            if (b >= 0xE0) { seq = 3; }
+            if (b >= 0xF0) { seq = 4; }
+            i = i + seq;
+        }
+    }
+    return 0;
+}
+
+fn _fz_cont(): i64 { return 0x80 + (_fuzz_rand() % 64); }
+
+# Append one token at buf + n; returns the new length.
+fn _fz_token(buf, n): i64 {
+    var r = _fuzz_rand() % 100;
+    if (r < 40) { store8(buf + n, 0x20 + (_fuzz_rand() % 95)); return n + 1; }
+    if (r < 50) {                                   # 2-byte (incl. C2 80-9F)
+        store8(buf + n, 0xC2 + (_fuzz_rand() % 30)); store8(buf + n + 1, _fz_cont());
+        return n + 2;
+    }
+    var lead = 0;
+    var lo = 0x80;
+    var span = 64;
+    var len = 3;
+    if (r < 60)      { lead = 0xE1 + (_fuzz_rand() % 14); if (lead >= 0xED) { lead = lead + 1; } }
+    else { if (r < 65) { lead = 0xE0; lo = 0xA0; span = 32; }
+    else { if (r < 68) { lead = 0xE0; lo = 0x80; span = 32; }          # strict-only
+    else { if (r < 71) { lead = 0xED; lo = 0x80; span = 32; }
+    else { if (r < 74) { lead = 0xED; lo = 0xA0; span = 32; }          # strict-only
+    else { if (r < 79) { lead = 0xF1 + (_fuzz_rand() % 3); len = 4; }
+    else { if (r < 81) { lead = 0xF0; lo = 0x90; span = 48; len = 4; }
+    else { if (r < 83) { lead = 0xF0; lo = 0x80; span = 16; len = 4; } # strict-only
+    else { if (r < 85) { lead = 0xF4; lo = 0x80; span = 16; len = 4; }
+    else { if (r < 87) { lead = 0xF4; lo = 0x90; span = 48; len = 4; } # strict-only
+    else { if (r < 91) {                            # C0 control or DEL
+        var cb = 1 + (_fuzz_rand() % 32);
+        if (cb == 32) { cb = 0x7F; }
+        store8(buf + n, cb); return n + 1;
+    }
+    else { if (r < 94) { store8(buf + n, 0x80 + (_fuzz_rand() % 128)); return n + 1; }
+    else { if (r < 97) {                            # truncated: lead + 1 cont
+        store8(buf + n, 0xE0 + (_fuzz_rand() % 21)); store8(buf + n + 1, _fz_cont());
+        return n + 2;
+    }
+    else { store8(buf + n, 1 + (_fuzz_rand() % 255)); return n + 1; } } } } } } } } } } } } }
+    store8(buf + n, lead);
+    store8(buf + n + 1, lo + (_fuzz_rand() % span));
+    var k = 2;
+    while (k < len) { store8(buf + n + k, _fz_cont()); k = k + 1; }
+    return n + len;
+}
+
+var _fz_diff_valid  = 0;   # both walks accept
+var _fz_diff_strict = 0;   # v1.5.2 accepted, v1.6.0 refuses (the intended change)
+
+fn fuzz_path_diff_iter(buf, cap): i64 {
+    var tokens = 1 + (_fuzz_rand() % 12);
+    var n = 0;
+    var t = 0;
+    while (t < tokens && n + 4 < cap) {
+        n = _fz_token(buf, n);
+        t = t + 1;
+    }
+    store8(buf + n, 0);
+    var old = _ref_path_walk_v152(buf);
+    var now = kii_path_has_control_bytes(buf);
+    var want = 1;
+    if (old == 0) { want = _ref_strict_only(buf); }
+    if (old == 0 && now == 0) { _fz_diff_valid = _fz_diff_valid + 1; }
+    if (old == 0 && now == 1) { _fz_diff_strict = _fz_diff_strict + 1; }
+    if (now != want) { return 0 - 1; }
+    return 0;
+}
+
+# ---- v1.6.0 terminal-envelope surface ------------------------------
+# _kii_term_envelope (src/emit.cyr) feeding _kii_compute_fit_geometry, over
+# random winsize answers — many of them 0, 1 or half-set, which is where the
+# v1.5.1 A-8 defect lived. Invariants: a failed detection is 0 x 0; each
+# dimension is used iff it is > 0, rows less the prompt row (a 1-row
+# terminal keeps 1); and the resulting frame is never wider than a measured
+# column count or taller than the envelope's rows.
+fn _fz_dim(): i64 {
+    if (_fuzz_rand() % 3 == 0) { return _fuzz_rand() % 4; }
+    return _fuzz_rand() % 65536;
+}
+
+fn fuzz_envelope_iter(): i64 {
+    var rc = 0;
+    if (_fuzz_rand() % 4 == 0) { rc = 0 - 1; }
+    var rows = _fz_dim();
+    var cols = _fz_dim();
+    var src_w = 1 + (_fuzz_rand() % 65535);
+    var src_h = 1 + (_fuzz_rand() % 65535);
+    var fc = 0 - 9;
+    var fr = 0 - 9;
+    if (_kii_term_envelope(rc, rows, cols, &fc, &fr) != 0) { return 0 - 1; }
+    var want_c = 0;
+    var want_r = 0;
+    if (rc == 0) {
+        if (cols > 0) { want_c = cols; }
+        if (rows > 1) { want_r = rows - 1; }
+        if (rows == 1) { want_r = 1; }
+    }
+    if (fc != want_c || fr != want_r) { return 0 - 1; }
+    var dw = 0;
+    var dsr = 0;
+    if (_kii_compute_fit_geometry(src_w, src_h, fc, fr, &dw, &dsr) != 0) { return 0 - 1; }
+    var cap_c = fc;
+    if (cap_c == 0) { cap_c = EMIT_DEFAULT_COLS; }
+    var cap_r = fr;
+    if (cap_r == 0) { cap_r = EMIT_DEFAULT_ROWS; }
+    if (dw < 1 || dw > cap_c) { return 0 - 1; }
+    if (dsr < 2 || dsr % 2 != 0 || dsr / 2 > cap_r) { return 0 - 1; }
+    return 0;
 }
 
 # ---- M7(b) geometry fuzz surface -----------------------------------
@@ -537,6 +714,23 @@ fn main(): i64 {
         gif_iter = gif_iter + 1;
     }
 
+    # ---- v1.6.0 surfaces --------------------------------------------
+    # Run LAST so every surface above consumes exactly the random stream it
+    # did through v1.5.2 (one shared LCG seed).
+    var diff_buf[128];
+    var diff_iter = 0;
+    var diff_bad  = 0;
+    while (diff_iter < PATH_DIFF_FUZZ_ITERS) {
+        if (fuzz_path_diff_iter(&diff_buf, 120) != 0) { diff_bad = diff_bad + 1; }
+        diff_iter = diff_iter + 1;
+    }
+    var env_iter = 0;
+    var env_bad  = 0;
+    while (env_iter < ENV_FUZZ_ITERS) {
+        if (fuzz_envelope_iter() != 0) { env_bad = env_bad + 1; }
+        env_iter = env_iter + 1;
+    }
+
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
     # walks args by index). One line per fuzz surface; "fuzz: ok"
@@ -576,6 +770,26 @@ fn main(): i64 {
     vec_push(args_gif, gif_iter);
     fmt_printf("fuzz: %d iterations passed (gif-decoder crash-safety)\n", args_gif);
 
+    var args_diff = vec_new();
+    vec_push(args_diff, diff_iter);
+    vec_push(args_diff, diff_bad);
+    vec_push(args_diff, _fz_diff_valid);
+    vec_push(args_diff, _fz_diff_strict);
+    fmt_printf("fuzz: %d iterations passed (path-sanitizer differential vs v1.5.2; bad=%d, both-accept=%d, strict-only=%d)\n", args_diff);
+
+    var args_env = vec_new();
+    vec_push(args_env, env_iter);
+    vec_push(args_env, env_bad);
+    fmt_printf("fuzz: %d iterations passed (terminal envelope; bad=%d)\n", args_env);
+
+    # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
+    # tallies were printed and the harness still said "fuzz: ok" and exited
+    # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
+    # violation — only on a crash.
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad != 0) {
+        println("fuzz: FAIL");
+        return 1;
+    }
     println("fuzz: ok");
     return 0;
 }

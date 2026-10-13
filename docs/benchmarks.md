@@ -165,3 +165,30 @@ The one high-value optimization is upstream in `sankoch`, and it is filed there
 (see `docs/development/state.md` § Upstream items). Optimizing kii's resampler
 or quantizer would be tuning 2 % of the problem. This entry exists so nobody
 spends a cycle on that.
+
+## v1.6.0 — toolchain 6.6.2 → 6.7.9
+
+Host: x86_64 Linux, Cyrius `6.7.9` (sankoch 2.8.3 in the stdlib), chitra `1.0.3`.
+⚠ **Measured on a loaded host** — load average 5–7 from unrelated concurrent jobs
+throughout — so the v1.5.2 binary (Cyrius 6.6.2, built from the committed v1.5.2
+`lib/`) was run in the same session, interleaved with the new one, rather than
+compared against the v1.5.1 table above. Each figure is one full `kii-bench` run.
+
+| Bench | v1.6.0 (3 runs) | v1.5.2 (2 runs, same session) |
+|---|---:|---:|
+| `quantize_nearest_rgb @ 1024×1024` | 302 / 307 / 301 ns | 289 / 299 ns |
+| `end-to-end RAMGON.png → 80×24` | 768 / 786 / 765 ms | 682 / 724 ms |
+| `end-to-end RAMGON.png → 120×40` | 776 / 791 / 754 ms | 687 / 737 ms |
+| `end-to-end RAMGON.png → 200×60` | 762 / 806 / 759 ms | 687 / 747 ms |
+| `png_decode (256² class)` — archlinux-logo | 2.35 / 2.50 / 2.32 ms | 2.18 / 2.52 ms |
+| `png_decode (1024² class)` — starfield | SKIPPED | SKIPPED |
+| `png_decode (2048² class)` — elarun 2560×1600 | 493 / 550 / 497 ms | 483 / 527 ms |
+
+**Reading**: end-to-end is roughly **5–15 % slower** at 6.7.9, inside a noise band
+this host could not narrow. It is not kii's code: the only hot-path source change is
+the background escape moving to darshana's `tty_bg_256_buf`, which issues 2–3 wide stores
+per escape where the composer it replaced issued 9–11 single-byte ones, and the render is still ~93 %
+sankoch's Huffman decoder (§ v1.5.1). The difference arrives with the toolchain —
+the compiler and the stdlib it vendors, sankoch included — and is recorded so the
+next pin bump has a same-session baseline to compare against. Re-measure on an idle
+host before drawing a finer conclusion.

@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.5.1**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.6.0**.
 
 The roadmap is **smallest-first** per AGNOS bite-discipline: each release is a single
 coherent cycle that ships a working binary doing demonstrably more than the last.
@@ -16,8 +16,15 @@ Carried since the v1.0 freeze. None blocks a release.
   Needs a human-eye per-terminal pass; kii ships byte-stable, so this can land any time
   without gating a cut.
 - **Marketplace recipe in zugot** — blocked on zugot tooling, not on kii.
+- **The test and fuzz/bench entry points exit with a literal `syscall(60, …)`**
+  (found during the 1.6.0 release, 2026-10-12): `tests/{ascii,cli,decode,quant,render}.tcyr`,
+  `tests/kii.fcyr`, `tests/kii.bcyr`. 60 is `exit` on x86_64 only. On aarch64 it is
+  correct today only because the backend rewrites it to 93, and on AGNOS 60 is
+  `winsize`. Use the stdlib's `SYS_EXIT` (or `sys_exit`). One exception: if a binary is
+  built `--agnos` but run on a Linux host, it needs the host's exit number, as
+  darshana's `tests/agnos.tcyr` explains. Check how each build is run before choosing.
 - **Three `sankoch` upstream CVE-class transfers** (CVE-2004-0797 / 2005-1849 /
-  2005-2096) — file as `sankoch` issues; track impact. Distinct from the three
+  2005-2096) — file as `sankoch` issues; track impact. Distinct from the
   limitations in the next section, which this repo found itself.
 - **First BBS / MUD downstream consumer integrated** — a downstream-cycle deliverable,
   tracked here only because v1.0 named it. It is off kii's own roadmap: kii is the
@@ -26,18 +33,25 @@ Carried since the v1.0 freeze. None blocks a release.
 
 ## Upstream: `sankoch` limitations — flagged for later review
 
-Found by the v1.5.1 P-1 sweep, **all three in vendored `lib/`**, which kii must
-not edit (CLAUDE.md). None is a kii defect and none blocks a kii release; each
-needs a decision from the `sankoch` side, and kii should re-check them on every
-toolchain bump because `sankoch` ships inside the Cyrius stdlib.
+Found by the v1.5.1 P-1 sweep, **all in vendored `lib/`**, which kii must not
+edit (CLAUDE.md). None is a kii defect and none blocks a kii release; each needs
+a decision from the `sankoch` side, and kii should re-check them on every
+toolchain bump because `sankoch` ships inside the Cyrius stdlib. **Last
+re-verified at the cyrius 6.7.9 pin (kii v1.6.0, sankoch 2.8.3)**: S-1 and S-2
+are still open; the third (S-3, the `crc32_table` singleton that `alloc_reset()`
+invalidated) is fixed upstream — sankoch's arena canary (`_sankoch_arena_guard`,
+2.7.10+) drops every memoized table when the arena is rewound, and a
+20,000-cycle decode + `alloc_reset()` probe with kii's workaround removed decoded
+every cycle with no pixel byte differing — so it has left this table (CHANGELOG
+1.6.0). kii's `crc32_table = 0` beside each fuzz `alloc_reset()` is now
+redundant and is kept as a belt-and-braces line.
 
 | # | Item | Where | Impact on kii | Status |
 |---|---|---|---|---|
-| **S-1** | `_huff_decode` is **O(bits × num_symbols)** — the symbol scan is nested inside the bit-length loop and rescans from the first symbol at every code length, where the canonical `mincode`/`maxcode`/`valptr` form is O(bits). | `lib/sankoch.cyr` ~:1205-1215 | **~93 % of kii's entire end-to-end render time.** It is the single reason RAMGON (1152×925) takes ~660 ms to reach an 80×24 frame; kii's own downscale + quantize + emit are together under 2 %. A drop-in canonical decoder measured **~3.7× end-to-end**, output byte-identical. | Open — highest-value optimization available to kii, and it is not in kii |
-| **S-2** | `DECOMPRESS_MAX_OUTPUT` is **16 MiB** (`enum Limits`), far below the 256 MB ceiling kii's own diagnostics advertise. | `lib/sankoch.cyr:49` | Any PNG above **~5.6 megapixels** inflates past the cap and is reported as `DEFLATE decompression failed (corrupt IDAT)` — a **wrong** diagnostic for a perfectly valid file. kii cannot raise the cap and cannot distinguish the two cases from outside. | Open — accepted risk at v1.5.1 |
-| **S-3** | `crc32_table` is a **lazy-init singleton holding a heap pointer** with no invalidation hook, so any consumer that rewinds the bump allocator silently corrupts it — no error, just wrong CRCs. | `lib/sankoch.cyr:327` + `:334-337` | Voided kii's 1,000,000-iteration PNG fuzz surface: 2999 of every 3000 iterations died at the signature check instead of reaching the decoder. kii now clears the global itself, but that is a consumer working around a substrate invariant it should not have to know. A `sankoch_reset()` hook is the right fix. | Worked around in kii; substrate fix open |
+| **S-1** | `_huff_decode` is **O(bits × num_symbols)** — the symbol scan is nested inside the bit-length loop and rescans from the first symbol at every code length, where the canonical `mincode`/`maxcode`/`valptr` form is O(bits). | `lib/sankoch.cyr` `_huff_decode`, slow path (~:1242-1259 at sankoch 2.8.3) | **~93 % of kii's entire end-to-end render time.** It is the single reason RAMGON (1152×925) takes ~660 ms to reach an 80×24 frame; kii's own downscale + quantize + emit are together under 2 %. A drop-in canonical decoder measured **~3.7× end-to-end**, output byte-identical. | Open (re-verified at 6.7.9: unchanged) — highest-value optimization available to kii, and it is not in kii |
+| **S-2** | `DECOMPRESS_MAX_OUTPUT` is **16 MiB** (`enum Limits`), far below the 256 MB ceiling kii's own diagnostics advertise. | `lib/sankoch.cyr:67` | Any PNG above **~5.6 megapixels** inflates past the cap and cannot be decoded. The *diagnostic* half is closed: chitra 1.0.1 refuses such a file before allocating, with its own `CHITRA_ERR_INFLATE_LIMIT`, and kii v1.6.0 maps it to `PNG_ERR_INFLATE_LIMIT` — "image too large to decode (… 16 MiB ceiling)" — where v1.5.2 printed "malformed PNG". kii still cannot raise the cap. | Open — the cap is sankoch's; accepted risk |
 
-**Review trigger**: re-verify all three at the next `cyrius` pin bump. S-1 is worth
+**Review trigger**: re-verify both at the next `cyrius` pin bump. S-1 is worth
 raising as a `sankoch` issue on its own merits — every stdlib consumer that
 inflates anything pays for it, not just kii. See
 [`docs/audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § 5 and
@@ -67,7 +81,11 @@ mechanical rename.
   Amends [ADR 0003](../adr/0003-color-tier-discipline.md)'s tier-1-only stance.
   The `--color` flag already carries a real tier mechanism as of v1.5.1 (`quant_set_tier`
   in `src/quant.cyr`, driven from `main.cyr`), so this extends an existing seam rather
-  than cutting a new one. **The likeliest next minor.**
+  than cutting a new one. The escape side needs no kii-local code: darshana
+  (pinned 1.3.0) carries all four composers it uses — `tty_fg_256_buf` /
+  `tty_bg_256_buf` for 256-colour and `tty_fg_rgb_buf` / `tty_bg_rgb_buf` for
+  24-bit, each with the same reject-and-write-nothing contract the half-block
+  row already chains. **The likeliest next minor.**
 
 - **Progressive-DCT JPEG** — the one remaining format gap. chitra is baseline-only and
   rejects progressive cleanly (`unsupported JPEG feature …`). It lands in chitra first
@@ -83,7 +101,8 @@ mechanical rename.
 
 - **Format-neutral rename of the image front-end.** Rename `kii_decode_png` →
   `kii_decode_image`, `src/png.cyr` → `src/image.cyr`, and the `PNG_ERR_*` code space →
-  `IMG_ERR_*`. Measured blast radius: **28 distinct symbols across 290 call sites** in 4
+  `IMG_ERR_*`. Measured blast radius: **28 distinct symbols across 290 call sites** (one more
+  since, `PNG_ERR_INFLATE_LIMIT` at v1.6.0) in 4
   source and 5 test files, plus 10 `include "src/png.cyr"` sites. Deferred at v1.4.0 and
   again at v1.5.0 to keep those cuts tight and byte-identical-verifiable; the v1.5.1 P-1
   sweep judged it **materially overdue** — the names now cover four formats and actively
@@ -105,18 +124,3 @@ mechanical rename.
   default. Possibly a major cut depending on CLI-surface impact.
 
 Captured deferrals become ADRs when the decision crystallizes.
-
-## Recorded by cyrius 6.7.6 (2026-10-08) — for the next cyrius pin move
-
-⛔ Needs cyrius >= 6.7.6 — nothing to do until cyrius 6.7.6 is tagged; then at your pin bump:
-
-- **Git first: a `path` beside `git` / `tag` becomes a dev override** (here: `darshana`, `cmdit`, `chitra`).
-  From 6.7.6 it is read only in local mode (`CYRIUS_LOCAL=1`, `CYRIUS_LOCAL=<dep,dep>` or `--local`).
-  With no switch, `cyrius deps` / `build` resolve the TAG (commit pin checked) and print one `hint:`
-  line naming the checkout not used, so a local build and CI compile the same code.
-- Local mode prints a `local:` line per override and builds from `build/local-deps/` without writing
-  `lib/` or `cyrius.lock`; a hand-written `include "lib/<dep>.cyr"` sees the override there too (the
-  compiler's `CYRIUS_LIB_OVERLAY`, set by `cyrius`).
-- The first default resolve adds commit pins for these deps to `cyrius.lock` — a one-time diff.
-- CI lock guards and `sed`-the-path-out steps can become `cyrius deps --locked`.
-- Reference: the cyrius guide's *Git first; local development is a switch (6.7.6)*.

@@ -44,6 +44,33 @@ fn _r_make_2x2(pstruct): i64 {
     return 0;
 }
 
+# The background composer kii carried from v0.6.0 to v1.5.2, kept here
+# VERBATIM (minus its comments) as the reference for the v1.6.0 swap to
+# darshana's `tty_bg_256_buf`. Test-only: nothing in src/ calls it.
+fn _ref_bg_256_buf_v152(buf, pos, n) {
+    if (n < 0 || n > 255) { return 0 - 1; }
+    if (pos < 0) { return 0 - 1; }
+    store8(buf + pos, 27);  pos = pos + 1;
+    store8(buf + pos, 91);  pos = pos + 1;
+    store8(buf + pos, 52);  pos = pos + 1;
+    store8(buf + pos, 56);  pos = pos + 1;
+    store8(buf + pos, 59);  pos = pos + 1;
+    store8(buf + pos, 53);  pos = pos + 1;
+    store8(buf + pos, 59);  pos = pos + 1;
+    if (n >= 100) {
+        store8(buf + pos, 48 + n / 100);          pos = pos + 1;
+        store8(buf + pos, 48 + (n / 10) % 10);    pos = pos + 1;
+        store8(buf + pos, 48 + n % 10);           pos = pos + 1;
+    } else { if (n >= 10) {
+            store8(buf + pos, 48 + n / 10);           pos = pos + 1;
+            store8(buf + pos, 48 + n % 10);           pos = pos + 1;
+        } else {
+            store8(buf + pos, 48 + n);                pos = pos + 1;
+        } }
+    store8(buf + pos, 109); pos = pos + 1;
+    return pos;
+}
+
 fn main() {
     alloc_init();
 
@@ -281,38 +308,90 @@ fn main() {
     # geometry still succeeds.
     assert_eq(downscale_to_rgb(&pstr_ov, 16, 8), 0, "ordinary geometry still succeeds");
 
-    test_group("P-1 (v1.5.1) — _emit_bg_256_buf rejects a negative pos");
+    # v1.6.0: kii's local `_emit_bg_256_buf` is gone; the half-block emit
+    # calls darshana's `tty_bg_256_buf` (darshana 1.2.0). The two groups below
+    # are the ones that used to test the local twin, retargeted unchanged:
+    # they now pin the contract kii relies on from the dependency.
+    test_group("P-1 (v1.5.1) — tty_bg_256_buf rejects a negative pos");
     # darshana 0.9.3 added this guard to all seven of its own `_buf` composers
     # after finding that a -1 sentinel fed back in as a position wrote ESC at
-    # `buf - 1` and returned a bogus positive length. kii's local BG twin —
-    # which sits in the same per-cell chain as darshana's FG composer — never
-    # picked it up, so the two halves of one escape pair had different
-    # contracts.
+    # `buf - 1` and returned a bogus positive length. kii's local BG twin
+    # picked it up at v1.5.1; emit_halfblock_row_buf chains fg's result
+    # straight into bg's `pos`, so the composer it calls must refuse it.
     var bgn_buf[64];
-    assert_eq(_emit_bg_256_buf(&bgn_buf, 0 - 1, 7),   0 - 1, "pos = -1 → -1");
-    assert_eq(_emit_bg_256_buf(&bgn_buf, 0 - 99, 7),  0 - 1, "pos = -99 → -1");
-    assert_eq(_emit_bg_256_buf(&bgn_buf, 0, 7),            9, "pos = 0 still works (9 bytes)");
+    assert_eq(tty_bg_256_buf(&bgn_buf, 0 - 1, 7),   0 - 1, "pos = -1 → -1");
+    assert_eq(tty_bg_256_buf(&bgn_buf, 0 - 99, 7),  0 - 1, "pos = -99 → -1");
+    assert_eq(tty_bg_256_buf(&bgn_buf, 0, 7),            9, "pos = 0 still works (9 bytes)");
 
-    test_group("M5(c) — _emit_bg_256_buf encodes CSI 48;5;Nm");
+    test_group("M5(c) — tty_bg_256_buf encodes CSI 48;5;Nm");
     # 1-digit, 2-digit, 3-digit, and bounds-reject paths.
     # 1-digit n: CSI 48;5;Nm = 9 bytes (ESC + '[' + "48;5;" + 1 + 'm')
     # 2-digit n: 10 bytes; 3-digit n: 11 bytes.
     var bg_buf[64];
-    var bg_pos = _emit_bg_256_buf(&bg_buf, 0, 7);
+    var bg_pos = tty_bg_256_buf(&bg_buf, 0, 7);
     assert_eq(bg_pos, 9, "bg 7 → 9 bytes");
     assert_eq(load8(&bg_buf + 0), 27,  "byte 0 = ESC");
     assert_eq(load8(&bg_buf + 1), 91,  "byte 1 = [");
     assert_eq(load8(&bg_buf + 7), 55,  "byte 7 = '7'");
     assert_eq(load8(&bg_buf + 8), 109, "byte 8 = 'm'");
-    var bg_pos2 = _emit_bg_256_buf(&bg_buf, 0, 15);
+    var bg_pos2 = tty_bg_256_buf(&bg_buf, 0, 15);
     assert_eq(bg_pos2, 10, "bg 15 → 10 bytes");
     assert_eq(load8(&bg_buf + 7), 49, "byte 7 = '1'");
     assert_eq(load8(&bg_buf + 8), 53, "byte 8 = '5'");
     assert_eq(load8(&bg_buf + 9), 109, "byte 9 = 'm'");
-    var bg_pos3 = _emit_bg_256_buf(&bg_buf, 0, 255);
+    var bg_pos3 = tty_bg_256_buf(&bg_buf, 0, 255);
     assert_eq(bg_pos3, 11, "bg 255 → 11 bytes");
-    assert_eq(_emit_bg_256_buf(&bg_buf, 0, 256),   0 - 1, "bg 256 → -1");
-    assert_eq(_emit_bg_256_buf(&bg_buf, 0, 0 - 1), 0 - 1, "bg -1 → -1");
+    assert_eq(tty_bg_256_buf(&bg_buf, 0, 256),   0 - 1, "bg 256 → -1");
+    assert_eq(tty_bg_256_buf(&bg_buf, 0, 0 - 1), 0 - 1, "bg -1 → -1");
+
+    test_group("v1.6.0 — tty_bg_256_buf is byte-identical to the retired local twin");
+    # Every index, at a fresh position and at a chained one, compared with
+    # _ref_bg_256_buf_v152 (the body kii shipped through v1.5.2). darshana's
+    # composer writes with wide stores (an 8-byte prefix store, then the
+    # index field), so the sweep also checks a canary byte immediately past
+    # the returned length: the swap must not write a byte the old composer
+    # did not.
+    var bx_new[32];
+    var bx_ref[32];
+    var bx_len_bad = 0;
+    var bx_byte_bad = 0;
+    var bx_canary_bad = 0;
+    var bx_chain_bad = 0;
+    var bx_n = 0;
+    while (bx_n < 256) {
+        var bx_k = 0;
+        while (bx_k < 32) { store8(&bx_new + bx_k, 0xAA); store8(&bx_ref + bx_k, 0xAA); bx_k = bx_k + 1; }
+        var bx_ln = tty_bg_256_buf(&bx_new, 0, bx_n);
+        var bx_lr = _ref_bg_256_buf_v152(&bx_ref, 0, bx_n);
+        if (bx_ln != bx_lr) { bx_len_bad = bx_len_bad + 1; }
+        bx_k = 0;
+        while (bx_k < bx_lr) {
+            if (load8(&bx_new + bx_k) != load8(&bx_ref + bx_k)) { bx_byte_bad = bx_byte_bad + 1; }
+            bx_k = bx_k + 1;
+        }
+        if (load8(&bx_new + bx_lr) != 0xAA) { bx_canary_bad = bx_canary_bad + 1; }
+        # Chained: start at pos 5, as the half-block row does after the FG escape.
+        var bx_cn = tty_bg_256_buf(&bx_new, 5, bx_n);
+        var bx_cr = _ref_bg_256_buf_v152(&bx_ref, 5, bx_n);
+        if (bx_cn != bx_cr) { bx_chain_bad = bx_chain_bad + 1; }
+        bx_k = 5;
+        while (bx_k < bx_cr) {
+            if (load8(&bx_new + bx_k) != load8(&bx_ref + bx_k)) { bx_chain_bad = bx_chain_bad + 1; }
+            bx_k = bx_k + 1;
+        }
+        bx_n = bx_n + 1;
+    }
+    assert_eq(bx_len_bad,    0, "all 256 indices: same length as the retired composer");
+    assert_eq(bx_byte_bad,   0, "all 256 indices: same bytes as the retired composer");
+    assert_eq(bx_canary_bad, 0, "all 256 indices: nothing written past the returned length");
+    assert_eq(bx_chain_bad,  0, "all 256 indices at pos 5: same length and bytes");
+    # Rejections agree, and a rejection writes nothing.
+    store8(&bx_new + 0, 0xAA);
+    assert_eq(tty_bg_256_buf(&bx_new, 0, 256), _ref_bg_256_buf_v152(&bx_ref, 0, 256),
+      "n = 256: both reject");
+    assert_eq(tty_bg_256_buf(&bx_new, 0, 4294967296), 0 - 1, "n = 2^32 → -1 (no truncation to 0)");
+    assert_eq(tty_bg_256_buf(&bx_new, 0, 0 - 9223372036854775807), 0 - 1, "n = -(2^63-1) → -1");
+    assert_eq(load8(&bx_new + 0), 0xAA, "a rejected index writes nothing");
 
     test_group("M5(c) — emit_halfblock_row_buf single-char shape");
     # 1-col × 2-row quantized buf: top idx 1 (red), bot idx 4 (blue).
@@ -543,6 +622,46 @@ fn main() {
       "src_w=0 → -1");
     assert_eq(_kii_compute_fit_geometry(100, 0, 80, 24, &f_w, &f_sr), 0 - 1,
       "src_h=0 → -1");
+
+    # ============================================================
+    # ---- v1.6.0 _kii_term_envelope (auto-detect half) ----------
+    # ============================================================
+    # The `tty_winsize` → envelope rule main.cyr used to compute inline,
+    # untested. Envelope 0 = "not measured" (the fit layer substitutes
+    # EMIT_DEFAULT_*). See the helper's comment for why kii keeps this
+    # per-dimension rule instead of darshana's tty_winsize_or.
+    test_group("v1.6.0 — _kii_term_envelope: detection to fit envelope");
+    var e_c = 0 - 7;  var e_r = 0 - 7;
+    assert_eq(_kii_term_envelope(0 - 1, 50, 200, &e_c, &e_r), 0, "returns 0");
+    assert_eq(e_c, 0, "failed detection → cols 0 (default), out slots ignored");
+    assert_eq(e_r, 0, "failed detection → rows 0 (default)");
+    _kii_term_envelope(0, 24, 80, &e_c, &e_r);
+    assert_eq(e_c, 80, "24x80 → 80 cols");
+    assert_eq(e_r, 23, "24x80 → 23 rows (one left for the prompt)");
+    _kii_term_envelope(0, 0, 0, &e_c, &e_r);
+    assert_eq(e_c, 0, "0x0 (size never set) → cols 0 (default)");
+    assert_eq(e_r, 0, "0x0 (size never set) → rows 0 (default)");
+    # A-8 (v1.5.1): a 1-row terminal keeps both its row and its columns.
+    _kii_term_envelope(0, 1, 100, &e_c, &e_r);
+    assert_eq(e_c, 100, "1x100 → keeps its 100 columns (A-8)");
+    assert_eq(e_r, 1,   "1x100 → keeps its single row");
+    _kii_term_envelope(0, 2, 100, &e_c, &e_r);
+    assert_eq(e_r, 1,   "2x100 → 1 row after the prompt row");
+    # Half-set winsize — `stty cols 40` on a line whose size was never set.
+    # This is the case tty_winsize_or would collapse to its defaults (80
+    # columns, wider than the line); kii keeps the measured dimension.
+    _kii_term_envelope(0, 0, 40, &e_c, &e_r);
+    assert_eq(e_c, 40, "0x40 → keeps the 40 measured columns");
+    assert_eq(e_r, 0,  "0x40 → rows 0 (default)");
+    _kii_term_envelope(0, 30, 0, &e_c, &e_r);
+    assert_eq(e_c, 0,  "30x0 → cols 0 (default)");
+    assert_eq(e_r, 29, "30x0 → keeps the measured rows, less the prompt row");
+    # End to end with the fit layer: a half-set 0x40 line never gets a frame
+    # wider than 40 columns.
+    _kii_term_envelope(0, 0, 40, &e_c, &e_r);
+    assert_eq(_kii_compute_fit_geometry(1000, 100, e_c, e_r, &f_w, &f_sr), 0,
+      "1000x100 in a 0x40 line → 0");
+    assert_eq(f_w, 40, "1000x100 in a 0x40 line → 40 columns, not 80");
 
     return assert_summary();
 }

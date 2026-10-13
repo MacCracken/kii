@@ -27,11 +27,19 @@
 #
 # darshana surface used:
 #   tty_fg_256_buf(buf, pos, n)   — appends CSI 38;5;Nm
+#   tty_bg_256_buf(buf, pos, n)   — appends CSI 48;5;Nm (darshana 1.2.0)
 #   tty_sgr_reset_buf(buf, pos)   — appends CSI 0m
-# kii-local helper:
-#   _emit_bg_256_buf(buf, pos, n) — appends CSI 48;5;Nm (darshana
-#                                    doesn't yet expose a BG variant;
-#                                    extract to darshana on 2nd consumer)
+# Each returns the new pos, or -1 on a rejected input (a negative
+# incoming pos, or for the two colour composers an index outside
+# [0, 255]) and writes nothing when it rejects — which is what lets
+# emit_halfblock_row_buf chain them through one `pos`.
+#
+# v1.6.0: the background composer is darshana's. kii carried a local
+# `_emit_bg_256_buf` from v0.6.0 because darshana had no BG twin; kii was
+# the first consumer of one, and darshana extracted it at 1.2.0 when a
+# second consumer (thoth) arrived — the extract-on-2nd-consumer move the
+# local helper's own comment named. The bytes are identical for every
+# index (tests/render.tcyr checks all 256 against the retired body).
 
 include "src/palette.cyr"
 include "src/png.cyr"
@@ -52,48 +60,6 @@ var EMIT_DEFAULT_ROWS = 24;
 var EMIT_HALFBLOCK_B0 = 0xE2;
 var EMIT_HALFBLOCK_B1 = 0x96;
 var EMIT_HALFBLOCK_B2 = 0x80;
-
-# CSI 48;5;Nm — background-color twin of darshana's tty_fg_256_buf.
-# Appends to caller buf at `pos`; returns new pos, or -1 if n is
-# outside [0, 255]. Local to kii while darshana's surface lacks a BG
-# variant ("Background twin not yet shipped — wait for a consumer
-# ask" per darshana/src/ansi.cyr v0.5.3). Once a second consumer in
-# the AGNOS surface needs it, lift to darshana per the
-# extract-on-2nd-consumer pattern.
-fn _emit_bg_256_buf(buf, pos, n) {
-    if (n < 0 || n > 255) { return 0 - 1; }
-    # P-1 (v1.5.1): reject a negative incoming `pos` too. This helper mirrors
-    # darshana's tty_fg_256_buf, and darshana 0.9.3 added exactly this guard to
-    # all seven of its `_buf` composers after finding that a -1 sentinel fed
-    # back in as a position wrote ESC at `buf - 1` and returned a bogus
-    # positive length. kii's local BG twin never picked the guard up, so the
-    # two halves of the same per-cell escape pair had different contracts —
-    # and the chain in emit_halfblock_row_buf passes fg's result straight into
-    # bg's `pos`. Reachability aside, a composer documented as chainable must
-    # validate what it is chained onto.
-    if (pos < 0) { return 0 - 1; }
-    store8(buf + pos, 27);  pos = pos + 1;        # ESC
-    store8(buf + pos, 91);  pos = pos + 1;        # '['
-    store8(buf + pos, 52);  pos = pos + 1;        # '4'
-    store8(buf + pos, 56);  pos = pos + 1;        # '8'
-    store8(buf + pos, 59);  pos = pos + 1;        # ';'
-    store8(buf + pos, 53);  pos = pos + 1;        # '5'
-    store8(buf + pos, 59);  pos = pos + 1;        # ';'
-    # Inline 1–3-digit decimal emit (same shape as darshana's
-    # _ansi_emit_u8); avoids exposing darshana's private helper.
-    if (n >= 100) {
-        store8(buf + pos, 48 + n / 100);          pos = pos + 1;
-        store8(buf + pos, 48 + (n / 10) % 10);    pos = pos + 1;
-        store8(buf + pos, 48 + n % 10);           pos = pos + 1;
-    } else { if (n >= 10) {
-            store8(buf + pos, 48 + n / 10);           pos = pos + 1;
-            store8(buf + pos, 48 + n % 10);           pos = pos + 1;
-        } else {
-            store8(buf + pos, 48 + n);                pos = pos + 1;
-        } }
-    store8(buf + pos, 109); pos = pos + 1;        # 'm'
-    return pos;
-}
 
 # Compute target output dimensions from source W/H + an optional
 # --width flag. Writes the dst column count + dst source-row count
@@ -190,6 +156,43 @@ fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_ds
     return 0;
 }
 
+# Terminal envelope from a `tty_winsize` answer — the auto-detect half of
+# the geometry resolver (main.cyr's `--width 0` path), split out at v1.6.0
+# so the rule is testable without a pty. Writes the column and row limits
+# to hand `_kii_compute_fit_geometry`, where 0 means "unknown, use
+# EMIT_DEFAULT_*". Always returns 0.
+#
+#   - detect_rc != 0 (not a TTY, or the console is not up) → 0 x 0, i.e.
+#     the 80 x 24 default envelope.
+#   - Columns and rows are decided SEPARATELY (v1.5.1, audit A-8): a
+#     dimension the terminal reports as > 0 is used, a 0 one falls back
+#     on its own. A 1-row terminal keeps its single row; any taller one
+#     gives up one row so the shell prompt lands below the frame.
+#
+# Why not darshana's `tty_winsize_or` (1.2.0), which exists to replace
+# hand-written zero guards like this one: it treats a 0 in EITHER
+# dimension as "size unknown" and substitutes both defaults. kii keeps
+# the per-dimension rule on purpose. A half-set winsize is how a serial
+# or BBS-style line looks after `stty cols 40` with no `stty rows` (the
+# kernel default is 0 x 0), and under the both-or-neither rule kii would
+# draw an 80-column frame onto the 40-column line the kernel just
+# reported — the A-8 failure (a frame wider than the measured terminal)
+# reintroduced. `tty_winsize_or` is the right call for a consumer whose
+# defaults are a terminal size; kii's are an envelope, and it also needs
+# to know whether the size was measured, to reserve the prompt row.
+fn _kii_term_envelope(detect_rc, term_rows, term_cols, out_fit_cols, out_fit_rows): i64 {
+    var fit_cols = 0;
+    var fit_rows = 0;
+    if (detect_rc == 0) {
+        if (term_cols > 0) { fit_cols = term_cols; }
+        if (term_rows > 1) { fit_rows = term_rows - 1; }
+        else { if (term_rows == 1) { fit_rows = 1; } }
+    }
+    store64(out_fit_cols, fit_cols);
+    store64(out_fit_rows, fit_rows);
+    return 0;
+}
+
 # emit_halfblock_row_buf — render ONE terminal row of half-block
 # glyphs into a caller-owned byte buffer. Returns the new pos (byte
 # count appended), or -1 on bad index.
@@ -208,7 +211,7 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
         var bot_idx = load8(qbuf + (2 * row + 1) * sw + col);
         pos = tty_fg_256_buf(buf, pos, top_idx);
         if (pos < 0) { return 0 - 1; }
-        pos = _emit_bg_256_buf(buf, pos, bot_idx);
+        pos = tty_bg_256_buf(buf, pos, bot_idx);
         if (pos < 0) { return 0 - 1; }
         store8(buf + pos, EMIT_HALFBLOCK_B0); pos = pos + 1;
         store8(buf + pos, EMIT_HALFBLOCK_B1); pos = pos + 1;
@@ -225,18 +228,6 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
     return pos;
 }
 
-# emit_halfblock — render the full quantized frame to fd 1 (stdout).
-# Reads STRUCT_DOWNSCALED_W/H + STRUCT_QUANTIZED_BUF from pstruct.
-# Per-row buffering: one write(2) per terminal row, ~2 KB each —
-# 24 writes per frame vs. 1920+ if we wrote per-character.
-#
-# Returns 0 on success; -1 on:
-#   - quantized buf not populated (quantize_downscaled wasn't called)
-#   - dimensions invalid (W <= 0, H <= 0, or H not even — half-block
-#     needs paired source rows so an odd source-height would dangle)
-#
-# Final \x1b[0m at frame end is redundant (every row ends with one)
-# but cheap, and ensures the terminal is clean even if the caller
 # ---- short-write-safe stdout writer --------------------------------
 # P-1 (v1.5.1). Both frame emitters used to call `syscall(1, 1, buf, n)`
 # and DISCARD the result, so kii returned 0 after a wholly-failed frame:
@@ -265,7 +256,22 @@ fn _kii_write_all(fd, buf, len): i64 {
     return 0;
 }
 
-# truncates the write.
+# emit_halfblock — render the full quantized frame to fd 1 (stdout).
+# Reads STRUCT_DOWNSCALED_W/H + STRUCT_QUANTIZED_BUF from pstruct.
+# Per-row buffering: one write(2) per terminal row, ~2 KB each —
+# 24 writes per frame vs. 1920+ if we wrote per-character.
+#
+# Returns 0 on success; -1 on:
+#   - quantized buf not populated (quantize_downscaled wasn't called)
+#   - dimensions invalid (W <= 0, H <= 0, or H not even — half-block
+#     needs paired source rows so an odd source-height would dangle)
+#   - the per-row scratch allocation failing
+# and -2 when a write(2) to stdout fails (see `_kii_write_all`).
+#
+# There is no separate end-of-frame reset: every row already ends with
+# CSI 0m (emit_halfblock_row_buf), so the terminal is left clean after
+# the last row. (This comment used to promise a final reset the function
+# has never emitted; corrected at v1.6.0.)
 fn emit_halfblock(pstruct) {
     var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
     var sw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
@@ -276,13 +282,14 @@ fn emit_halfblock(pstruct) {
     var t_rows = sh / 2;
 
     # Per-row scratch, sized from the ACTUAL width. Each cell is at most
-    # tty_fg_256_buf (≤11) + _emit_bg_256_buf (≤11) + glyph (3) = 25 bytes
-    # (256-color escapes, 3-digit indices); per-row tail is tty_sgr_reset
-    # (≤5) + LF (1). `sw * 26 + 16` bounds it with margin. Heap-alloc
-    # (was a fixed `line_buf[2048]` stack buffer — 2048 BYTES at function
-    # scope, sized for sw=80 — which `emit_halfblock_row_buf` overflowed
-    # for sw ≳ 89, e.g. `kii --width 200`). An absurd width fails the
-    # alloc and returns -1 cleanly rather than smashing the stack.
+    # tty_fg_256_buf (≤11) + tty_bg_256_buf (≤11) + glyph (3) = 25 bytes
+    # (256-color escapes, 3-digit indices); per-row tail is
+    # tty_sgr_reset_buf (exactly 4) + LF (1). `sw * 26 + 16` bounds it
+    # with margin. Heap-alloc (was a fixed `line_buf[2048]` stack buffer
+    # — 2048 BYTES at function scope, sized for sw=80 — which
+    # `emit_halfblock_row_buf` overflowed for sw ≳ 89, e.g.
+    # `kii --width 200`). An absurd width fails the alloc and returns -1
+    # cleanly rather than smashing the stack.
     var line_cap = sw * 26 + 16;
     var line_buf = alloc(line_cap);
     if (line_buf == 0) { return 0 - 1; }

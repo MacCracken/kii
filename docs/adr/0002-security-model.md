@@ -203,3 +203,26 @@ while passing every real multi-byte sequence. The Hawaiian / Sanskrit /
 East-Asian paths this alternative was rejected to protect are covered by test.
 
 See [`../audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § A-4.
+
+## Amendment — v1.6.0 (the sanitizer moves to darshana)
+
+The C1 commitment is unchanged; its **implementation** moved. `kii_path_has_control_bytes`
+is now a thin wrapper over darshana's `tty_has_ctl` (darshana 1.3.0) in `TTY_SANITIZE_UTF8`
+mode with `TTY_KEEP_TAB | TTY_KEEP_LF` — the reject-only twin of `tty_sanitize_buf`, which
+darshana shaped on kii's own predicate (darshana ADR 0004). Every class the v1.5.1 walk
+refused is still refused.
+
+The swap tightens the rule by one class, deliberately: darshana validates **strict RFC 3629**,
+so overlong 3- and 4-byte forms (`E0 80`–`9F …`, `F0 80`–`8F …`), UTF-16 surrogates
+(`ED A0`–`BF …`) and code points past U+10FFFF (`F4 90`–`BF …`) are suppressed too. kii's
+walk had accepted them because it checked only that continuation bytes were `0x80`–`0xBF`.
+That was a residual gap in this ADR's commitment, not a nicety: `E0 82 9B` is an overlong
+spelling of U+009B (CSI), and a terminal whose UTF-8 decoder accepts overlong forms turns it
+back into the C1 control the amendment above exists to stop. No legitimate filename is
+affected, since none of the four forms is valid UTF-8.
+
+The change is pinned two ways: `tests/cli.tcyr` asserts both sides of every forbidden range,
+and a 1,000,000-iteration differential surface in `tests/kii.fcyr` checks that the new verdict
+equals the v1.5.2 walk's on every input except exactly those carrying one of the four forms.
+Owning the rule in darshana also means the next consumer that echoes untrusted text to a
+terminal inherits it rather than writing its own.

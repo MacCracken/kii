@@ -10,14 +10,14 @@ wants pre-rendered terminal art.
 ```sh
 git clone https://github.com/MacCracken/cyrius-kii
 cd cyrius-kii
-cyrius deps                                 # resolve stdlib + darshana
+cyrius deps                                 # resolve stdlib + darshana / cmdit / chitra
 cyrius build src/main.cyr build/kii         # compile
 ./build/kii --version
 ```
 
 You'll need the Cyrius toolchain pinned in `cyrius.cyml` (currently
-`6.5.35` — the manifest is the source of truth, so check it rather than
-trusting this line). If `cyrius` isn't on your PATH yet, see
+`6.7.9` — the manifest is the source of truth, so check it rather than
+trusting this line; it read `6.5.35` through the 6.6.2 pin). If `cyrius` isn't on your PATH yet, see
 [agnosticos/CLAUDE.md](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 for the bootstrap.
 
@@ -144,6 +144,7 @@ kii errors are explicit on stderr and exit 1. Common causes:
 | `<path>: DEFLATE decompression failed (corrupt IDAT)` | Inflate failed, produced the wrong byte count, or a GIF LZW stream is corrupt |
 | `<path>: invalid PNG filter type (spec § 9 allows 0–4)` | Filter byte ∉ {0,1,2,3,4} |
 | `<path>: image dimensions exceed policy ceiling (…)` | Dimensions or ratio past the bomb-defence caps |
+| `<path>: image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)` | A valid PNG bigger than sankoch can inflate — about 5.6 megapixels of RGB (since v1.6.0; it used to read "malformed PNG"). Downscale it first, e.g. with ImageMagick |
 | `<path>: failed to write frame to stdout` | write(2) to stdout failed — e.g. the destination filesystem is full |
 | `<path>: could not compute output geometry` | Degenerate source dimensions |
 
@@ -161,9 +162,14 @@ true; corrected at the v1.5.1 P-1 sweep along with six other rows naming message
 kii has not emitted since the v1.2.0 decoder re-fold.
 
 If the filename itself contains control bytes (a possible
-shell-injection vector), kii substitutes
+terminal-injection vector), kii substitutes
 `<path containing control bytes — suppressed>` to defend the
 user's terminal — see [ADR 0002](../adr/0002-security-model.md).
+"Control bytes" covers C0 (TAB and LF excepted), DEL, C1 in raw and
+UTF-8 form, and any byte sequence that is not well-formed UTF-8 —
+since v1.6.0 by the strict RFC 3629 rule, so an overlong form or a
+surrogate in a filename is suppressed too. Ordinary non-Latin
+filenames echo unchanged.
 
 ## What kii does NOT support
 
