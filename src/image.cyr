@@ -6,7 +6,7 @@
 # format-sniffing chitra_image_decode unconditionally, so both formats
 # normalized to canonical RGBA8 and rendered the moment the pin moved. What
 # v1.5.0 adds here is DIAGNOSTICS, which do not come free: KII_FMT_BMP/GIF
-# tags fed by chitra's bmp/gif signature predicates, png_color_type_name
+# tags fed by chitra's bmp/gif signature predicates, kii_source_type_name
 # learning chitra's 0x200|bpp and 0x300|min_code_size source sentinels (they
 # printed as "?" under --verbose before), and _kii_map_chitra_err handling
 # the eleven BMP/GIF/budget ChitraErr codes that previously all collapsed
@@ -18,10 +18,15 @@
 # zero pipeline change — the adapter forwards JPEG's RGBA8 exactly as it does
 # PNG's. Decode failures are phrased per detected format
 # (STRUCT_FORMAT_OFFSET, set from the signature sniff before decode).
-# NOTE: the historical `png_` / `PNG_ERR_*` symbol + `png.cyr` filename names
-# are retained here (they predate JPEG); a rename to `image.*` / `IMG_ERR_*`
-# is a tracked follow-up (docs/development/roadmap.md), deferred to keep this
-# change a tight functional wiring per the project's smallest-first rule.
+#
+# THE RENAME (v1.7.0): this file was src/png.cyr, and its names predated
+# JPEG — four releases after they started covering four formats. Now
+# format-neutral, every numeric code unchanged: kii_decode_png →
+# kii_decode_image, png_color_type_name → kii_source_type_name, PNG_OK →
+# IMG_OK, and PNG_ERR_* → IMG_ERR_*, renamed for what each code means
+# (HEADER → MALFORMED, CHUNK → TRUNCATED, NOT_PNG → UNRECOGNIZED,
+# NO_IDAT → NO_IMAGE_DATA, INFLATE → DECOMPRESS, IDAT_TOO_LARGE → MEMORY;
+# the reserved TRUNCATED (2) became SHORT_FILE to free the name).
 #
 # THE PNG RE-FOLD (v1.2.0): kii no longer carries its own PNG decoder.
 # The 813-line native decoder (signature/IHDR/CRC32/chunk-walk/PLTE/
@@ -38,10 +43,10 @@
 #     read + a size cap the streaming decoder used to get for free),
 #   - the pstruct contract + STRUCT_*_OFFSET layout that downscale.cyr /
 #     quant.cyr / emit.cyr consume,
-#   - the PNG_ERR_* code space and the text of each diagnostic
+#   - the IMG_ERR_* code space and the text of each diagnostic
 #     (kii_decode_error_text, below; chitra's ChitraErr codes map onto the
 #     codes via _kii_map_chitra_err),
-#   - _png_color_channels + png_color_type_name (used downstream),
+#   - kii_source_type_name (the --verbose source-format names),
 #   - the ANSI-injection path sanitizer (cli.cyr/main.cyr — never decoder
 #     code, untouched by the re-fold).
 #
@@ -62,43 +67,43 @@
 # stable v1.0 surface; _kii_map_chitra_err (below) routes every ChitraErr
 # onto one of these. Two codes are RESERVED — not produced via the chitra
 # path but kept for the stable space + audit/ADR cross-refs:
-#   - PNG_ERR_TRUNCATED (2): chitra reports a <8-byte file as a signature
-#     failure (-> PNG_ERR_NOT_PNG), so the dedicated "shorter than 8
+#   - IMG_ERR_SHORT_FILE (2): chitra reports a <8-byte file as a signature
+#     failure (-> IMG_ERR_UNRECOGNIZED), so the dedicated "shorter than 8
 #     bytes" diagnostic is unreachable post-re-fold.
-#   - PNG_ERR_RATIO_TOO_HIGH (14): chitra's ratio-bomb cap reports
-#     CHITRA_ERR_DIMENSIONS (-> PNG_ERR_DIMENSIONS); the guard is intact,
+#   - IMG_ERR_RATIO_TOO_HIGH (14): chitra's ratio-bomb cap reports
+#     CHITRA_ERR_DIMENSIONS (-> IMG_ERR_DIMENSIONS); the guard is intact,
 #     only the distinct label collapses (documented in ADR 0006).
-var PNG_OK            = 0;
-var PNG_ERR_OPEN      = 1;  # File could not be opened (not found, perms, etc.)
-var PNG_ERR_TRUNCATED = 2;  # RESERVED (see header): <8-byte file now -> NOT_PNG
-var PNG_ERR_NOT_PNG   = 3;  # Signature did not match / empty file
-var PNG_ERR_HEADER    = 4;  # Malformed chunk: length/type/order/IEND-len/palette (ChitraErr BAD_CHUNK)
-var PNG_ERR_CRC       = 5;  # Chunk CRC32 mismatch
-var PNG_ERR_CHUNK     = 6;  # Truncated chunk stream (ChitraErr TRUNCATED)
-var PNG_ERR_INTERLACE = 7;  # Unrecognized interlace METHOD (the spec allows only
+var IMG_OK            = 0;
+var IMG_ERR_OPEN      = 1;  # File could not be opened (not found, perms, etc.)
+var IMG_ERR_SHORT_FILE = 2;  # RESERVED (see header): <8-byte file now -> NOT_PNG
+var IMG_ERR_UNRECOGNIZED   = 3;  # Signature did not match / empty file
+var IMG_ERR_MALFORMED    = 4;  # Malformed chunk: length/type/order/IEND-len/palette (ChitraErr BAD_CHUNK)
+var IMG_ERR_CRC       = 5;  # Chunk CRC32 mismatch
+var IMG_ERR_TRUNCATED     = 6;  # Truncated chunk stream (ChitraErr TRUNCATED)
+var IMG_ERR_INTERLACE = 7;  # Unrecognized interlace METHOD (the spec allows only
 # 0 = none and 1 = Adam7). NOT "Adam7 unsupported" — this
 # comment said that, and blamed chitra 0.2.1, for three
 # releases after chitra 0.2.1 was the release that ADDED
 # Adam7. kii has decoded interlaced PNG since v1.2.2 and
-# tests/decode.tcyr asserts PNG_OK for it. (P-1, v1.5.1)
-var PNG_ERR_BITDEPTH  = 8;  # A depth / colour-type pair PNG § 11.2.2 forbids (e.g. palette at 16)
-var PNG_ERR_NO_IDAT   = 9;  # Zero IDAT chunks (structurally valid but no pixel data)
-var PNG_ERR_INFLATE   = 10; # zlib_decompress failed or produced the wrong size
-var PNG_ERR_FILTER    = 11; # Unknown filter byte (per-row filter ∈ {0,1,2,3,4} per spec § 9)
-var PNG_ERR_DIMENSIONS= 12; # Dimensions/ratio exceed policy ceiling (lying-IHDR / bomb defense)
-var PNG_ERR_IDAT_TOO_LARGE = 13; # OOM / IDAT-accumulator cap (ChitraErr OOM)
-var PNG_ERR_RATIO_TOO_HIGH = 14; # RESERVED (see header): ratio bomb now -> DIMENSIONS
-var PNG_ERR_FILE_TOO_LARGE = 15; # Input file exceeds KII_MAX_RAW_BYTES before any decode
+# tests/decode.tcyr asserts IMG_OK for it. (P-1, v1.5.1)
+var IMG_ERR_BITDEPTH  = 8;  # A depth / colour-type pair PNG § 11.2.2 forbids (e.g. palette at 16)
+var IMG_ERR_NO_IMAGE_DATA   = 9;  # Zero IDAT chunks (structurally valid but no pixel data)
+var IMG_ERR_DECOMPRESS   = 10; # zlib_decompress failed or produced the wrong size
+var IMG_ERR_FILTER    = 11; # Unknown filter byte (per-row filter ∈ {0,1,2,3,4} per spec § 9)
+var IMG_ERR_DIMENSIONS= 12; # Dimensions/ratio exceed policy ceiling (lying-IHDR / bomb defense)
+var IMG_ERR_MEMORY = 13; # OOM / IDAT-accumulator cap (ChitraErr OOM)
+var IMG_ERR_RATIO_TOO_HIGH = 14; # RESERVED (see header): ratio bomb now -> DIMENSIONS
+var IMG_ERR_FILE_TOO_LARGE = 15; # Input file exceeds KII_MAX_RAW_BYTES before any decode
 # (DoS guard: the slurp holds the whole file in RAM, which
 # the old streaming decoder avoided; cap it pre-read)
-var PNG_ERR_UNSUPPORTED    = 16; # Valid image, but an unsupported feature. JPEG (chitra is
+var IMG_ERR_UNSUPPORTED    = 16; # Valid image, but an unsupported feature. JPEG (chitra is
 # baseline-only): progressive / arithmetic / 12-bit precision
 # / non-baseline SOF mode / CMYK 4-component. BMP (v1.5.0):
 # bpp outside {1,4,8,16,24,32} / BI_JPEG / BI_PNG / a bad
-# BI_BITFIELDS mask. Kept distinct from PNG_ERR_BITDEPTH so
+# BI_BITFIELDS mask. Kept distinct from IMG_ERR_BITDEPTH so
 # the diagnostic doesn't cite the PNG §11.2.2 bit-depth
 # table for a non-PNG input.
-var PNG_ERR_INFLATE_LIMIT  = 17; # v1.6.0. A VALID PNG whose pixel data inflates past
+var IMG_ERR_INFLATE_LIMIT  = 17; # v1.6.0. A VALID PNG whose pixel data inflates past
 # sankoch's DECOMPRESS_MAX_OUTPUT (16 MiB of inflated scanlines:
 # ~5.6 MP of 8-bit RGB, ~4.2 MP of RGBA), so
 # no linked decompressor can emit it. chitra 1.0.1 gave this its
@@ -106,7 +111,7 @@ var PNG_ERR_INFLATE_LIMIT  = 17; # v1.6.0. A VALID PNG whose pixel data inflates
 # before allocating; kii had no arm for it, so through v1.5.2 the
 # file fell through to the generic fallback and was reported as
 # "malformed PNG". Not a corruption code — the file is fine.
-var PNG_ERR_IS_DIR         = 18; # v1.6.4. The path is a directory. The old lseek
+var IMG_ERR_IS_DIR         = 18; # v1.6.4. The path is a directory. The old lseek
 # size probe reported an ext4 directory as "file exceeds size
 # ceiling" (its htree EOF is ~2^63); the read now says EISDIR.
 
@@ -132,7 +137,7 @@ var KII_MAX_RAW_BYTES = CHITRA_MAX_RAW_BYTES;
 
 # The three errno values the slurp distinguishes (file_read_whole_max returns
 # them negated). Linux numbering; on a target that reports a bare -1 they
-# fall through to PNG_ERR_OPEN, which is still a true statement.
+# fall through to IMG_ERR_OPEN, which is still a true statement.
 var _KII_ENOMEM = 12;
 var _KII_EISDIR = 21;
 var _KII_EFBIG  = 27;
@@ -140,38 +145,38 @@ var _KII_EFBIG  = 27;
 # ---- pstruct layout (the downstream contract) ----------------------
 # downscale.cyr / quant.cyr / emit.cyr read these offsets. main.cyr
 # stack-allocates `var pstruct[160]` (20 i64 slots). The adapter fills
-# WIDTH/HEIGHT/BIT_DEPTH/COLOR_TYPE/PIXELS_*/SEEN_IEND/SRC_COLOR_TYPE;
+# WIDTH/HEIGHT/BIT_DEPTH/COLOR_TYPE/PIXELS_*/SEEN_IEND/SRC_COLOR_TYPE/FORMAT;
 # the rest are populated by the downscale → quantize → emit pipeline.
-# Layout is unchanged from the native decoder EXCEPT the added
-# SRC_COLOR_TYPE slot at +144 (free slot; was within the 160-byte
-# allocation already). COLOR_TYPE is forced to 6 by the adapter (so
-# downscale takes its RGBA drop-alpha path); SRC_COLOR_TYPE carries the
-# real pre-normalization color_type for --verbose fidelity.
+#
+# The pixels are always chitra's canonical RGBA8, so BIT_DEPTH is always 8
+# and COLOR_TYPE always 6: they state the pixel format, and downscale
+# refuses anything else. SRC_COLOR_TYPE carries the real source format for
+# --verbose.
+#
+# v1.7.0 (R-2 of the v1.6.4 sweep) retired the six slots the native decoder
+# used and nothing has read since the v1.2.0 re-fold: IDAT count / total size
+# / buffer (+32, +40, +64), interlace (+56) and the PLTE buffer / size (+88,
+# +96). Those offsets are left unused rather than the struct repacked, so
+# every live slot keeps the offset it has always had.
 var STRUCT_WIDTH_OFFSET           = 0;
 var STRUCT_HEIGHT_OFFSET          = 8;
-var STRUCT_BIT_DEPTH_OFFSET       = 16;
-var STRUCT_COLOR_TYPE_OFFSET      = 24;
-var STRUCT_IDAT_COUNT_OFFSET      = 32;
-var STRUCT_IDAT_TOTAL_SIZE_OFFSET = 40;
+var STRUCT_BIT_DEPTH_OFFSET       = 16;   # always 8 (RGBA8)
+var STRUCT_COLOR_TYPE_OFFSET      = 24;   # always 6 (RGBA)
 var STRUCT_SEEN_IEND_OFFSET       = 48;
-var STRUCT_INTERLACE_OFFSET       = 56;
-var STRUCT_IDAT_BUF_OFFSET        = 64;
 var STRUCT_PIXELS_BUF_OFFSET      = 72;   # chitra's owned RGBA8 buffer
 var STRUCT_PIXELS_SIZE_OFFSET     = 80;   # = width × height × 4
-var STRUCT_PLTE_BUF_OFFSET        = 88;   # always 0 post-re-fold (chitra resolves PLTE)
-var STRUCT_PLTE_SIZE_OFFSET       = 96;   # always 0 post-re-fold
 var STRUCT_QUANTIZED_BUF_OFFSET   = 104;  # populated by quantize_downscaled (1 byte/pixel)
 var STRUCT_QUANTIZED_SIZE_OFFSET  = 112;
 var STRUCT_DOWNSCALED_BUF_OFFSET  = 120;  # populated by downscale_to_rgb (packed RGB triples)
 var STRUCT_DOWNSCALED_W_OFFSET    = 128;
 var STRUCT_DOWNSCALED_H_OFFSET    = 136;
-var STRUCT_SRC_COLOR_TYPE_OFFSET  = 144;  # pre-normalization PNG color_type (for --verbose)
+var STRUCT_SRC_COLOR_TYPE_OFFSET  = 144;  # source format sentinel (for --verbose)
 var STRUCT_FORMAT_OFFSET          = 152;  # detected input format (KII_FMT_*); set by the
 # adapter from the signature sniff BEFORE decode,
 # so main phrases format-aware decode diagnostics.
 # 20th / last slot of the 160-byte pstruct.
 
-# ---- color-type helpers (used by downscale.cyr / quant.cyr / main.cyr)
+# ---- source-format names (used by main.cyr's --verbose summary) ------
 # Color-type → human-readable name. Used by the --verbose summary, fed
 # the SOURCE color_type (STRUCT_SRC_COLOR_TYPE_OFFSET) so a palette /
 # greyscale input still reports its real format even though pixels are
@@ -179,7 +184,7 @@ var STRUCT_FORMAT_OFFSET          = 152;  # detected input format (KII_FMT_*); s
 # three JPEG cases (257/259/275) decode chitra's source-color-type sentinel
 # (0x100 + component_count, with 0x10 set for an Adobe transform-0 RGB file)
 # so a JPEG --verbose line names its colour space instead of falling to "?".
-fn png_color_type_name(color_type): i64 {
+fn kii_source_type_name(color_type): i64 {
     if (color_type == 0) { return "greyscale"; }
     if (color_type == 2) { return "RGB"; }
     if (color_type == 3) { return "palette"; }
@@ -202,20 +207,7 @@ fn png_color_type_name(color_type): i64 {
     return "?";
 }
 
-# Color-type → channels-per-pixel per spec § 11.2.2 / Table 11.1.
-# downscale.cyr derives bytes-per-pixel from this. Post-re-fold the adapter
-# sets COLOR_TYPE=6, so the live path is channels=4; the other rows are
-# reached only by tests. Trimming them is part of the 1.7.0 rename.
-fn _png_color_channels(color_type): i64 {
-    if (color_type == 0) { return 1; }
-    if (color_type == 2) { return 3; }
-    if (color_type == 3) { return 1; }
-    if (color_type == 4) { return 2; }
-    if (color_type == 6) { return 4; }
-    return 0 - 1;
-}
-
-# ---- ChitraErr → PNG_ERR_* mapping ---------------------------------
+# ---- ChitraErr → IMG_ERR_* mapping ---------------------------------
 # Preserves kii's per-error stderr diagnostics across the re-fold. The
 # accepted collapses (documented in ADR 0006): SIGNATURE→NOT_PNG (the
 # "<8 bytes" message is now unreachable), BAD_CHUNK→HEADER (covers
@@ -225,80 +217,80 @@ fn _png_color_channels(color_type): i64 {
 # themselves are all present in chitra (verified at 0.2.0) — only some
 # diagnostic labels coalesce.
 fn _kii_map_chitra_err(code): i64 {
-    if (code == CHITRA_ERR_SIGNATURE)   { return PNG_ERR_NOT_PNG; }
-    if (code == CHITRA_ERR_TRUNCATED)   { return PNG_ERR_CHUNK; }
-    if (code == CHITRA_ERR_BAD_CHUNK)   { return PNG_ERR_HEADER; }
-    # P-1 (v1.5.1): was PNG_ERR_BITDEPTH, which made this the one path that
+    if (code == CHITRA_ERR_SIGNATURE)   { return IMG_ERR_UNRECOGNIZED; }
+    if (code == CHITRA_ERR_TRUNCATED)   { return IMG_ERR_TRUNCATED; }
+    if (code == CHITRA_ERR_BAD_CHUNK)   { return IMG_ERR_MALFORMED; }
+    # P-1 (v1.5.1): was IMG_ERR_BITDEPTH, which made this the one path that
     # could tell a JPEG about the PNG § 11.2.2 bit-depth table — the exact
-    # outcome PNG_ERR_UNSUPPORTED's own comment (above) says the split exists
+    # outcome IMG_ERR_UNSUPPORTED's own comment (above) says the split exists
     # to prevent. CHITRA_ERR_UNSUPPORTED spans formats by design (chitra ADR
     # 0010 § 3: an unrecognised PNG critical chunk, a non-zero PNG compression
     # or filter method, an unrecognised colour type, OR an Adobe APP14 colour
     # transform chitra declines) and its shared meaning is "the file is valid;
-    # chitra declines it" — which is PNG_ERR_UNSUPPORTED's meaning exactly.
-    if (code == CHITRA_ERR_UNSUPPORTED) { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_INFLATE)     { return PNG_ERR_INFLATE; }
-    if (code == CHITRA_ERR_OOM)         { return PNG_ERR_IDAT_TOO_LARGE; }
-    if (code == CHITRA_ERR_CRC)         { return PNG_ERR_CRC; }
-    if (code == CHITRA_ERR_INTERLACE)   { return PNG_ERR_INTERLACE; }
-    if (code == CHITRA_ERR_BIT_DEPTH)   { return PNG_ERR_BITDEPTH; }
-    if (code == CHITRA_ERR_DIMENSIONS)  { return PNG_ERR_DIMENSIONS; }
-    if (code == CHITRA_ERR_FILTER)      { return PNG_ERR_FILTER; }
-    if (code == CHITRA_ERR_NO_IDAT)     { return PNG_ERR_NO_IDAT; }
+    # chitra declines it" — which is IMG_ERR_UNSUPPORTED's meaning exactly.
+    if (code == CHITRA_ERR_UNSUPPORTED) { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_INFLATE)     { return IMG_ERR_DECOMPRESS; }
+    if (code == CHITRA_ERR_OOM)         { return IMG_ERR_MEMORY; }
+    if (code == CHITRA_ERR_CRC)         { return IMG_ERR_CRC; }
+    if (code == CHITRA_ERR_INTERLACE)   { return IMG_ERR_INTERLACE; }
+    if (code == CHITRA_ERR_BIT_DEPTH)   { return IMG_ERR_BITDEPTH; }
+    if (code == CHITRA_ERR_DIMENSIONS)  { return IMG_ERR_DIMENSIONS; }
+    if (code == CHITRA_ERR_FILTER)      { return IMG_ERR_FILTER; }
+    if (code == CHITRA_ERR_NO_IDAT)     { return IMG_ERR_NO_IMAGE_DATA; }
     # ---- JPEG (chitra 0.3.0) -------------------------------------------
     # (BMP + GIF codes follow, added at kii v1.5.0 / chitra 1.0.0.)
-    # Malformed / corrupt baseline-JPEG structure -> PNG_ERR_HEADER; main
+    # Malformed / corrupt baseline-JPEG structure -> IMG_ERR_MALFORMED; main
     # branches the wording on STRUCT_FORMAT (-> "malformed JPEG ..."). These
     # never collide with a PNG input — chitra routes by signature first, so
     # a PNG only ever yields codes 1-12, plus 35 (INFLATE_LIMIT, below).
-    if (code == CHITRA_ERR_JPEG_MARKER)  { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_JPEG_SOF)     { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_JPEG_DQT)     { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_JPEG_DHT)     { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_JPEG_SOS)     { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_JPEG_ENTROPY) { return PNG_ERR_HEADER; }
+    if (code == CHITRA_ERR_JPEG_MARKER)  { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_JPEG_SOF)     { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_JPEG_DQT)     { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_JPEG_DHT)     { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_JPEG_SOS)     { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_JPEG_ENTROPY) { return IMG_ERR_MALFORMED; }
     # Valid but unsupported JPEG features (chitra stays baseline-only) ->
     # a distinct code, so the message reads "unsupported JPEG feature ..."
     # rather than the PNG §11.2.2 bit-depth wording.
-    if (code == CHITRA_ERR_JPEG_PROGRESSIVE) { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_JPEG_ARITHMETIC)  { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_JPEG_PRECISION)   { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_JPEG_MODE)        { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_JPEG_COMPONENTS)  { return PNG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_PROGRESSIVE) { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_ARITHMETIC)  { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_PRECISION)   { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_MODE)        { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_JPEG_COMPONENTS)  { return IMG_ERR_UNSUPPORTED; }
     # ---- BMP (chitra 0.4.0 / 0.5.1 RLE / 0.5.2 BITFIELDS) --------------
-    # Structural corruption -> PNG_ERR_HEADER; main branches the wording on
+    # Structural corruption -> IMG_ERR_MALFORMED; main branches the wording on
     # STRUCT_FORMAT (-> "malformed BMP ..."). A bpp outside {1,4,8,16,24,32},
     # a BI_JPEG/BI_PNG compression (refused permanently — a decoder
     # re-entering itself), and a bad BI_BITFIELDS mask are all "valid file,
-    # chitra declines it" -> PNG_ERR_UNSUPPORTED.
-    if (code == CHITRA_ERR_BMP_HEADER)      { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_BMP_PALETTE)     { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_BMP_RLE)         { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_BMP_DEPTH)       { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_BMP_COMPRESSION) { return PNG_ERR_UNSUPPORTED; }
-    if (code == CHITRA_ERR_BMP_MASK)        { return PNG_ERR_UNSUPPORTED; }
+    # chitra declines it" -> IMG_ERR_UNSUPPORTED.
+    if (code == CHITRA_ERR_BMP_HEADER)      { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_BMP_PALETTE)     { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_BMP_RLE)         { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_BMP_DEPTH)       { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_BMP_COMPRESSION) { return IMG_ERR_UNSUPPORTED; }
+    if (code == CHITRA_ERR_BMP_MASK)        { return IMG_ERR_UNSUPPORTED; }
     # ---- GIF (chitra 0.5.0, first frame only) --------------------------
     # LZW is a compression-stream failure, so it reuses the INFLATE code
     # (main words it per format). A structurally valid GIF carrying no image
     # descriptor is the GIF analogue of a zero-IDAT PNG.
-    if (code == CHITRA_ERR_GIF_HEADER)   { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_GIF_PALETTE)  { return PNG_ERR_HEADER; }
-    if (code == CHITRA_ERR_GIF_LZW)      { return PNG_ERR_INFLATE; }
-    if (code == CHITRA_ERR_GIF_NO_IMAGE) { return PNG_ERR_NO_IDAT; }
+    if (code == CHITRA_ERR_GIF_HEADER)   { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_GIF_PALETTE)  { return IMG_ERR_MALFORMED; }
+    if (code == CHITRA_ERR_GIF_LZW)      { return IMG_ERR_DECOMPRESS; }
+    if (code == CHITRA_ERR_GIF_NO_IMAGE) { return IMG_ERR_NO_IMAGE_DATA; }
     # ---- caller policy (chitra 0.6.1) ----------------------------------
     # Not a validity failure and not an OOM — but kii calls the unbudgeted
     # chitra_image_decode, so this is unreachable today. Mapped to the
     # resource-ceiling code rather than "malformed" in case that changes.
-    if (code == CHITRA_ERR_BUDGET)       { return PNG_ERR_IDAT_TOO_LARGE; }
+    if (code == CHITRA_ERR_BUDGET)       { return IMG_ERR_MEMORY; }
     # ---- decompressor ceiling (chitra 1.0.1) ---------------------------
     # A valid image too large for sankoch, refused by chitra before any
     # allocation. Its own kii code: the generic fallback below would call a
-    # sound file "malformed", and PNG_ERR_INFLATE would call it corrupt.
-    if (code == CHITRA_ERR_INFLATE_LIMIT) { return PNG_ERR_INFLATE_LIMIT; }
-    return PNG_ERR_HEADER;   # CHITRA_ERR_OTHER + any unknown -> generic malformed
+    # sound file "malformed", and IMG_ERR_DECOMPRESS would call it corrupt.
+    if (code == CHITRA_ERR_INFLATE_LIMIT) { return IMG_ERR_INFLATE_LIMIT; }
+    return IMG_ERR_MALFORMED;   # CHITRA_ERR_OTHER + any unknown -> generic malformed
 }
 
-# ---- the slurp's failure → PNG_ERR_* -------------------------------
+# ---- the slurp's failure → IMG_ERR_* -------------------------------
 # `n` is file_read_whole_max's negative errno. Through v1.6.3 kii sized the
 # file with lseek(SEEK_END), then opened it a SECOND time to read it (P(-1),
 # v1.6.4). That misreported everything that is not a regular file: a pipe or
@@ -307,10 +299,10 @@ fn _kii_map_chitra_err(code): i64 {
 # change between the size check and the read. The stdlib reader opens once,
 # reads to EOF under the cap, and says why it stopped.
 fn _kii_map_read_err(n): i64 {
-    if (n == 0 - _KII_EFBIG)  { return PNG_ERR_FILE_TOO_LARGE; }
-    if (n == 0 - _KII_EISDIR) { return PNG_ERR_IS_DIR; }
-    if (n == 0 - _KII_ENOMEM) { return PNG_ERR_IDAT_TOO_LARGE; }
-    return PNG_ERR_OPEN;
+    if (n == 0 - _KII_EFBIG)  { return IMG_ERR_FILE_TOO_LARGE; }
+    if (n == 0 - _KII_EISDIR) { return IMG_ERR_IS_DIR; }
+    if (n == 0 - _KII_ENOMEM) { return IMG_ERR_MEMORY; }
+    return IMG_ERR_OPEN;
 }
 
 # ---- the decode front-end ------------------------------------------
@@ -320,9 +312,9 @@ fn _kii_map_read_err(n): i64 {
 # quantize → emit pipeline consumes it unchanged (a JPEG renders with zero
 # pipeline change — the adapter forwards its RGBA8 exactly as for PNG). The
 # detected format is recorded in STRUCT_FORMAT_OFFSET for format-aware
-# diagnostics. Returns PNG_OK (0) on success, or a PNG_ERR_* code (mapped
+# diagnostics. Returns IMG_OK (0) on success, or a IMG_ERR_* code (mapped
 # from ChitraErr or raised by the file layer) on failure.
-fn kii_decode_png(path, pstruct): i64 {
+fn kii_decode_image(path, pstruct): i64 {
     # Zero every slot first (P(-1), v1.6.4). main's `var pstruct[160]` is an
     # uninitialized stack array, and the adapter writes only some slots, so the
     # "has this stage run yet?" checks in quantize / emit read whatever an
@@ -338,7 +330,7 @@ fn kii_decode_png(path, pstruct): i64 {
     var n = 0;
     var src = file_read_whole_max(path, KII_MAX_RAW_BYTES, &n);
     if (src == 0) { return _kii_map_read_err(n); }
-    if (n == 0) { return PNG_ERR_NOT_PNG; }        # an empty file is no image
+    if (n == 0) { return IMG_ERR_UNRECOGNIZED; }        # an empty file is no image
 
     # ---- sniff the format from the signature so main can phrase a decode
     # failure per format. chitra_image_decode does the same routing
@@ -373,14 +365,13 @@ fn kii_decode_png(path, pstruct): i64 {
         # chitra's contract sets *err on every 0-return; guard the null
         # anyway so a hypothetical OOM that left it 0 can't NULL-deref in
         # chitra_err_code (it would map to an OOM-class code regardless).
-        if (err == 0) { return PNG_ERR_IDAT_TOO_LARGE; }
+        if (err == 0) { return IMG_ERR_MEMORY; }
         return _kii_map_chitra_err(chitra_err_code(err));
     }
 
-    # ---- adapter: RGBA8 as a depth-8 ct6 image. downscale.cyr's
-    # color_type==6 branch (R/G/B from samples, drop alpha) consumes this
-    # verbatim, so the resampler/quantizer/emit are untouched and frames
-    # stay byte-identical to the native decoder. ----
+    # ---- adapter: chitra's RGBA8 as a depth-8 ct6 image, which is the only
+    # pixel format downscale.cyr accepts. The buffer is handed over, not
+    # copied. ----
     var w = chitra_image_width(img);
     var h = chitra_image_height(img);
     store64(pstruct + STRUCT_WIDTH_OFFSET, w);
@@ -389,16 +380,13 @@ fn kii_decode_png(path, pstruct): i64 {
     store64(pstruct + STRUCT_COLOR_TYPE_OFFSET, 6);
     store64(pstruct + STRUCT_PIXELS_BUF_OFFSET, chitra_image_pixels(img));
     store64(pstruct + STRUCT_PIXELS_SIZE_OFFSET, w * h * 4);
-    store64(pstruct + STRUCT_PLTE_BUF_OFFSET, 0);
-    store64(pstruct + STRUCT_PLTE_SIZE_OFFSET, 0);
-    store64(pstruct + STRUCT_INTERLACE_OFFSET, 0);
     store64(pstruct + STRUCT_SEEN_IEND_OFFSET, chitra_image_seen_iend(img));
     store64(pstruct + STRUCT_SRC_COLOR_TYPE_OFFSET, chitra_image_source_color_type(img));
-    return PNG_OK;
+    return IMG_OK;
 }
 
 # ---- decode diagnostics (the `<path>: <text>` lines main prints) ----
-# The text for each PNG_ERR_* code, phrased for the detected format `fmt`
+# The text for each IMG_ERR_* code, phrased for the detected format `fmt`
 # (KII_FMT_*). Through v1.6.3 these lived inline in main's entry point, where
 # no test could reach them; tests/decode.tcyr now pins every line. P(-1),
 # v1.6.4, also made four of them true for every format:
@@ -410,42 +398,42 @@ fn kii_decode_png(path, pstruct): i64 {
 # The 256 MB and 16 MiB figures are pinned in tests/decode.tcyr against
 # KII_MAX_RAW_BYTES and sankoch's DECOMPRESS_MAX_OUTPUT.
 fn kii_decode_error_text(rc, fmt): i64 {
-    if (rc == PNG_ERR_OPEN)           { return "cannot open file"; }
-    if (rc == PNG_ERR_IS_DIR)         { return "is a directory, not an image file"; }
-    if (rc == PNG_ERR_FILE_TOO_LARGE) { return "file exceeds size ceiling (max 256 MB)"; }
-    if (rc == PNG_ERR_NOT_PNG)        { return "unrecognized image format (expected PNG, JPEG, BMP, or GIF)"; }
-    if (rc == PNG_ERR_HEADER) {
+    if (rc == IMG_ERR_OPEN)           { return "cannot open file"; }
+    if (rc == IMG_ERR_IS_DIR)         { return "is a directory, not an image file"; }
+    if (rc == IMG_ERR_FILE_TOO_LARGE) { return "file exceeds size ceiling (max 256 MB)"; }
+    if (rc == IMG_ERR_UNRECOGNIZED)        { return "unrecognized image format (expected PNG, JPEG, BMP, or GIF)"; }
+    if (rc == IMG_ERR_MALFORMED) {
         if (fmt == KII_FMT_JPEG) { return "malformed JPEG (bad marker, segment, or entropy data)"; }
         if (fmt == KII_FMT_BMP)  { return "malformed BMP (bad DIB header, palette, or RLE stream)"; }
         if (fmt == KII_FMT_GIF)  { return "malformed GIF (bad descriptor or color table)"; }
         return "malformed PNG (bad chunk, ordering, or palette)";
     }
-    if (rc == PNG_ERR_CRC)            { return "CRC check failed"; }
-    if (rc == PNG_ERR_CHUNK) {
+    if (rc == IMG_ERR_CRC)            { return "CRC check failed"; }
+    if (rc == IMG_ERR_TRUNCATED) {
         # PNG names its truncation after the chunk stream; every other format
         # (and an unrecognized one) gets the generic wording.
         if (fmt == KII_FMT_PNG) { return "malformed PNG (truncated chunk stream)"; }
         return "truncated image (unexpected end of data)";
     }
-    if (rc == PNG_ERR_INTERLACE)      { return "unsupported interlace method (only 0=none / 1=Adam7 are valid)"; }
-    if (rc == PNG_ERR_BITDEPTH)       { return "unsupported bit depth for this color type (PNG § 11.2.2)"; }
-    if (rc == PNG_ERR_UNSUPPORTED) {
+    if (rc == IMG_ERR_INTERLACE)      { return "unsupported interlace method (only 0=none / 1=Adam7 are valid)"; }
+    if (rc == IMG_ERR_BITDEPTH)       { return "unsupported bit depth for this color type (PNG § 11.2.2)"; }
+    if (rc == IMG_ERR_UNSUPPORTED) {
         if (fmt == KII_FMT_BMP)  { return "unsupported BMP feature (bit depth, compression method, or channel mask)"; }
         if (fmt == KII_FMT_JPEG) { return "unsupported JPEG feature (progressive, arithmetic, 12-bit, non-baseline, CMYK/4-component, or an Adobe colour transform)"; }
         return "unsupported image feature (unrecognized critical chunk, compression method, or color type)";
     }
-    if (rc == PNG_ERR_NO_IDAT) {
+    if (rc == IMG_ERR_NO_IMAGE_DATA) {
         if (fmt == KII_FMT_GIF) { return "no image in GIF (no image descriptor)"; }
         return "no IDAT chunks (nothing to decode)";
     }
-    if (rc == PNG_ERR_INFLATE) {
+    if (rc == IMG_ERR_DECOMPRESS) {
         if (fmt == KII_FMT_GIF) { return "corrupt GIF image data (bad LZW stream)"; }
         return "DEFLATE decompression failed (corrupt IDAT)";
     }
-    if (rc == PNG_ERR_FILTER)         { return "invalid PNG filter type (spec § 9 allows 0–4)"; }
-    if (rc == PNG_ERR_DIMENSIONS)     { return "image dimensions are zero or past the policy ceiling (max 16.7M px / 65535 per side / 256 MB)"; }
-    if (rc == PNG_ERR_IDAT_TOO_LARGE) { return "out of memory or image too large (possible decompression bomb)"; }
-    if (rc == PNG_ERR_INFLATE_LIMIT)  { return "image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)"; }
+    if (rc == IMG_ERR_FILTER)         { return "invalid PNG filter type (spec § 9 allows 0–4)"; }
+    if (rc == IMG_ERR_DIMENSIONS)     { return "image dimensions are zero or past the policy ceiling (max 16.7M px / 65535 per side / 256 MB)"; }
+    if (rc == IMG_ERR_MEMORY) { return "out of memory or image too large (possible decompression bomb)"; }
+    if (rc == IMG_ERR_INFLATE_LIMIT)  { return "image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)"; }
     return "image decode failed";
 }
 

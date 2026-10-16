@@ -17,7 +17,7 @@
 # single-source pin.
 
 include "src/palette.cyr"
-include "src/png.cyr"
+include "src/image.cyr"
 
 # ---- active colour tier -------------------------------------------
 # How many palette entries quantize_nearest_rgb is allowed to choose
@@ -91,13 +91,9 @@ fn quantize_nearest_rgb(r, g, b): i64 {
 }
 
 # NOTE: the M4-era image-wide quantizer `quantize_nearest_image` was
-# removed in the PNG re-fold (v1.2.0). It read the native color_type +
-# PLTE off pstruct to do per-color_type pixel extraction — but post-flip
-# the chitra adapter normalizes every image to depth-8 ct6 RGBA8 (PLTE
-# resolved inside chitra), so the function's source-format dispatch had
-# no live inputs. The M5+ flow uses downscale_to_rgb (its _extract_rgb
-# owns the RGB extraction) → quantize_downscaled instead, and the
-# decoder-internal coverage moved to chitra's own tests. See ADR 0006.
+# removed in the PNG re-fold (v1.2.0): post-flip every image arrives as
+# RGBA8, so its per-colour-type extraction had no live inputs. The flow is
+# downscale_to_rgb → quantize_downscaled. See ADR 0006.
 
 # Quantize a packed RGB-triple source buffer into palette indices.
 # Writes n_pixels bytes into out_buf (caller-owned). Returns 0 on
@@ -123,7 +119,7 @@ fn quantize_rgb_buf(rgb_buf, n_pixels, out_buf): i64 {
 # + DOWNSCALED_H, alloc a (w × h)-byte index buffer, quantize, and
 # store ptr + size into the QUANTIZED slots. Returns 0 on success,
 # -1 on:
-#   - downscale_to_rgb not yet run (DOWNSCALED_BUF == 0; kii_decode_png
+#   - downscale_to_rgb not yet run (DOWNSCALED_BUF == 0; kii_decode_image
 #     zeroes the pstruct, so this check means what it says)
 #   - bad dimensions (w or h <= 0)
 #   - alloc failure

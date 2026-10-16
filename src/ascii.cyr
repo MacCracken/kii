@@ -23,10 +23,10 @@
 # 2x3 sub-samples per character cell. Foreground is the cell's mean color
 # quantized to the 16-color palette.
 #
-# Stdlib (alloc/syscalls) + darshana (tty_*) auto-resolve; png.cyr gives
+# Stdlib (alloc/syscalls) + darshana (tty_*) auto-resolve; image.cyr gives
 # the pstruct contract; quant.cyr gives quantize_nearest_rgb (per-cell fg).
 
-include "src/png.cyr"
+include "src/image.cyr"
 include "src/emit.cyr"   # _kii_write_all (shared stdout plumbing)
 include "src/quant.cyr"
 
@@ -330,35 +330,27 @@ fn emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, buf, pos): i64 {
         pos = pos + 1;
         cx = cx + 1;
     }
-    # Per-row SGR reset + newline (SIGPIPE-clean, like emit_halfblock).
-    pos = tty_sgr_reset_buf(buf, pos);
-    store8(buf + pos, 10);
-    pos = pos + 1;
-    return pos;
+    return _kii_row_end(buf, pos);
+}
+
+# The row builder _kii_emit_frame calls for this lane: its (src, w, row, buf,
+# pos) shape, with the cell count derived from the sub-sample width.
+fn _ascii_frame_row(rgb, sub_w, cy, buf, pos): i64 {
+    return emit_ascii_shape_row_buf(rgb, sub_w, cy, sub_w / 2, buf, pos);
 }
 
 # emit_ascii_shape — render the full frame to fd 1 (stdout). Reads
 # STRUCT_DOWNSCALED_* (the finer (cols*2 x rows*3) RGB buffer main.cyr
 # produces for ASCII mode). Returns 0, -1 if downscale wasn't run / dims
-# invalid, or -2 if a write to stdout failed. Per-row heap buffer sized from cols (no fixed-stack overflow —
-# the v1.2.1 lesson): each cell is <=11 B fg + 1 glyph, + per-row reset/LF.
+# invalid, or -2 if a write to stdout failed. The loop is the shared
+# _kii_emit_frame (src/emit.cyr). Per-row heap buffer sized from cols (no
+# fixed-stack overflow — the v1.2.1 lesson): each cell is <=11 B fg + 1
+# glyph, + per-row reset/LF.
 fn emit_ascii_shape(pstruct): i64 {
     var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
     var sub_w = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
     var sub_h = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
     if (rgb == 0) { return 0 - 1; }
     if (sub_w < 2 || sub_h < 3) { return 0 - 1; }
-    var cols = sub_w / 2;
-    var rows = sub_h / 3;
-    var line_cap = cols * 14 + 16;
-    var line_buf = alloc(line_cap);
-    if (line_buf == 0) { return 0 - 1; }
-    var cy = 0;
-    while (cy < rows) {
-        var pos = emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, line_buf, 0);
-        if (pos < 0) { return 0 - 1; }
-        if (_kii_write_all(1, line_buf, pos) != 0) { return 0 - 2; }
-        cy = cy + 1;
-    }
-    return 0;
+    return _kii_emit_frame(&_ascii_frame_row, rgb, sub_w, sub_h / 3, (sub_w / 2) * 14 + 16);
 }

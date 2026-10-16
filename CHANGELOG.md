@@ -4,6 +4,99 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-15
+
+**The format-neutral rename, and the three code-health items the v1.6.4 sweep pinned to
+it.** kii's image front-end has been named for PNG since v0.3.0, and four releases ago those
+names started covering JPEG, BMP and GIF too. The rename changes no behaviour: with only the
+rename applied, the build is **byte-identical** to v1.6.4.
+
+Every rendered frame is byte-identical to v1.6.4:
+- **113 of 130** standard cases match: all 96 render cases (6 images × both lanes × 8
+  width/flag combinations, including `--verbose`) and every decode diagnostic. The 17
+  that differ are usage errors and `--help`, which print the help text (below).
+- **932 of 932** runs over 466 system images match.
+
+The only output changes are the `--width` / `--mode` error lines and one `--help` line
+(below). **710 assertions** pass on x86_64 and under `cyrius test --aarch64`; the aarch64
+frames match x86_64 on both lanes. **8,011,000 fuzz iterations** are all clean.
+
+### Changed
+- **`src/png.cyr` is `src/image.cyr`**, and its names are format-neutral, with every numeric
+  code unchanged:
+  - `kii_decode_png` → `kii_decode_image`
+  - `png_color_type_name` → `kii_source_type_name`
+  - `PNG_OK` / `PNG_ERR_*` → `IMG_OK` / `IMG_ERR_*`
+
+  Each code is named for what it means:
+
+  | through v1.6.4 | since v1.7.0 |
+  |---|---|
+  | `PNG_ERR_HEADER` (4) | `IMG_ERR_MALFORMED` |
+  | `PNG_ERR_CHUNK` (6) | `IMG_ERR_TRUNCATED` |
+  | `PNG_ERR_TRUNCATED` (2, reserved) | `IMG_ERR_SHORT_FILE` (frees the name for 6) |
+  | `PNG_ERR_NOT_PNG` (3) | `IMG_ERR_UNRECOGNIZED` |
+  | `PNG_ERR_NO_IDAT` (9) | `IMG_ERR_NO_IMAGE_DATA` |
+  | `PNG_ERR_INFLATE` (10) | `IMG_ERR_DECOMPRESS` (DEFLATE or LZW) |
+  | `PNG_ERR_IDAT_TOO_LARGE` (13) | `IMG_ERR_MEMORY` |
+  | every other `PNG_ERR_X` | `IMG_ERR_X` |
+
+  The fuzz and bench names that really are about PNG (`PNG_FUZZ_*`, the PNG surface, the
+  `png_decode` benches) keep theirs.
+- **Downscale accepts only RGBA8** (R-2). chitra has normalized every format to RGBA8 since
+  the v1.2.0 re-fold. So the per-colour-type `_extract_rgb` (greyscale, RGB, palette,
+  grey+alpha, 16-bit) and `_png_color_channels` were reachable only from tests, and both are
+  removed. `downscale_to_rgb` now reads RGBA8 directly and refuses any other format, or a
+  pixel buffer smaller than width × height × 4.
+  - The six pstruct slots only the native decoder used are retired: IDAT count, size and
+    buffer; interlace; PLTE buffer and size.
+  - Their offsets are left unused, so every live slot keeps the offset it has always had.
+- **Both render lanes share one frame loop** (R-8). `emit_halfblock` and `emit_ascii_shape`
+  each carried the same row loop: allocate a line buffer, build each row, write it, and
+  return -1 or -2. They also carried the same row ending (SGR reset + newline). Now:
+  - `_kii_emit_frame` (`src/emit.cyr`) runs the loop and takes each lane's row builder by
+    address, called with `callptr`.
+  - `_kii_row_end` is the shared ending.
+- **cmdit checks `--width` and `--mode`** (R-7).
+  - `--width` uses `cmdit_range(0, KII_MAX_COLS)`, and `--mode` is a
+    `cmdit_enum("halfblock|ascii")` read through `cmdit_get_enum` with `KII_MODE_*`.
+  - kii's own `kii_validate_mode`, `kii_mode_is_ascii` and `kii_width_error_line` are gone.
+  - ⚠ **Two error lines change**:
+
+    | input | through v1.6.4 | since v1.7.0 |
+    |---|---|---|
+    | `--width -5` | `kii: --width must not be negative (0 = fit the terminal)` | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` |
+    | `--width 100001` | `kii: --width exceeds the maximum of 100000 columns` | the same new line |
+
+    `--mode bogus` keeps `kii: --mode must be halfblock or ascii`. All exit 2, as before.
+  - Because cmdit now refuses these during the parse, a bad `--width` or `--mode` is
+    reported before a bad `--color`. `kii --color 7 --mode bogus` used to name `--color`;
+    it now names `--mode`.
+  - `--help`'s `--mode` line reads `-m, --mode <halfblock|ascii>	render mode (default:
+    halfblock)`. It was `<str>	render mode: halfblock or ascii (default: halfblock)`.
+- Sizes: `build/kii` 999,656 → 999,568 bytes. `--agnos` 1,013,904 → 1,013,816. `--aarch64`
+  1,236,984 → 1,171,360: the text shrank back under the 64 KiB segment boundary that v1.6.4
+  crossed.
+
+### Tests
+- **710 assertions** (was 709):
+  - **cli 163 → 171:** `--width` at 0, 1, 100000, 100001, -5 and a huge negative; `--mode`
+    bogus, empty, ascii and the default. Each refusal names its flag. The OUT_OF_RANGE and
+    BAD_ENUM lines are pinned.
+  - **quant 123 → 115:** the `_png_color_channels` group is gone with its function.
+  - **render 198 → 199:** the three `_extract_rgb` checks are gone. Four new ones show
+    downscale refusing colour type 2, bit depth 16 and a short buffer, then accepting RGBA8
+    again.
+
+### Documentation
+- The architecture map, state.md, the getting-started guide (its `--help` block matches the
+  binary byte for byte), SECURITY.md, the README and two examples use the new names.
+- ADRs 0002, 0005, 0006, 0008 and 0009 each gain a v1.7.0 amendment with the name mapping.
+  Their bodies keep the names they were written with. 0008's deferral is closed.
+- The roadmap's 1.7.0 section is deleted. Next up is 1.8.0: tier 2 colour and the emit
+  rework.
+- state.md's test-count line still said 642 after v1.6.4. It now says 710.
+
 ## [1.6.4] - 2026-10-15
 
 **The P(-1) sweep.** Five audit lenses — correctness, security, refactor,

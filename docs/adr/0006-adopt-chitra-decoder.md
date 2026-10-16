@@ -153,3 +153,31 @@ over black (`_over_black`, `(c·a + 127) / 255`, `src/downscale.cyr`). Alpha 255
 channel unchanged, so every opaque image is byte-identical; a fully transparent pixel
 renders black. Real transparency, drawing those cells in the terminal's default
 background, is roadmap work pinned to 1.8.0.
+
+## Amendment — v1.7.0 (the format-neutral rename)
+
+The names this ADR uses were renamed at v1.7.0 (the format-neutral rename, roadmap 1.7.0),
+with every numeric code unchanged and behaviour byte-identical (the rename alone compiles to
+the same binary):
+
+| through v1.6.4 | since v1.7.0 |
+|---|---|
+| `src/png.cyr` | `src/image.cyr` |
+| `kii_decode_png` | `kii_decode_image` |
+| `png_color_type_name` | `kii_source_type_name` |
+| `PNG_OK` / `PNG_ERR_*` | `IMG_OK` / `IMG_ERR_*` |
+| `PNG_ERR_HEADER` (4) | `IMG_ERR_MALFORMED` |
+| `PNG_ERR_CHUNK` (6) | `IMG_ERR_TRUNCATED` |
+| `PNG_ERR_TRUNCATED` (2, reserved) | `IMG_ERR_SHORT_FILE` (reserved) |
+| `PNG_ERR_NOT_PNG` (3) | `IMG_ERR_UNRECOGNIZED` |
+| `PNG_ERR_NO_IDAT` (9) | `IMG_ERR_NO_IMAGE_DATA` |
+| `PNG_ERR_INFLATE` (10) | `IMG_ERR_DECOMPRESS` |
+| `PNG_ERR_IDAT_TOO_LARGE` (13) | `IMG_ERR_MEMORY` |
+
+Every other `PNG_ERR_X` is now `IMG_ERR_X`. The text above keeps the names it was written with.
+
+The adapter also shed what only the native decoder needed (R-2 of the v1.6.4 sweep):
+`_png_color_channels` and downscale's per-colour-type `_extract_rgb` are removed, and the
+pstruct's `IDAT_*`, `PLTE_*` and `INTERLACE` slots are retired (their offsets left unused,
+so every live slot keeps its offset). The adapter's "depth-8 colour type 6" is now the one
+pixel format downscale accepts.

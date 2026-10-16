@@ -2,8 +2,7 @@
 #
 # Post-PNG-re-fold split of the old monolithic tests/kii.tcyr. Covers
 # M4(a) the 16-color ANSI palette, M4(b) the scalar nearest-RGB
-# quantizer, M3(c) _png_color_channels (now a chitra-adapter helper),
-# and M5(c) the decoupled quantize_rgb_buf / quantize_downscaled
+# quantizer, and M5(c) the decoupled quantize_rgb_buf / quantize_downscaled
 # surface. No PNG decode here — the downscaled-buffer cases are wired
 # with hand-built RGB buffers so this file stays off the chitra path.
 #
@@ -12,7 +11,7 @@
 
 include "src/palette.cyr"
 include "src/quant.cyr"
-include "src/png.cyr"
+include "src/image.cyr"
 include "lib/assert.cyr"
 
 # The pre-v1.6.4 quantize_nearest_rgb body, kept here as the reference the
@@ -217,17 +216,6 @@ fn main() {
         tier = tier + 8;
     }
     quant_set_tier(16);
-
-    # ---- M3(c) — _png_color_channels --------------------------------
-    test_group("M3(c) — _png_color_channels");
-    assert_eq(_png_color_channels(0), 1, "greyscale → 1 channel");
-    assert_eq(_png_color_channels(2), 3, "RGB → 3 channels");
-    assert_eq(_png_color_channels(3), 1, "palette → 1 channel (index)");
-    assert_eq(_png_color_channels(4), 2, "grey+alpha → 2 channels");
-    assert_eq(_png_color_channels(6), 4, "RGBA → 4 channels");
-    assert_eq(_png_color_channels(1), 0 - 1, "color_type 1 (unused/invalid) → -1");
-    assert_eq(_png_color_channels(5), 0 - 1, "color_type 5 (unused) → -1");
-    assert_eq(_png_color_channels(7), 0 - 1, "color_type 7 (unused) → -1");
 
     # ---- M5(c) — quantize_rgb_buf (pure RGB → palette idx) --------
     # The new lower-level quantizer, decoupled from PNG / pstruct.

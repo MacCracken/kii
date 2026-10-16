@@ -115,3 +115,28 @@ reads the file once with the stdlib's `file_read_whole_max`, which stops at
 `KII_MAX_RAW_BYTES` (256 MB, defined as chitra's `CHITRA_MAX_RAW_BYTES`) and reports
 `file exceeds size ceiling (max 256 MB)`. The cap still applies to every format before any
 decode starts.
+
+## Amendment — v1.7.0 (the format-neutral rename)
+
+The names this ADR uses were renamed at v1.7.0 (the format-neutral rename, roadmap 1.7.0),
+with every numeric code unchanged and behaviour byte-identical (the rename alone compiles to
+the same binary):
+
+| through v1.6.4 | since v1.7.0 |
+|---|---|
+| `src/png.cyr` | `src/image.cyr` |
+| `kii_decode_png` | `kii_decode_image` |
+| `png_color_type_name` | `kii_source_type_name` |
+| `PNG_OK` / `PNG_ERR_*` | `IMG_OK` / `IMG_ERR_*` |
+| `PNG_ERR_HEADER` (4) | `IMG_ERR_MALFORMED` |
+| `PNG_ERR_CHUNK` (6) | `IMG_ERR_TRUNCATED` |
+| `PNG_ERR_TRUNCATED` (2, reserved) | `IMG_ERR_SHORT_FILE` (reserved) |
+| `PNG_ERR_NOT_PNG` (3) | `IMG_ERR_UNRECOGNIZED` |
+| `PNG_ERR_NO_IDAT` (9) | `IMG_ERR_NO_IMAGE_DATA` |
+| `PNG_ERR_INFLATE` (10) | `IMG_ERR_DECOMPRESS` |
+| `PNG_ERR_IDAT_TOO_LARGE` (13) | `IMG_ERR_MEMORY` |
+
+Every other `PNG_ERR_X` is now `IMG_ERR_X`. The text above keeps the names it was written with.
+
+This closes the deferral in § Error-space + naming: the rename it postponed is done, as
+its own release, so the JPEG wiring stayed the tight change this ADR wanted.

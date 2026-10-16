@@ -3,35 +3,13 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.6.4**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.7.0**.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
 are pinned**: a release takes the items listed under it, and an item moves to another
 version only by editing this file. Work that depends on another repo shipping first
 has no version until it does (§ Gated on upstream).
-
-## 1.7.0 — Format-neutral rename of the image front-end
-
-Rename `kii_decode_png` → `kii_decode_image`, `src/png.cyr` → `src/image.cyr`, and the
-`PNG_ERR_*` code space → `IMG_ERR_*`. Measured blast radius: **28 distinct symbols across
-290 call sites** (one more since, `PNG_ERR_INFLATE_LIMIT` at v1.6.0) in 4 source and 5
-test files, plus 10 `include "src/png.cyr"` sites. The names now cover four formats and
-actively mislead. It is mechanical and fully test-covered, but it is a wide diff with no
-behaviour change, so it gets its own cut, ahead of the feature work that would otherwise
-be written against the old names. See [ADR 0008](../adr/0008-jpeg-via-chitra.md)
-§ Error-space + naming.
-
-The same cut takes the surface clean-ups the v1.6.4 sweep left for it
-([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md) § 6), all
-behaviour-neutral unless noted:
-
-- Trim `_extract_rgb` to the RGBA path the adapter always supplies, and drop the dead
-  `IDAT_*`, `PLTE_*` and `INTERLACE` pstruct slots (R-2).
-- Share the frame loop and row ending that `emit_halfblock` and `emit_ascii_shape`
-  each repeat (R-8).
-- Adopt cmdit's `cmdit_range` for `--width` and `cmdit_enum` for `--mode` in place of
-  kii's own checks (R-7). This changes those flags' error text, so list it.
 
 ## 1.8.0 — Tier 2 colour, and the emit rework
 

@@ -67,7 +67,7 @@ Options:
   -w, --width <int>	output width in columns (0 = match terminal)
   -c, --color <int>	color tier: 8 or 16 (tier-2 modes post-v1)
   -v, --verbose	print decode summary to stderr after the frame
-  -m, --mode <str>	render mode: halfblock or ascii (default: halfblock)
+  -m, --mode <halfblock|ascii>	render mode (default: halfblock)
 
 Examples:
   kii --version                              # version + etymology
@@ -205,8 +205,7 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: --verbose takes no value` | A switch given `=value`; the line names it (`--help`, `--version` likewise) |
 | `kii: flag takes no value` | The same, when no flag can be named |
 | `kii: --color must be 8 or 16` | Any other `--color` value |
-| `kii: --width exceeds the maximum of 100000 columns` | `--width` over 100000 |
-| `kii: --width must not be negative (0 = fit the terminal)` | A negative `--width` (since v1.6.4; it used to mean "fit the terminal") |
+| `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
 | `kii: --mode must be halfblock or ascii` | Any other `--mode` value |
 | `kii: missing image path` | No path given |
 | `kii: too many arguments (expected one image path)` | More than one path |

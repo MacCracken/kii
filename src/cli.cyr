@@ -68,7 +68,13 @@ var KII_F_MODE    = 0 - 1;
 # --width 0 is the M6 sentinel for "match terminal"; --color 16 picks the
 # higher fidelity tier within v1.0 scope. cmdit_bool takes no default (always 0).
 fn kii_register_flags(fs): i64 {
+    # --width is range-checked by cmdit itself (v1.7.0): a value outside
+    # [0, KII_MAX_COLS] fails the parse with CMDIT_ERR_OUT_OF_RANGE. Until
+    # v1.6.4 kii checked it after the parse; a negative width used to mean
+    # "fit the terminal" (fixed at v1.6.4), and the bound is the overflow
+    # guard described above KII_MAX_COLS.
     KII_F_WIDTH   = cmdit_int (fs, 119, "width",   0,  "output width in columns (0 = match terminal)");
+    cmdit_range(fs, KII_F_WIDTH, 0, KII_MAX_COLS);
     KII_F_COLOR   = cmdit_int (fs,  99, "color",   16, "color tier: 8 or 16 (tier-2 modes post-v1)");
     # `v` (118) was reserved for --verbose at M1; activated at M5
     # alongside the ANSI emit. With the frame now occupying stdout,
@@ -77,9 +83,10 @@ fn kii_register_flags(fs): i64 {
     KII_F_VERBOSE = cmdit_bool(fs, 118, "verbose", "print decode summary to stderr after the frame");
     # --mode / -m (109): rendering lane. "halfblock" (default) = the ▀ fg/bg
     # floor; "ascii" = text-glyph art (shape-vector matching since v1.3.1,
-    # colored fg). See ADR 0007. cmdit appends "(default: halfblock)" itself,
-    # so the help text does not repeat it (it did through v1.6.3).
-    KII_F_MODE    = cmdit_str (fs, 109, "mode", "halfblock", "render mode: halfblock or ascii");
+    # colored fg). See ADR 0007. A cmdit enum since v1.7.0: any other value
+    # fails the parse with CMDIT_ERR_BAD_ENUM, and cmdit_get_enum gives the
+    # choice's index (KII_MODE_*), in the order of the choices string.
+    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii", "render mode");
     return 0;
 }
 
@@ -92,31 +99,10 @@ fn kii_validate_color(color): i64 {
     return 0;
 }
 
-# --mode validation. "halfblock" (the ▀ floor) and "ascii" (text glyphs)
-# are the two rendering lanes. Returns 1 if valid, 0 otherwise.
-fn kii_validate_mode(mode): i64 {
-    if (streq(mode, "halfblock") == 1) { return 1; }
-    if (streq(mode, "ascii") == 1)     { return 1; }
-    return 0;
-}
-
-# True (1) iff `mode` selects the character-glyph lane. (halfblock is the
-# default, so a null/empty/unknown mode is treated as NOT ascii — but
-# kii_validate_mode rejects unknowns before this is reached.)
-fn kii_mode_is_ascii(mode): i64 {
-    return streq(mode, "ascii");
-}
-
-# --width check: 0 if `w` is usable (0 = fit the terminal, or 1 to
-# KII_MAX_COLS), else the exact usage line main prints. P(-1) (v1.6.4) added
-# the negative case: `--width -5` used to fall through main's `width > 0`
-# test and silently mean "fit the terminal", exit 0. Both figures in the
-# text are pinned against KII_MAX_COLS in tests/cli.tcyr.
-fn kii_width_error_line(w): i64 {
-    if (w > KII_MAX_COLS) { return "kii: --width exceeds the maximum of 100000 columns\n"; }
-    if (w < 0)            { return "kii: --width must not be negative (0 = fit the terminal)\n"; }
-    return 0;
-}
+# --mode's choices, as cmdit_get_enum(fs, KII_F_MODE) indexes them (the
+# order of "halfblock|ascii" in kii_register_flags).
+var KII_MODE_HALFBLOCK = 0;
+var KII_MODE_ASCII     = 1;
 
 # Frame-size predicate (P(-1), v1.6.4): 1 if a `cols` x `rows` character
 # frame is within KII_MAX_CELLS, 0 if not. Division form, so the check cannot
@@ -132,9 +118,13 @@ fn kii_frame_cells_ok(cols, rows): i64 {
 # ---- parse-error diagnostics ---------------------------------------
 # The stderr line main prints when cmdit_parse returns CMDIT_RESULT_ERR,
 # "kii: " prefix and newline included, so tests/cli.tcyr pins the exact
-# bytes. Codes kii's flag set cannot produce (REQUIRED_MISSING, BAD_ENUM,
-# OUT_OF_RANGE, the verb and positional-count codes, REPEATED) share the
-# generic last line.
+# bytes. Codes kii's flag set cannot produce (REQUIRED_MISSING, the verb
+# and positional-count codes, REPEATED) share the generic last line.
+#
+# v1.7.0: OUT_OF_RANGE and BAD_ENUM became reachable when --width and
+# --mode moved onto cmdit_range / cmdit_enum. kii registers exactly one
+# range flag (--width) and one enum flag (--mode), so each code names its
+# flag; tests/cli.tcyr pins that pairing, so a second such flag fails there.
 #
 # v1.6.2: cmdit 1.3.x added three codes that kii's flag set CAN reach, and
 # through v1.6.1 each fell to the generic line:
@@ -153,6 +143,8 @@ fn kii_parse_error_line(err): i64 {
     if (err == CMDIT_ERR_UNEXPECTED_VALUE) { return "kii: flag takes no value\n"; }
     if (err == CMDIT_ERR_NOMEM)            { return "kii: out of memory\n"; }
     if (err == CMDIT_ERR_ARGV)             { return "kii: could not read the full command line\n"; }
+    if (err == CMDIT_ERR_OUT_OF_RANGE)     { return "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n"; }
+    if (err == CMDIT_ERR_BAD_ENUM)         { return "kii: --mode must be halfblock or ascii\n"; }
     return "kii: argument parse error\n";
 }
 

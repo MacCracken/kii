@@ -1,17 +1,17 @@
 # downscale.cyr — nearest-neighbor RGB resampler.
 #
-# v0.6.0 / M5(b). Reads the decoded source pixel buffer at
-# STRUCT_PIXELS_BUF_OFFSET (W_src × H_src × bpp bytes in the source
-# color_type's native layout) and produces a packed RGB-triple buffer
-# at STRUCT_DOWNSCALED_BUF_OFFSET sized to (dst_w × dst_h × 3) bytes.
+# v0.6.0 / M5(b). Reads the decoded RGBA8 source buffer at
+# STRUCT_PIXELS_BUF_OFFSET (W_src × H_src × 4 bytes, chitra's canonical
+# layout for every input format) and produces a packed RGB-triple buffer
+# at STRUCT_DOWNSCALED_BUF_OFFSET sized to (dst_w × dst_h × 3) bytes,
+# with alpha composited over black.
 #
-# **Why "to RGB"** (not preserving source color_type):
-# Normalizing during downscale means every downstream consumer (the
-# M5 quantizer, the M5 emit layer) sees a uniform layout — 3 bytes
-# per pixel, R G B in order — regardless of whether the source was
-# greyscale / RGB / palette / RGBA / grey+alpha. The per-color_type
-# dispatch lives here once, and the quantizer stays focused on
-# RGB → palette-index.
+# **Why "to RGB"**: every downstream consumer (the quantizer, both emit
+# lanes) sees one uniform layout — 3 bytes per pixel, R G B in order —
+# and the quantizer stays focused on RGB → palette-index. Through v1.6.4
+# this module also dispatched on the source colour type (greyscale / RGB /
+# palette / grey+alpha, 8 or 16 bits); chitra has normalized all of those
+# to RGBA8 since the v1.2.0 re-fold, so v1.7.0 removed the dispatch.
 #
 # **Why nearest-neighbor** (not bilinear / Lanczos):
 # Smallest correct algorithm. Tier-1 floor per CLAUDE.md color-tier
@@ -25,7 +25,7 @@
 #   For each dst pixel (dx, dy) in [0, dst_w) × [0, dst_h):
 #     sx = (dx × W_src) / dst_w       # integer truncation toward 0
 #     sy = (dy × H_src) / dst_h
-#     (r, g, b) = extract_rgb(pixels, sx, sy, color_type, ...)
+#     (r, g, b) = the RGBA8 pixel at (sx, sy), composited over black
 #     store at dst_buf + (dy × dst_w + dx) × 3
 #
 # Multi-source convergent port: shape drawn from chafa's
@@ -33,7 +33,7 @@
 # picker, and the canonical nearest-neighbor reference in Foley/
 # van Dam § 17.4.1. Not single-source.
 
-include "src/png.cyr"
+include "src/image.cyr"
 
 # Composite one channel byte over black: c * a / 255, rounded. Exact at the
 # ends: a = 255 returns c unchanged (so opaque images render byte-identically)
@@ -50,82 +50,13 @@ fn _over_black(c, a): i64 {
     return (c * a + 127) / 255;
 }
 
-# Per-color_type RGB extraction for ONE source pixel at (sx, sy).
-# Writes the R/G/B byte values into out_buf[0..3]. Returns 0 on
-# success, -1 on bad color_type / missing PLTE. Alpha types are
-# composited over black (_over_black). Since the v1.2.0 re-fold the
-# adapter always hands over depth-8 RGBA, which downscale_to_rgb reads on
-# its own fast path; this general form is reached by 16-bit RGBA and by
-# tests. Trimming it to RGBA is part of the 1.7.0 rename.
-#
-# bit_depth handling: bps = bit_depth / 8 (1 or 2 bytes per sample);
-# we always read the HIGH byte at depth=16 (truncation — full-
-# precision 16-bit is post-v1 per CLAUDE.md color-tier discipline).
-fn _extract_rgb(pixels, sx, sy, width, color_type, bps, plte_buf, plte_size, out_buf): i64 {
-    var channels = _png_color_channels(color_type);
-    if (channels < 0) { return 0 - 1; }
-    var bpp = channels * bps;
-    var pix_off = (sy * width + sx) * bpp;
-
-    if (color_type == 0) {
-        # Greyscale: 1 sample × bps bytes.
-        var v = load8(pixels + pix_off);
-        store8(out_buf + 0, v);
-        store8(out_buf + 1, v);
-        store8(out_buf + 2, v);
-        return 0;
-    }
-    if (color_type == 2) {
-        store8(out_buf + 0, load8(pixels + pix_off + 0 * bps));
-        store8(out_buf + 1, load8(pixels + pix_off + 1 * bps));
-        store8(out_buf + 2, load8(pixels + pix_off + 2 * bps));
-        return 0;
-    }
-    if (color_type == 3) {
-        # Palette index → PLTE lookup.
-        if (plte_buf == 0 || plte_size == 0) { return 0 - 1; }
-        var pi = load8(pixels + pix_off);
-        var po = pi * 3;
-        # Defensive bounds — OOB indices map to black (entry 0 would
-        # also work; black is the safer "did not match" sentinel).
-        if (po + 2 < plte_size) {
-            store8(out_buf + 0, load8(plte_buf + po + 0));
-            store8(out_buf + 1, load8(plte_buf + po + 1));
-            store8(out_buf + 2, load8(plte_buf + po + 2));
-        } else {
-            store8(out_buf + 0, 0);
-            store8(out_buf + 1, 0);
-            store8(out_buf + 2, 0);
-        }
-        return 0;
-    }
-    if (color_type == 4) {
-        # Greyscale + alpha: grey sample, composited over black.
-        var ga = load8(pixels + pix_off + 1 * bps);
-        var v = _over_black(load8(pixels + pix_off), ga);
-        store8(out_buf + 0, v);
-        store8(out_buf + 1, v);
-        store8(out_buf + 2, v);
-        return 0;
-    }
-    if (color_type == 6) {
-        # RGBA: R, G, B composited over black by A.
-        var a = load8(pixels + pix_off + 3 * bps);
-        store8(out_buf + 0, _over_black(load8(pixels + pix_off + 0 * bps), a));
-        store8(out_buf + 1, _over_black(load8(pixels + pix_off + 1 * bps), a));
-        store8(out_buf + 2, _over_black(load8(pixels + pix_off + 2 * bps), a));
-        return 0;
-    }
-    return 0 - 1;
-}
-
 # Downscale the decoded source pixel buffer to a packed RGB-triple
 # buffer of size dst_w × dst_h × 3 bytes. Stores ptr + dimensions
 # into pstruct's STRUCT_DOWNSCALED_*_OFFSET slots. Returns 0 on
 # success, -1 on:
 #   - no decoded pixels yet (STRUCT_PIXELS_BUF_OFFSET == 0)
-#   - bad color_type
-#   - PLTE missing for color_type=3
+#   - a pixel format other than RGBA8 (bit_depth 8, color_type 6), or a
+#     pixel buffer smaller than width × height × 4
 #   - dst_w / dst_h <= 0
 #   - alloc failure
 #
@@ -147,20 +78,16 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     var color_type= load64(pstruct + STRUCT_COLOR_TYPE_OFFSET);
     var pixels    = load64(pstruct + STRUCT_PIXELS_BUF_OFFSET);
     var pix_size  = load64(pstruct + STRUCT_PIXELS_SIZE_OFFSET);
-    var plte_buf  = load64(pstruct + STRUCT_PLTE_BUF_OFFSET);
-    var plte_size = load64(pstruct + STRUCT_PLTE_SIZE_OFFSET);
 
     if (pixels == 0)    { return 0 - 1; }
-    if (pix_size <= 0)  { return 0 - 1; }
     if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
-    var channels = _png_color_channels(color_type);
-    if (channels < 0) { return 0 - 1; }
-    if (color_type == 3) {
-        if (plte_buf == 0 || plte_size == 0) { return 0 - 1; }
-    }
-
-    var bps = bit_depth / 8;
-    if (bps <= 0) { return 0 - 1; }
+    # RGBA8 only: chitra normalizes every format to it, and the adapter
+    # states it in these two slots. (Through v1.6.4 a per-colour-type
+    # dispatch, _extract_rgb, handled greyscale / RGB / palette / grey+alpha
+    # and 16-bit too; nothing has produced them since the v1.2.0 re-fold.)
+    if (bit_depth != 8 || color_type != 6) { return 0 - 1; }
+    # Dimensions are ≤ 65535 per side (chitra's cap), so the product is safe.
+    if (pix_size < src_w * src_h * 4) { return 0 - 1; }
 
     # Overflow-safe output sizing (P-1, v1.5.1). `dst_w * dst_h * 3` is a
     # 64-bit product on caller-supplied geometry; if it WRAPS to a small
@@ -178,62 +105,29 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     var out_buf = alloc(out_bytes);
     if (out_buf == 0) { return 0 - 1; }
 
-    # The live path (P(-1) O-4, v1.6.4). The chitra adapter always hands over
-    # depth-8 RGBA, so read R, G, B straight off the source row: no per-pixel
-    # _extract_rgb call, channel lookup or color_type dispatch, ~4x faster.
-    # Same sx / sy formulas as the general loop below, and the same
-    # composite over black, so the bytes match it exactly.
-    if (color_type == 6 && bps == 1) {
-        var fdy = 0;
-        var op = out_buf;
-        while (fdy < dst_h) {
-            var fsy = (fdy * src_h) / dst_h;
-            var rowp = pixels + fsy * src_w * 4;
-            var fdx = 0;
-            while (fdx < dst_w) {
-                var sp = rowp + ((fdx * src_w) / dst_w) * 4;
-                var fa = load8(sp + 3);
-                if (fa == 255) {
-                    store8(op, load8(sp));
-                    store8(op + 1, load8(sp + 1));
-                    store8(op + 2, load8(sp + 2));
-                } else {
-                    store8(op, _over_black(load8(sp), fa));
-                    store8(op + 1, _over_black(load8(sp + 1), fa));
-                    store8(op + 2, _over_black(load8(sp + 2), fa));
-                }
-                op = op + 3;
-                fdx = fdx + 1;
-            }
-            fdy = fdy + 1;
-        }
-        store64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET, out_buf);
-        store64(pstruct + STRUCT_DOWNSCALED_W_OFFSET,   dst_w);
-        store64(pstruct + STRUCT_DOWNSCALED_H_OFFSET,   dst_h);
-        return 0;
-    }
-
+    # Read R, G, B straight off the source row (the v1.6.4 O-4 fast path,
+    # now the only path). sy is constant across a scanline; integer
+    # truncation keeps both sy and sx strictly below the source size, so the
+    # read never passes the buffer's end. Alpha composites over black.
     var dy = 0;
+    var op = out_buf;
     while (dy < dst_h) {
-        # sy is constant across a scanline; hoist out of the inner
-        # loop. Integer-truncation: (dy * src_h) / dst_h. For dy=0
-        # this is 0; for dy=(dst_h-1) it's ((dst_h-1) × src_h)/dst_h,
-        # which is < src_h by at least one (so we never read past
-        # the source-buffer end). dst_h > 0 is enforced above so
-        # divide-by-zero can't happen.
         var sy = (dy * src_h) / dst_h;
+        var rowp = pixels + sy * src_w * 4;
         var dx = 0;
         while (dx < dst_w) {
-            var sx = (dx * src_w) / dst_w;
-            var dst_off = (dy * dst_w + dx) * 3;
-            var rc = _extract_rgb(pixels, sx, sy, src_w, color_type, bps,
-              plte_buf, plte_size, out_buf + dst_off);
-            if (rc != 0) {
-                # Should never fire — color_type + PLTE are validated
-                # at function entry. If it does, abort the operation
-                # rather than leaving a half-filled buffer.
-                return 0 - 1;
+            var sp = rowp + ((dx * src_w) / dst_w) * 4;
+            var a = load8(sp + 3);
+            if (a == 255) {
+                store8(op, load8(sp));
+                store8(op + 1, load8(sp + 1));
+                store8(op + 2, load8(sp + 2));
+            } else {
+                store8(op, _over_black(load8(sp), a));
+                store8(op + 1, _over_black(load8(sp + 1), a));
+                store8(op + 2, _over_black(load8(sp + 2), a));
             }
+            op = op + 3;
             dx = dx + 1;
         }
         dy = dy + 1;

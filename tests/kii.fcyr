@@ -7,10 +7,10 @@
 #
 # 2. PNG decode adapter (M2 sub-bite (d), re-aimed at the PNG re-fold):
 #    writes random byte sequences to /tmp/kii-fuzz-png.bin + drives
-#    kii_decode_png (the chitra adapter) over them. 50% of iterations
+#    kii_decode_image (the chitra adapter) over them. 50% of iterations
 #    prepend a valid signature + IHDR so chitra's post-IHDR chunk walker
-#    gets exercised. Contract: kii_decode_png never crashes; returns
-#    PNG_OK or any PNG_ERR_* cleanly.
+#    gets exercised. Contract: kii_decode_image never crashes; returns
+#    IMG_OK or any IMG_ERR_* cleanly.
 #
 # 3b. BMP + GIF decode adapters (v1.5.0, chitra 1.0.0): the same shape as
 #    the JPEG surface below — prepend the format signature ("BM" / "GIF89a")
@@ -20,7 +20,7 @@
 #    attacker-controlled codes, which is the classic GIF-decoder CVE class.
 #
 # 3. JPEG decode adapter (v1.4.0, chitra 0.3.0): writes SOI (0xFFD8) +
-#    random bytes to /tmp/kii-fuzz-jpeg.bin + drives the same kii_decode_png
+#    random bytes to /tmp/kii-fuzz-jpeg.bin + drives the same kii_decode_image
 #    adapter, which now routes JPEG-signature input to chitra's JPEG decoder
 #    via chitra_image_decode. Exercises the format sniff + marker/segment
 #    parser over arbitrary bytes. Crash-safety only. NOTE: a present SOI makes
@@ -41,7 +41,7 @@
 # cyrius.cyml; the project modules come from the includes below.
 
 include "src/cli.cyr"
-include "src/png.cyr"
+include "src/image.cyr"
 include "src/palette.cyr"
 include "src/quant.cyr"
 include "src/downscale.cyr"
@@ -481,7 +481,7 @@ fn fuzz_emit_iter(pstruct, line_buf): i64 {
 
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
-# kii_decode_png. Whatever the function returns is fine —
+# kii_decode_image. Whatever the function returns is fine —
 # the contract is "never crash". `scratch_buf` is caller-owned;
 # `scratch_cap` is the buffer's capacity so we don't overflow.
 fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
@@ -507,11 +507,11 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
     file_write_all("/tmp/kii-fuzz-png.bin", scratch_buf, total);
 
     # Drive the decode adapter. Result discarded — we only care about
-    # not-crashing; any PNG_ERR_* return is fine. The adapter writes
+    # not-crashing; any IMG_ERR_* return is fine. The adapter writes
     # PIXELS_BUF@72 and SRC_COLOR_TYPE@144, so pstruct must be ≥160 B.
     var pstruct[160];
-    kii_decode_png("/tmp/kii-fuzz-png.bin", &pstruct);
-    # Rewind the bump allocator: kii_decode_png slurps the file (and chitra
+    kii_decode_image("/tmp/kii-fuzz-png.bin", &pstruct);
+    # Rewind the bump allocator: kii_decode_image slurps the file (and chitra
     # allocates per-decode), none of which crosses iterations. Without this
     # the never-free allocator grows ~1 KB/iter → ~1 GB over 10⁶ iters. Safe
     # here: the emit loop (the only cross-iter pstruct) has already finished
@@ -523,7 +523,7 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
     # alloc_reset() rewinds the bump allocator underneath that pointer, so from
     # iteration 2 onward the cached table ALIASED live decode memory and the
     # decoder mis-parsed everything: a return-code tally showed 2999 of 3000
-    # iterations dying at the signature check (PNG_ERR_NOT_PNG) instead of
+    # iterations dying at the signature check (IMG_ERR_UNRECOGNIZED) instead of
     # reaching the chunk walker, inflate, unfilter or the PLTE bounds. Clearing
     # the cache forces a re-init into the fresh heap and restores full coverage
     # — the tally with this line is byte-for-byte the same as with no reset at
@@ -541,8 +541,8 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
 # allocate its frame/quant/huff tables (up to ~22 KB) BEFORE that failure — so,
 # like the PNG iter, this MUST rewind the never-free bump allocator each
 # iteration or it grows ~22 KB/iter (~22 GB over 10⁶ iters → OOM).
-# alloc_reset() below does that. Contract: kii_decode_png
-# never crashes; returns PNG_OK or any PNG_ERR_* cleanly.
+# alloc_reset() below does that. Contract: kii_decode_image
+# never crashes; returns IMG_OK or any IMG_ERR_* cleanly.
 fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
     store8(scratch_buf + 0, 0xFF);            # SOI marker high byte
     store8(scratch_buf + 1, 0xD8);            # SOI marker low byte
@@ -556,7 +556,7 @@ fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
     }
     file_write_all("/tmp/kii-fuzz-jpeg.bin", scratch_buf, 2 + payload);
     var pstruct[160];
-    kii_decode_png("/tmp/kii-fuzz-jpeg.bin", &pstruct);
+    kii_decode_image("/tmp/kii-fuzz-jpeg.bin", &pstruct);
     alloc_reset();                            # bound the never-free heap (see above)
     crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
@@ -569,7 +569,7 @@ fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
 # arbitrary bytes. Same allocator discipline as the PNG/JPEG surfaces: a
 # matched signature makes chitra allocate header/palette scratch before the
 # parse fails, so rewind the bump allocator each iteration.
-# Contract: kii_decode_png never crashes; returns PNG_OK or any PNG_ERR_*.
+# Contract: kii_decode_image never crashes; returns IMG_OK or any IMG_ERR_*.
 fn fuzz_bmp_iter(scratch_buf, scratch_cap): i64 {
     store8(scratch_buf + 0, 0x42);            # 'B'
     store8(scratch_buf + 1, 0x4D);            # 'M'
@@ -583,7 +583,7 @@ fn fuzz_bmp_iter(scratch_buf, scratch_cap): i64 {
     }
     file_write_all("/tmp/kii-fuzz-bmp.bin", scratch_buf, 2 + payload);
     var pstruct[160];
-    kii_decode_png("/tmp/kii-fuzz-bmp.bin", &pstruct);
+    kii_decode_image("/tmp/kii-fuzz-bmp.bin", &pstruct);
     alloc_reset();                            # bound the never-free heap
     crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
@@ -595,7 +595,7 @@ fn fuzz_bmp_iter(scratch_buf, scratch_cap): i64 {
 # see arbitrary bytes. The LZW path is the interesting one: it builds a
 # dictionary from attacker-controlled codes, which is the classic GIF
 # decoder CVE surface. Same allocator rewind as the other decode surfaces.
-# Contract: kii_decode_png never crashes; returns PNG_OK or any PNG_ERR_*.
+# Contract: kii_decode_image never crashes; returns IMG_OK or any IMG_ERR_*.
 fn fuzz_gif_iter(scratch_buf, scratch_cap): i64 {
     store8(scratch_buf + 0, 0x47);            # 'G'
     store8(scratch_buf + 1, 0x49);            # 'I'
@@ -613,7 +613,7 @@ fn fuzz_gif_iter(scratch_buf, scratch_cap): i64 {
     }
     file_write_all("/tmp/kii-fuzz-gif.bin", scratch_buf, 6 + payload);
     var pstruct[160];
-    kii_decode_png("/tmp/kii-fuzz-gif.bin", &pstruct);
+    kii_decode_image("/tmp/kii-fuzz-gif.bin", &pstruct);
     alloc_reset();                            # bound the never-free heap
     crc32_table = 0;   # see above — MUST accompany every alloc_reset()
     return 0;
@@ -699,7 +699,7 @@ fn main(): i64 {
     var emit_iter = 0;
     var emit_bad  = 0;
     var emit_pstr[160];
-    if (kii_decode_png("tests/fixtures/RAMGON.png", &emit_pstr) == PNG_OK) {
+    if (kii_decode_image("tests/fixtures/RAMGON.png", &emit_pstr) == IMG_OK) {
         # ANSI escape can produce up to ~25 bytes per cell at
         # 200 cols; 8 KB scratch is well above worst-case.
         var emit_line[8192];

@@ -45,7 +45,7 @@
 # index (tests/render.tcyr checks all 256 against the retired body).
 
 include "src/palette.cyr"
-include "src/png.cyr"
+include "src/image.cyr"
 
 # Half-block output geometry defaults. These are the floor used when
 # both `--width` and tty detection fall through — chosen to match the
@@ -230,14 +230,17 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
         store8(buf + pos, EMIT_HALFBLOCK_B2); pos = pos + 1;
         col = col + 1;
     }
-    # End-of-row reset + newline so each row resets SGR state before
-    # the next row's FG/BG escapes overwrite it. Without the reset
-    # mid-frame an aborted write (eg. SIGPIPE) could leave the
-    # terminal stuck in a colored state.
+    return _kii_row_end(buf, pos);
+}
+
+# The row ending both render lanes use: SGR reset + newline, so each row
+# resets colour state before the next row's escapes. Without the reset an
+# aborted write (e.g. SIGPIPE mid-frame) could leave the terminal stuck in a
+# coloured state. Returns the new pos.
+fn _kii_row_end(buf, pos): i64 {
     pos = tty_sgr_reset_buf(buf, pos);
     store8(buf + pos, 10);                       # '\n'
-    pos = pos + 1;
-    return pos;
+    return pos + 1;
 }
 
 # ---- short-write-safe stdout writer --------------------------------
@@ -291,7 +294,6 @@ fn emit_halfblock(pstruct): i64 {
     if (qbuf == 0)        { return 0 - 1; }
     if (sw <= 0 || sh <= 0) { return 0 - 1; }
     if (sh % 2 != 0)      { return 0 - 1; }
-    var t_rows = sh / 2;
 
     # Per-row scratch, sized from the ACTUAL width. Each cell is at most
     # tty_fg_256_buf (≤11) + tty_bg_256_buf (≤11) + glyph (3) = 25 bytes
@@ -302,12 +304,22 @@ fn emit_halfblock(pstruct): i64 {
     # `emit_halfblock_row_buf` overflowed for sw ≳ 89, e.g.
     # `kii --width 200`). An absurd width fails the alloc and returns -1
     # cleanly rather than smashing the stack.
-    var line_cap = sw * 26 + 16;
+    return _kii_emit_frame(&emit_halfblock_row_buf, qbuf, sw, sh / 2, sw * 26 + 16);
+}
+
+# The frame loop both render lanes share (v1.7.0; R-8 of the v1.6.4 sweep —
+# emit_halfblock and emit_ascii_shape each carried their own copy). One heap
+# line buffer of `line_cap` bytes; for each of `rows` rows, `row_fn(src, w,
+# row, buf, 0)` builds the row and _kii_write_all writes it. `row_fn` is a
+# row builder taken by address and called with callptr. Returns 0, -1 if the
+# buffer cannot be allocated or a row builder refuses, or -2 if a write to
+# stdout fails (main reports that one distinctly).
+fn _kii_emit_frame(row_fn, src, w, rows, line_cap): i64 {
     var line_buf = alloc(line_cap);
     if (line_buf == 0) { return 0 - 1; }
     var row = 0;
-    while (row < t_rows) {
-        var pos = emit_halfblock_row_buf(qbuf, sw, row, line_buf, 0);
+    while (row < rows) {
+        var pos = callptr(row_fn, src, w, row, line_buf, 0);
         if (pos < 0) { return 0 - 1; }
         if (_kii_write_all(1, line_buf, pos) != 0) { return 0 - 2; }
         row = row + 1;

@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.6.4** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v1.7.0** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to the 8- or 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
@@ -60,6 +60,10 @@ shared substrate, which is the point:
   read correctly, transparent pixels render black instead of their hidden colour, and small
   images render about 2× faster at wide output; every opaque frame is byte-identical.
   ([full report](docs/audit/2026-10-15-audit.md))
+- **v1.7.0** — the format-neutral rename: `src/png.cyr` is `src/image.cyr`, `kii_decode_png`
+  is `kii_decode_image`, and the `PNG_ERR_*` codes are `IMG_ERR_*`, named for what they mean.
+  The dead per-colour-type decoder paths are gone, both render lanes share one frame loop, and
+  cmdit checks `--width` and `--mode`. Every frame is byte-identical.
 
 ### Supported input formats
 

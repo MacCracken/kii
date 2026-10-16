@@ -1,18 +1,18 @@
 # kii — decode-adapter tests (standalone, the PNG re-fold surface).
 #
-# Post-re-fold, kii no longer carries a native PNG decoder; src/png.cyr
+# Post-re-fold, kii no longer carries a native PNG decoder; src/image.cyr
 # is a thin adapter over the chitra distlib. The decoder-internal
 # assertions (signature / IHDR / CRC / chunk-walk / unfilter / inflate)
 # moved to chitra's own tests/tcyr/png.tcyr. What remains kii's
 # responsibility — and what this file pins — is the ADAPTER:
-#   - the ChitraErr → PNG_ERR_* mapping (_kii_map_chitra_err),
-#   - kii_decode_png's file-I/O boundary + pstruct contract,
+#   - the ChitraErr → IMG_ERR_* mapping (_kii_map_chitra_err),
+#   - kii_decode_image's file-I/O boundary + pstruct contract,
 #   - the error paths the adapter is on the hook for (open / empty /
 #     not-a-PNG / inflate failure / IEND tolerance).
 #
 # v1.4.0 adds the JPEG surface (chitra 0.3.0): the adapter calls
 # chitra_image_decode, so this file also pins the JPEG side of the adapter —
-# the 11 new ChitraErr → PNG_ERR_* mappings, the JPEG src-ctype sentinel
+# the 11 new ChitraErr → IMG_ERR_* mappings, the JPEG src-ctype sentinel
 # names (--verbose), the KII_FMT_* format tag, and e2e decode of a grayscale
 # + a YCbCr baseline JPEG fixture (tests/fixtures/{gradient,color}.jpg).
 #
@@ -23,14 +23,14 @@
 # cyrius.cyml; only the project adapter module + assert harness are
 # included explicitly.
 
-include "src/png.cyr"
+include "src/image.cyr"
 include "lib/assert.cyr"
 
 # Temp dir for the file-based adapter tests. Must be a path that exists +
 # is writable on ANY machine/CI runner — `/tmp` is POSIX-standard and is
 # what tests/kii.fcyr already uses. (Was a session-specific scratchpad,
 # which broke CI: file_write_all to a nonexistent dir failed and every
-# kii_decode_png assertion below saw a missing file.) Filenames are
+# kii_decode_image assertion below saw a missing file.) Filenames are
 # `kii-decode-*`-prefixed so they don't collide in a shared /tmp.
 var SCRATCH = "/tmp";
 
@@ -106,7 +106,7 @@ fn _scratch_path(out, name): i64 {
 }
 
 # (chitra 0.2.1 fold) kii now renders sub-byte + interlaced PNGs that the
-# native decoder rejected (PNG_ERR_BITDEPTH / PNG_ERR_INTERLACE). The
+# native decoder rejected (IMG_ERR_BITDEPTH / IMG_ERR_INTERLACE). The
 # adapter is format-agnostic — chitra normalizes both to RGBA8, written
 # into the pstruct as ct6; SRC_COLOR_TYPE carries the real source format.
 fn test_subbyte_now_renders() {
@@ -114,7 +114,7 @@ fn test_subbyte_now_renders() {
     var lo = 0; var bytes = fx_k_subbyte(&lo);
     file_write_all(&p, bytes, lo);
     var pstr[160];
-    assert_eq(kii_decode_png(&p, &pstr), PNG_OK, "sub-byte gray2 -> PNG_OK (was BITDEPTH)");
+    assert_eq(kii_decode_image(&p, &pstr), IMG_OK, "sub-byte gray2 -> IMG_OK (was BITDEPTH)");
     assert_eq(load64(&pstr + STRUCT_WIDTH_OFFSET), 4, "subbyte w=4");
     assert_eq(load64(&pstr + STRUCT_HEIGHT_OFFSET), 2, "subbyte h=2");
     assert_eq(load64(&pstr + STRUCT_COLOR_TYPE_OFFSET), 6, "adapter forces ct6");
@@ -127,7 +127,7 @@ fn test_interlace_now_renders() {
     var lo = 0; var bytes = fx_k_interlaced(&lo);
     file_write_all(&p, bytes, lo);
     var pstr[160];
-    assert_eq(kii_decode_png(&p, &pstr), PNG_OK, "Adam7 interlaced -> PNG_OK (was INTERLACE)");
+    assert_eq(kii_decode_image(&p, &pstr), IMG_OK, "Adam7 interlaced -> IMG_OK (was INTERLACE)");
     assert_eq(load64(&pstr + STRUCT_WIDTH_OFFSET), 6, "interlace w=6");
     assert_eq(load64(&pstr + STRUCT_HEIGHT_OFFSET), 6, "interlace h=6");
     assert_eq(load64(&pstr + STRUCT_COLOR_TYPE_OFFSET), 6, "adapter ct6");
@@ -359,67 +359,67 @@ fn main() {
     var rt_dlen_neg = zlib_decompress(&rt_compressed, rt_clen, &rt_dec_small, 8);
     assert(rt_dlen_neg < 0, "dst_cap too small → negative return");
 
-    # ---- _kii_map_chitra_err: every ChitraErr → its PNG_ERR_* code --
+    # ---- _kii_map_chitra_err: every ChitraErr → its IMG_ERR_* code --
     # The adapter preserves kii's per-error stderr diagnostics across
     # the re-fold. Documented collapses (ADR 0006): SIGNATURE→NOT_PNG,
     # TRUNCATED→CHUNK, BAD_CHUNK→HEADER, OOM→IDAT_TOO_LARGE, OTHER→HEADER.
     # UNSUPPORTED keeps its own code since v1.5.1 (below).
     test_group("re-fold — _kii_map_chitra_err mapping");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_SIGNATURE),   PNG_ERR_NOT_PNG,        "SIGNATURE → NOT_PNG");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_TRUNCATED),   PNG_ERR_CHUNK,          "TRUNCATED → CHUNK");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BAD_CHUNK),   PNG_ERR_HEADER,         "BAD_CHUNK → HEADER");
-    # P-1 (v1.5.1): was PNG_ERR_BITDEPTH. CHITRA_ERR_UNSUPPORTED spans formats
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_SIGNATURE),   IMG_ERR_UNRECOGNIZED,        "SIGNATURE → NOT_PNG");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_TRUNCATED),   IMG_ERR_TRUNCATED,          "TRUNCATED → CHUNK");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BAD_CHUNK),   IMG_ERR_MALFORMED,         "BAD_CHUNK → HEADER");
+    # P-1 (v1.5.1): was IMG_ERR_BITDEPTH. CHITRA_ERR_UNSUPPORTED spans formats
     # (unrecognised PNG critical chunk / non-zero compression or filter method /
     # unrecognised colour type / an Adobe APP14 transform chitra declines), so
     # routing it to BITDEPTH was the one path that could tell a JPEG about the
-    # PNG § 11.2.2 bit-depth table — the exact outcome png.cyr says the split
+    # PNG § 11.2.2 bit-depth table — the exact outcome image.cyr says the split
     # between these two codes exists to prevent.
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_UNSUPPORTED), PNG_ERR_UNSUPPORTED,    "UNSUPPORTED → UNSUPPORTED (not BITDEPTH)");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_UNSUPPORTED), IMG_ERR_UNSUPPORTED,    "UNSUPPORTED → UNSUPPORTED (not BITDEPTH)");
     # The genuine bit-depth code still maps to BITDEPTH — the split is the point.
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BIT_DEPTH),   PNG_ERR_BITDEPTH,       "BIT_DEPTH → BITDEPTH (unchanged)");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE),     PNG_ERR_INFLATE,        "INFLATE → INFLATE");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_OOM),         PNG_ERR_IDAT_TOO_LARGE, "OOM → IDAT_TOO_LARGE");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_CRC),         PNG_ERR_CRC,            "CRC → CRC");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INTERLACE),   PNG_ERR_INTERLACE,      "INTERLACE → INTERLACE");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_DIMENSIONS),  PNG_ERR_DIMENSIONS,     "DIMENSIONS → DIMENSIONS");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_FILTER),      PNG_ERR_FILTER,         "FILTER → FILTER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_NO_IDAT),     PNG_ERR_NO_IDAT,        "NO_IDAT → NO_IDAT");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_OTHER),       PNG_ERR_HEADER,         "OTHER → HEADER (generic malformed)");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BIT_DEPTH),   IMG_ERR_BITDEPTH,       "BIT_DEPTH → BITDEPTH (unchanged)");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE),     IMG_ERR_DECOMPRESS,        "INFLATE → INFLATE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_OOM),         IMG_ERR_MEMORY, "OOM → IDAT_TOO_LARGE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_CRC),         IMG_ERR_CRC,            "CRC → CRC");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INTERLACE),   IMG_ERR_INTERLACE,      "INTERLACE → INTERLACE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_DIMENSIONS),  IMG_ERR_DIMENSIONS,     "DIMENSIONS → DIMENSIONS");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_FILTER),      IMG_ERR_FILTER,         "FILTER → FILTER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_NO_IDAT),     IMG_ERR_NO_IMAGE_DATA,        "NO_IDAT → NO_IDAT");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_OTHER),       IMG_ERR_MALFORMED,         "OTHER → HEADER (generic malformed)");
 
     # ---- JPEG mapping (chitra 0.3.0, v1.4.0 wiring) ----------------
-    # Malformed/corrupt baseline-JPEG codes collapse to PNG_ERR_HEADER
+    # Malformed/corrupt baseline-JPEG codes collapse to IMG_ERR_MALFORMED
     # (main phrases them per format → "malformed JPEG ..."); the five
     # valid-but-unsupported deferred modes get the distinct
-    # PNG_ERR_UNSUPPORTED so the message doesn't cite PNG §11.2.2.
+    # IMG_ERR_UNSUPPORTED so the message doesn't cite PNG §11.2.2.
     test_group("jpeg — _kii_map_chitra_err JPEG codes");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_MARKER),      PNG_ERR_HEADER,      "JPEG_MARKER → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_SOF),         PNG_ERR_HEADER,      "JPEG_SOF → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_DQT),         PNG_ERR_HEADER,      "JPEG_DQT → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_DHT),         PNG_ERR_HEADER,      "JPEG_DHT → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_SOS),         PNG_ERR_HEADER,      "JPEG_SOS → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_ENTROPY),     PNG_ERR_HEADER,      "JPEG_ENTROPY → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_PROGRESSIVE), PNG_ERR_UNSUPPORTED, "JPEG_PROGRESSIVE → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_ARITHMETIC),  PNG_ERR_UNSUPPORTED, "JPEG_ARITHMETIC → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_PRECISION),   PNG_ERR_UNSUPPORTED, "JPEG_PRECISION → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_MODE),        PNG_ERR_UNSUPPORTED, "JPEG_MODE → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_COMPONENTS),  PNG_ERR_UNSUPPORTED, "JPEG_COMPONENTS → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_MARKER),      IMG_ERR_MALFORMED,      "JPEG_MARKER → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_SOF),         IMG_ERR_MALFORMED,      "JPEG_SOF → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_DQT),         IMG_ERR_MALFORMED,      "JPEG_DQT → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_DHT),         IMG_ERR_MALFORMED,      "JPEG_DHT → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_SOS),         IMG_ERR_MALFORMED,      "JPEG_SOS → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_ENTROPY),     IMG_ERR_MALFORMED,      "JPEG_ENTROPY → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_PROGRESSIVE), IMG_ERR_UNSUPPORTED, "JPEG_PROGRESSIVE → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_ARITHMETIC),  IMG_ERR_UNSUPPORTED, "JPEG_ARITHMETIC → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_PRECISION),   IMG_ERR_UNSUPPORTED, "JPEG_PRECISION → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_MODE),        IMG_ERR_UNSUPPORTED, "JPEG_MODE → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_JPEG_COMPONENTS),  IMG_ERR_UNSUPPORTED, "JPEG_COMPONENTS → UNSUPPORTED");
 
-    # ---- png_color_type_name: JPEG source sentinels (--verbose) ----
+    # ---- kii_source_type_name: JPEG source sentinels (--verbose) ----
     # chitra_image_source_color_type returns 256+ncomp for a JPEG; the
     # helper must name them rather than fall through to "?".
-    test_group("jpeg — png_color_type_name sentinels");
-    assert_streq(png_color_type_name(257), "greyscale (JPEG)", "257 (0x101) → greyscale (JPEG)");
-    assert_streq(png_color_type_name(259), "YCbCr (JPEG)",     "259 (0x103) → YCbCr (JPEG)");
-    assert_streq(png_color_type_name(6),   "RGBA",             "PNG ct6 still → RGBA");
-    assert_streq(png_color_type_name(99),  "?",                "true-unknown still → ?");
+    test_group("jpeg — kii_source_type_name sentinels");
+    assert_streq(kii_source_type_name(257), "greyscale (JPEG)", "257 (0x101) → greyscale (JPEG)");
+    assert_streq(kii_source_type_name(259), "YCbCr (JPEG)",     "259 (0x103) → YCbCr (JPEG)");
+    assert_streq(kii_source_type_name(6),   "RGBA",             "PNG ct6 still → RGBA");
+    assert_streq(kii_source_type_name(99),  "?",                "true-unknown still → ?");
 
-    # ---- kii_decode_png end-to-end on the real RAMGON.png fixture ---
+    # ---- kii_decode_image end-to-end on the real RAMGON.png fixture ---
     # The adapter normalizes to depth-8 ct6; SRC_COLOR_TYPE carries the
     # real pre-normalization color_type (RAMGON is RGBA → 6).
-    test_group("re-fold — kii_decode_png e2e (RAMGON.png)");
+    test_group("re-fold — kii_decode_image e2e (RAMGON.png)");
     var pstr_ram[160];
-    assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_ram), PNG_OK,
-      "RAMGON.png → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/RAMGON.png", &pstr_ram), IMG_OK,
+      "RAMGON.png → IMG_OK");
     assert_eq(load64(&pstr_ram + STRUCT_WIDTH_OFFSET),       1152, "RAMGON width = 1152");
     assert_eq(load64(&pstr_ram + STRUCT_HEIGHT_OFFSET),      925,  "RAMGON height = 925");
     assert_eq(load64(&pstr_ram + STRUCT_COLOR_TYPE_OFFSET),  6,    "adapter forces ct6");
@@ -430,10 +430,10 @@ fn main() {
     assert_eq(load64(&pstr_ram + STRUCT_SEEN_IEND_OFFSET),   1,    "saw IEND");
     assert(load64(&pstr_ram + STRUCT_PIXELS_BUF_OFFSET) != 0, "pixels_buf non-null");
 
-    # ---- kii_decode_png adapter + error paths via tmp files --------
-    # (a) a valid 2x2 RGB PNG (built in-memory, real zlib IDAT) → PNG_OK,
+    # ---- kii_decode_image adapter + error paths via tmp files --------
+    # (a) a valid 2x2 RGB PNG (built in-memory, real zlib IDAT) → IMG_OK,
     #     COLOR_TYPE forced to 6, SRC_COLOR_TYPE preserved as 2 (RGB).
-    test_group("re-fold — kii_decode_png (valid 2x2 RGB → ct6 / src ct2)");
+    test_group("re-fold — kii_decode_image (valid 2x2 RGB → ct6 / src ct2)");
     # Raw scanline stream: filter byte 0 + 2 px × 3 bytes per row.
     var raw_stream[14];
     store8(&raw_stream + 0,  0);    # filter byte (None) row 0
@@ -451,7 +451,7 @@ fn main() {
     _scratch_path(&path_ok, "kii-decode-ok.png");
     file_write_all(&path_ok, &pbuf_ok, ok_len);
     var pstr_ok[160];
-    assert_eq(kii_decode_png(&path_ok, &pstr_ok), PNG_OK, "valid 2x2 RGB → PNG_OK");
+    assert_eq(kii_decode_image(&path_ok, &pstr_ok), IMG_OK, "valid 2x2 RGB → IMG_OK");
     assert_eq(load64(&pstr_ok + STRUCT_WIDTH_OFFSET),  2, "2x2 width = 2");
     assert_eq(load64(&pstr_ok + STRUCT_HEIGHT_OFFSET), 2, "2x2 height = 2");
     assert_eq(load64(&pstr_ok + STRUCT_COLOR_TYPE_OFFSET), 6, "adapter forces ct6");
@@ -459,51 +459,51 @@ fn main() {
     assert_eq(load64(&pstr_ok + STRUCT_PIXELS_SIZE_OFFSET), 2 * 2 * 4, "pixels size = 2×2×4");
     assert_eq(load64(&pstr_ok + STRUCT_SEEN_IEND_OFFSET), 1, "valid PNG saw IEND");
 
-    # (b) IEND-less but otherwise valid → PNG_OK + SEEN_IEND = 0.
+    # (b) IEND-less but otherwise valid → IMG_OK + SEEN_IEND = 0.
     #     Truncate the valid PNG before its trailing 12-byte IEND chunk
     #     (spec § 5.3 tolerance — chitra still decodes, flags seen_iend=0).
-    test_group("re-fold — kii_decode_png (IEND-less → PNG_OK, seen_iend=0)");
+    test_group("re-fold — kii_decode_image (IEND-less → IMG_OK, seen_iend=0)");
     var path_ni[256];
     _scratch_path(&path_ni, "kii-decode-noiend.png");
     file_write_all(&path_ni, &pbuf_ok, ok_len - 12);
     var pstr_ni[160];
-    assert_eq(kii_decode_png(&path_ni, &pstr_ni), PNG_OK, "IEND-less → PNG_OK");
+    assert_eq(kii_decode_image(&path_ni, &pstr_ni), IMG_OK, "IEND-less → IMG_OK");
     assert_eq(load64(&pstr_ni + STRUCT_SEEN_IEND_OFFSET), 0, "IEND-less → seen_iend = 0");
 
     # (c) a non-PNG text file (≥ 8 bytes, wrong signature) → NOT_PNG.
-    test_group("re-fold — kii_decode_png (non-PNG text → NOT_PNG)");
+    test_group("re-fold — kii_decode_image (non-PNG text → NOT_PNG)");
     var path_tx[256];
     _scratch_path(&path_tx, "kii-decode-notpng.txt");
     file_write_all(&path_tx, "this is plainly not a png\n", 26);
     var pstr_tx[160];
-    assert_eq(kii_decode_png(&path_tx, &pstr_tx), PNG_ERR_NOT_PNG,
-      "non-PNG text file → PNG_ERR_NOT_PNG");
+    assert_eq(kii_decode_image(&path_tx, &pstr_tx), IMG_ERR_UNRECOGNIZED,
+      "non-PNG text file → IMG_ERR_UNRECOGNIZED");
 
-    # (d) an empty file → NOT_PNG (kii_decode_png's sz==0 guard).
-    test_group("re-fold — kii_decode_png (empty file → NOT_PNG)");
+    # (d) an empty file → NOT_PNG (kii_decode_image's sz==0 guard).
+    test_group("re-fold — kii_decode_image (empty file → NOT_PNG)");
     var path_em[256];
     _scratch_path(&path_em, "kii-decode-empty.bin");
     file_write_all(&path_em, "", 0);
     var pstr_em[160];
-    assert_eq(kii_decode_png(&path_em, &pstr_em), PNG_ERR_NOT_PNG,
-      "empty file → PNG_ERR_NOT_PNG");
+    assert_eq(kii_decode_image(&path_em, &pstr_em), IMG_ERR_UNRECOGNIZED,
+      "empty file → IMG_ERR_UNRECOGNIZED");
 
     # (d2) a sub-8-byte non-empty file (1..7 bytes) → NOT_PNG. chitra's
     # signature check guards len<8 before any memeq, so the adapter must
     # not OOB-read the short slurp and must surface NOT_PNG.
-    test_group("re-fold — kii_decode_png (sub-8-byte file → NOT_PNG)");
+    test_group("re-fold — kii_decode_image (sub-8-byte file → NOT_PNG)");
     var path_sh[256];
     _scratch_path(&path_sh, "kii-decode-short.bin");
     file_write_all(&path_sh, "\x89PNG", 4);          # 4 bytes: valid prefix, too short
     var pstr_sh[160];
-    assert_eq(kii_decode_png(&path_sh, &pstr_sh), PNG_ERR_NOT_PNG,
-      "4-byte file → PNG_ERR_NOT_PNG (no OOB read)");
+    assert_eq(kii_decode_image(&path_sh, &pstr_sh), IMG_ERR_UNRECOGNIZED,
+      "4-byte file → IMG_ERR_UNRECOGNIZED (no OOB read)");
 
     # (e) a structurally-valid PNG with a bad-zlib IDAT → INFLATE.
     #     CRC over the IDAT data is correct (so we pass the CRC gate),
     #     but the bytes are not a valid zlib stream → chitra reports
-    #     INFLATE → PNG_ERR_INFLATE.
-    test_group("re-fold — kii_decode_png (bad-zlib IDAT → INFLATE)");
+    #     INFLATE → IMG_ERR_DECOMPRESS.
+    test_group("re-fold — kii_decode_image (bad-zlib IDAT → INFLATE)");
     var bad_idat[4];
     store8(&bad_idat + 0, 0x78); store8(&bad_idat + 1, 0x9C);  # plausible zlib header
     store8(&bad_idat + 2, 0xAA); store8(&bad_idat + 3, 0xBB);  # garbage deflate body
@@ -513,8 +513,8 @@ fn main() {
     _scratch_path(&path_bz, "kii-decode-badzlib.png");
     file_write_all(&path_bz, &pbuf_bz, bz_len);
     var pstr_bz[160];
-    assert_eq(kii_decode_png(&path_bz, &pstr_bz), PNG_ERR_INFLATE,
-      "bad-zlib IDAT → PNG_ERR_INFLATE");
+    assert_eq(kii_decode_image(&path_bz, &pstr_bz), IMG_ERR_DECOMPRESS,
+      "bad-zlib IDAT → IMG_ERR_DECOMPRESS");
 
     # (e2) v1.6.0 — a VALID PNG too large for the decompressor. Through v1.5.2
     #     chitra's CHITRA_ERR_INFLATE_LIMIT (35, chitra 1.0.1) had no arm in
@@ -525,11 +525,11 @@ fn main() {
     #     disk) — just past sankoch's 16 MiB DECOMPRESS_MAX_OUTPUT, the bracket
     #     chitra's own 1.0.1 notes measure (2200x2200 decodes, 2370x2370 does not).
     test_group("v1.6.0 — a valid PNG over the decompressor ceiling → INFLATE_LIMIT");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE_LIMIT), PNG_ERR_INFLATE_LIMIT,
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE_LIMIT), IMG_ERR_INFLATE_LIMIT,
       "INFLATE_LIMIT → INFLATE_LIMIT (not the generic malformed fallback)");
     var pstr_ol[160];
-    assert_eq(kii_decode_png("tests/fixtures/oversize.png", &pstr_ol), PNG_ERR_INFLATE_LIMIT,
-      "oversize.png (2370x2370 RGB) → PNG_ERR_INFLATE_LIMIT");
+    assert_eq(kii_decode_image("tests/fixtures/oversize.png", &pstr_ol), IMG_ERR_INFLATE_LIMIT,
+      "oversize.png (2370x2370 RGB) → IMG_ERR_INFLATE_LIMIT");
     assert_eq(load64(&pstr_ol + STRUCT_FORMAT_OFFSET), KII_FMT_PNG,
       "oversize.png is tagged PNG (the sniff ran before the refusal)");
     # main.cyr's diagnostic names the ceiling as "16 MiB". Pin the number it
@@ -539,12 +539,12 @@ fn main() {
       "sankoch's DECOMPRESS_MAX_OUTPUT is still the 16 MiB main.cyr quotes");
 
     # (f) a missing path → OPEN.
-    test_group("re-fold — kii_decode_png (missing path → OPEN)");
+    test_group("re-fold — kii_decode_image (missing path → OPEN)");
     var path_mi[256];
     _scratch_path(&path_mi, "kii-decode-missing-zzy42.png");
     var pstr_mi[160];
-    assert_eq(kii_decode_png(&path_mi, &pstr_mi), PNG_ERR_OPEN,
-      "nonexistent path → PNG_ERR_OPEN");
+    assert_eq(kii_decode_image(&path_mi, &pstr_mi), IMG_ERR_OPEN,
+      "nonexistent path → IMG_ERR_OPEN");
 
     # ---- v1.6.4 (P(-1)) — the slurp and the pstruct ------------------
     # The slurp is now one open read to EOF under the cap (file_read_whole_max).
@@ -552,21 +552,21 @@ fn main() {
     # ceiling" (its htree EOF is ~2^63) and a pipe "cannot open file".
     test_group("v1.6.4 — a directory → IS_DIR, not 'exceeds size ceiling'");
     var pstr_dir[160];
-    assert_eq(kii_decode_png("tests/fixtures", &pstr_dir), PNG_ERR_IS_DIR,
-      "tests/fixtures (a directory) → PNG_ERR_IS_DIR");
-    assert_streq(kii_decode_error_text(PNG_ERR_IS_DIR, KII_FMT_UNKNOWN),
+    assert_eq(kii_decode_image("tests/fixtures", &pstr_dir), IMG_ERR_IS_DIR,
+      "tests/fixtures (a directory) → IMG_ERR_IS_DIR");
+    assert_streq(kii_decode_error_text(IMG_ERR_IS_DIR, KII_FMT_UNKNOWN),
       "is a directory, not an image file", "IS_DIR line");
 
     # main's `var pstruct[160]` is uninitialized stack, and the adapter used
     # to write only some slots, so the "has this stage run?" checks in
-    # quantize / emit could read a stale pointer. kii_decode_png zeroes the
+    # quantize / emit could read a stale pointer. kii_decode_image zeroes the
     # whole struct first; this fills it with garbage and checks that even an
     # early-failing decode leaves all 20 slots 0.
-    test_group("v1.6.4 — kii_decode_png zeroes every pstruct slot");
+    test_group("v1.6.4 — kii_decode_image zeroes every pstruct slot");
     var pstr_z[160];
     var zs = 0;
     while (zs < 160) { store64(&pstr_z + zs, 0 - 559038737); zs = zs + 8; }
-    kii_decode_png(&path_mi, &pstr_z);
+    kii_decode_image(&path_mi, &pstr_z);
     var nonzero = 0;
     zs = 0;
     while (zs < 160) { if (load64(&pstr_z + zs) != 0) { nonzero = nonzero + 1; } zs = zs + 8; }
@@ -574,7 +574,7 @@ fn main() {
     var pstr_z2[160];
     zs = 0;
     while (zs < 160) { store64(&pstr_z2 + zs, 0 - 559038737); zs = zs + 8; }
-    assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_z2), PNG_OK, "color.gif → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/color.gif", &pstr_z2), IMG_OK, "color.gif → IMG_OK");
     assert_eq(load64(&pstr_z2 + STRUCT_DOWNSCALED_BUF_OFFSET), 0,
       "a successful decode leaves the downscale slot 0 until downscale runs");
     assert_eq(load64(&pstr_z2 + STRUCT_QUANTIZED_BUF_OFFSET), 0,
@@ -590,59 +590,59 @@ fn main() {
     # ---- v1.6.4 (P(-1)) — the exact decode diagnostics ---------------
     # Through v1.6.3 these lines lived inline in main's entry point, untested.
     test_group("v1.6.4 — kii_decode_error_text: format-blind lines");
-    assert_streq(kii_decode_error_text(PNG_ERR_OPEN, KII_FMT_UNKNOWN), "cannot open file", "OPEN");
-    assert_streq(kii_decode_error_text(PNG_ERR_FILE_TOO_LARGE, KII_FMT_UNKNOWN),
+    assert_streq(kii_decode_error_text(IMG_ERR_OPEN, KII_FMT_UNKNOWN), "cannot open file", "OPEN");
+    assert_streq(kii_decode_error_text(IMG_ERR_FILE_TOO_LARGE, KII_FMT_UNKNOWN),
       "file exceeds size ceiling (max 256 MB)", "FILE_TOO_LARGE");
-    assert_streq(kii_decode_error_text(PNG_ERR_NOT_PNG, KII_FMT_UNKNOWN),
+    assert_streq(kii_decode_error_text(IMG_ERR_UNRECOGNIZED, KII_FMT_UNKNOWN),
       "unrecognized image format (expected PNG, JPEG, BMP, or GIF)", "NOT_PNG");
-    assert_streq(kii_decode_error_text(PNG_ERR_CRC, KII_FMT_PNG), "CRC check failed", "CRC");
-    assert_streq(kii_decode_error_text(PNG_ERR_INTERLACE, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_CRC, KII_FMT_PNG), "CRC check failed", "CRC");
+    assert_streq(kii_decode_error_text(IMG_ERR_INTERLACE, KII_FMT_PNG),
       "unsupported interlace method (only 0=none / 1=Adam7 are valid)", "INTERLACE");
-    assert_streq(kii_decode_error_text(PNG_ERR_BITDEPTH, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_BITDEPTH, KII_FMT_PNG),
       "unsupported bit depth for this color type (PNG § 11.2.2)", "BITDEPTH");
-    assert_streq(kii_decode_error_text(PNG_ERR_FILTER, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_FILTER, KII_FMT_PNG),
       "invalid PNG filter type (spec § 9 allows 0–4)", "FILTER");
-    assert_streq(kii_decode_error_text(PNG_ERR_IDAT_TOO_LARGE, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_MEMORY, KII_FMT_PNG),
       "out of memory or image too large (possible decompression bomb)", "IDAT_TOO_LARGE");
-    assert_streq(kii_decode_error_text(PNG_ERR_INFLATE_LIMIT, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_INFLATE_LIMIT, KII_FMT_PNG),
       "image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)", "INFLATE_LIMIT");
     # C-4: chitra raises DIMENSIONS for a 0 width or height in every format,
     # and the line used to say only "exceed policy ceiling".
-    assert_streq(kii_decode_error_text(PNG_ERR_DIMENSIONS, KII_FMT_GIF),
+    assert_streq(kii_decode_error_text(IMG_ERR_DIMENSIONS, KII_FMT_GIF),
       "image dimensions are zero or past the policy ceiling (max 16.7M px / 65535 per side / 256 MB)", "DIMENSIONS");
     assert_streq(kii_decode_error_text(99, KII_FMT_PNG), "image decode failed", "an unknown code");
 
     test_group("v1.6.4 — kii_decode_error_text: per-format lines");
-    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_MALFORMED, KII_FMT_PNG),
       "malformed PNG (bad chunk, ordering, or palette)", "HEADER / PNG");
-    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_JPEG),
+    assert_streq(kii_decode_error_text(IMG_ERR_MALFORMED, KII_FMT_JPEG),
       "malformed JPEG (bad marker, segment, or entropy data)", "HEADER / JPEG");
-    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_BMP),
+    assert_streq(kii_decode_error_text(IMG_ERR_MALFORMED, KII_FMT_BMP),
       "malformed BMP (bad DIB header, palette, or RLE stream)", "HEADER / BMP");
-    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_GIF),
+    assert_streq(kii_decode_error_text(IMG_ERR_MALFORMED, KII_FMT_GIF),
       "malformed GIF (bad descriptor or color table)", "HEADER / GIF");
-    assert_streq(kii_decode_error_text(PNG_ERR_CHUNK, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_TRUNCATED, KII_FMT_PNG),
       "malformed PNG (truncated chunk stream)", "CHUNK / PNG");
-    assert_streq(kii_decode_error_text(PNG_ERR_CHUNK, KII_FMT_JPEG),
+    assert_streq(kii_decode_error_text(IMG_ERR_TRUNCATED, KII_FMT_JPEG),
       "truncated image (unexpected end of data)", "CHUNK / other");
-    assert_streq(kii_decode_error_text(PNG_ERR_UNSUPPORTED, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_UNSUPPORTED, KII_FMT_PNG),
       "unsupported image feature (unrecognized critical chunk, compression method, or color type)", "UNSUPPORTED / PNG");
-    assert_streq(kii_decode_error_text(PNG_ERR_UNSUPPORTED, KII_FMT_JPEG),
+    assert_streq(kii_decode_error_text(IMG_ERR_UNSUPPORTED, KII_FMT_JPEG),
       "unsupported JPEG feature (progressive, arithmetic, 12-bit, non-baseline, CMYK/4-component, or an Adobe colour transform)",
       "UNSUPPORTED / JPEG");
     # C-5: chitra also refuses OS/2 Huffman 1D and BI_CMYK as BMP_COMPRESSION,
     # which the old "BI_JPEG/BI_PNG compression" text did not cover.
-    assert_streq(kii_decode_error_text(PNG_ERR_UNSUPPORTED, KII_FMT_BMP),
+    assert_streq(kii_decode_error_text(IMG_ERR_UNSUPPORTED, KII_FMT_BMP),
       "unsupported BMP feature (bit depth, compression method, or channel mask)", "UNSUPPORTED / BMP");
-    # C-5: a GIF LZW failure maps to PNG_ERR_INFLATE and an image-less GIF to
-    # PNG_ERR_NO_IDAT; both used to print the PNG wording.
-    assert_streq(kii_decode_error_text(PNG_ERR_INFLATE, KII_FMT_PNG),
+    # C-5: a GIF LZW failure maps to IMG_ERR_DECOMPRESS and an image-less GIF to
+    # IMG_ERR_NO_IMAGE_DATA; both used to print the PNG wording.
+    assert_streq(kii_decode_error_text(IMG_ERR_DECOMPRESS, KII_FMT_PNG),
       "DEFLATE decompression failed (corrupt IDAT)", "INFLATE / PNG");
-    assert_streq(kii_decode_error_text(PNG_ERR_INFLATE, KII_FMT_GIF),
+    assert_streq(kii_decode_error_text(IMG_ERR_DECOMPRESS, KII_FMT_GIF),
       "corrupt GIF image data (bad LZW stream)", "INFLATE / GIF");
-    assert_streq(kii_decode_error_text(PNG_ERR_NO_IDAT, KII_FMT_PNG),
+    assert_streq(kii_decode_error_text(IMG_ERR_NO_IMAGE_DATA, KII_FMT_PNG),
       "no IDAT chunks (nothing to decode)", "NO_IDAT / PNG");
-    assert_streq(kii_decode_error_text(PNG_ERR_NO_IDAT, KII_FMT_GIF),
+    assert_streq(kii_decode_error_text(IMG_ERR_NO_IMAGE_DATA, KII_FMT_GIF),
       "no image in GIF (no image descriptor)", "NO_IDAT / GIF");
 
     test_group("v1.6.4 — kii_incomplete_warning_text");
@@ -657,7 +657,7 @@ fn main() {
     assert_streq(kii_incomplete_warning_text(KII_FMT_BMP),
       "warning: incomplete image (stream did not close cleanly)", "other");
 
-    # R-10: _kii_map_chitra_err falls back to PNG_ERR_HEADER for a code it does
+    # R-10: _kii_map_chitra_err falls back to IMG_ERR_MALFORMED for a code it does
     # not know, which is how INFLATE_LIMIT (35) read as "malformed PNG" through
     # v1.5.2. Pin chitra's code space: 1-35 are named, 36-98 are not. A chitra
     # that adds code 36 fails here, so its mapping gets written.
@@ -686,8 +686,8 @@ fn main() {
     #     EOI after the last scan), and this fixture ends cleanly.
     test_group("jpeg — decode e2e (gradient.jpg, 16x16 grayscale)");
     var pstr_jpg[160];
-    assert_eq(kii_decode_png("tests/fixtures/gradient.jpg", &pstr_jpg), PNG_OK,
-      "gradient.jpg → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/gradient.jpg", &pstr_jpg), IMG_OK,
+      "gradient.jpg → IMG_OK");
     assert_eq(load64(&pstr_jpg + STRUCT_WIDTH_OFFSET),        16, "gradient width = 16");
     assert_eq(load64(&pstr_jpg + STRUCT_HEIGHT_OFFSET),       16, "gradient height = 16");
     assert_eq(load64(&pstr_jpg + STRUCT_COLOR_TYPE_OFFSET),    6, "adapter forces ct6");
@@ -724,8 +724,8 @@ fn main() {
     #     (0x103) exercises the chroma path through the adapter.
     test_group("jpeg — decode e2e (color.jpg, 8x8 YCbCr)");
     var pstr_clr[160];
-    assert_eq(kii_decode_png("tests/fixtures/color.jpg", &pstr_clr), PNG_OK,
-      "color.jpg → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/color.jpg", &pstr_clr), IMG_OK,
+      "color.jpg → IMG_OK");
     assert_eq(load64(&pstr_clr + STRUCT_WIDTH_OFFSET),         8, "color width = 8");
     assert_eq(load64(&pstr_clr + STRUCT_HEIGHT_OFFSET),        8, "color height = 8");
     assert_eq(load64(&pstr_clr + STRUCT_SRC_COLOR_TYPE_OFFSET), 259, "src ctype 259 (JPEG YCbCr)");
@@ -747,30 +747,30 @@ fn main() {
     # (c) the format tag for a PNG is KII_FMT_PNG (RAMGON, re-decoded).
     test_group("jpeg — format tag distinguishes PNG from JPEG");
     var pstr_fmt[160];
-    assert_eq(kii_decode_png("tests/fixtures/RAMGON.png", &pstr_fmt), PNG_OK, "RAMGON → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/RAMGON.png", &pstr_fmt), IMG_OK, "RAMGON → IMG_OK");
     assert_eq(load64(&pstr_fmt + STRUCT_FORMAT_OFFSET), KII_FMT_PNG, "PNG input → format = PNG");
 
     # (d) a progressive-JPEG stub (SOI + SOF2) is a VALID but unsupported
-    #     JPEG → PNG_ERR_UNSUPPORTED (not 'malformed'), and FORMAT = JPEG so
+    #     JPEG → IMG_ERR_UNSUPPORTED (not 'malformed'), and FORMAT = JPEG so
     #     main can phrase the unsupported-feature diagnostic.
-    test_group("jpeg — progressive stub → PNG_ERR_UNSUPPORTED");
+    test_group("jpeg — progressive stub → IMG_ERR_UNSUPPORTED");
     var path_pg[256];
     _scratch_path(&path_pg, "kii-decode-prog.jpg");
     file_write_all(&path_pg, "\xFF\xD8\xFF\xC2", 4);          # SOI + SOF2 (progressive)
     var pstr_pg[160];
-    assert_eq(kii_decode_png(&path_pg, &pstr_pg), PNG_ERR_UNSUPPORTED,
-      "progressive JPEG → PNG_ERR_UNSUPPORTED");
+    assert_eq(kii_decode_image(&path_pg, &pstr_pg), IMG_ERR_UNSUPPORTED,
+      "progressive JPEG → IMG_ERR_UNSUPPORTED");
     assert_eq(load64(&pstr_pg + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "stub tagged JPEG before decode");
 
-    # (e) a JPEG with SOI then a non-marker byte → malformed → PNG_ERR_HEADER
+    # (e) a JPEG with SOI then a non-marker byte → malformed → IMG_ERR_MALFORMED
     #     (main prints "malformed JPEG ..." because FORMAT = JPEG).
-    test_group("jpeg — malformed marker stream → PNG_ERR_HEADER");
+    test_group("jpeg — malformed marker stream → IMG_ERR_MALFORMED");
     var path_mj[256];
     _scratch_path(&path_mj, "kii-decode-badjpeg.jpg");
     file_write_all(&path_mj, "\xFF\xD8\x00\x00\x00\x00", 6);  # SOI then garbage (no FF marker)
     var pstr_mj[160];
-    assert_eq(kii_decode_png(&path_mj, &pstr_mj), PNG_ERR_HEADER,
-      "malformed JPEG marker stream → PNG_ERR_HEADER");
+    assert_eq(kii_decode_image(&path_mj, &pstr_mj), IMG_ERR_MALFORMED,
+      "malformed JPEG marker stream → IMG_ERR_MALFORMED");
     assert_eq(load64(&pstr_mj + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "tagged JPEG (SOI matched)");
 
     # ---- BMP + GIF e2e via chitra_image_decode (chitra 1.0.0, v1.5.0) ----
@@ -787,8 +787,8 @@ fn main() {
     #     image's TOP row and the ramp reads left-to-right like the oracle.
     test_group("bmp — decode e2e (gradient.bmp, 16x16 24bpp BI_RGB)");
     var pstr_bmp[160];
-    assert_eq(kii_decode_png("tests/fixtures/gradient.bmp", &pstr_bmp), PNG_OK,
-      "gradient.bmp → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/gradient.bmp", &pstr_bmp), IMG_OK,
+      "gradient.bmp → IMG_OK");
     assert_eq(load64(&pstr_bmp + STRUCT_WIDTH_OFFSET),         16, "bmp width = 16");
     assert_eq(load64(&pstr_bmp + STRUCT_HEIGHT_OFFSET),        16, "bmp height = 16");
     assert_eq(load64(&pstr_bmp + STRUCT_COLOR_TYPE_OFFSET),     6, "adapter forces ct6");
@@ -822,8 +822,8 @@ fn main() {
     #     so that limit is not what is under test here.
     test_group("gif — decode e2e (color.gif, 16x16 GIF89a palette)");
     var pstr_gif[160];
-    assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_gif), PNG_OK,
-      "color.gif → PNG_OK");
+    assert_eq(kii_decode_image("tests/fixtures/color.gif", &pstr_gif), IMG_OK,
+      "color.gif → IMG_OK");
     assert_eq(load64(&pstr_gif + STRUCT_WIDTH_OFFSET),      16, "gif width = 16");
     assert_eq(load64(&pstr_gif + STRUCT_HEIGHT_OFFSET),     16, "gif height = 16");
     assert_eq(load64(&pstr_gif + STRUCT_COLOR_TYPE_OFFSET),  6, "adapter forces ct6");
@@ -852,37 +852,37 @@ fn main() {
     #     v1.5.0 every one of them fell through _kii_map_chitra_err's default,
     #     so a corrupt BMP reported the PNG chunk/ordering wording.
     test_group("bmp/gif — _kii_map_chitra_err covers ChitraErr 24-34");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_HEADER),      PNG_ERR_HEADER,      "BMP_HEADER → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_PALETTE),     PNG_ERR_HEADER,      "BMP_PALETTE → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_RLE),         PNG_ERR_HEADER,      "BMP_RLE → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_DEPTH),       PNG_ERR_UNSUPPORTED, "BMP_DEPTH → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_COMPRESSION), PNG_ERR_UNSUPPORTED, "BMP_COMPRESSION → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_MASK),        PNG_ERR_UNSUPPORTED, "BMP_MASK → UNSUPPORTED");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_HEADER),      PNG_ERR_HEADER,      "GIF_HEADER → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_PALETTE),     PNG_ERR_HEADER,      "GIF_PALETTE → HEADER");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_LZW),         PNG_ERR_INFLATE,     "GIF_LZW → INFLATE");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_NO_IMAGE),    PNG_ERR_NO_IDAT,     "GIF_NO_IMAGE → NO_IDAT");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BUDGET),          PNG_ERR_IDAT_TOO_LARGE, "BUDGET → IDAT_TOO_LARGE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_HEADER),      IMG_ERR_MALFORMED,      "BMP_HEADER → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_PALETTE),     IMG_ERR_MALFORMED,      "BMP_PALETTE → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_RLE),         IMG_ERR_MALFORMED,      "BMP_RLE → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_DEPTH),       IMG_ERR_UNSUPPORTED, "BMP_DEPTH → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_COMPRESSION), IMG_ERR_UNSUPPORTED, "BMP_COMPRESSION → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BMP_MASK),        IMG_ERR_UNSUPPORTED, "BMP_MASK → UNSUPPORTED");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_HEADER),      IMG_ERR_MALFORMED,      "GIF_HEADER → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_PALETTE),     IMG_ERR_MALFORMED,      "GIF_PALETTE → HEADER");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_LZW),         IMG_ERR_DECOMPRESS,     "GIF_LZW → INFLATE");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_GIF_NO_IMAGE),    IMG_ERR_NO_IMAGE_DATA,     "GIF_NO_IMAGE → NO_IDAT");
+    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BUDGET),          IMG_ERR_MEMORY, "BUDGET → IDAT_TOO_LARGE");
 
     # (d) the source-sentinel names --verbose prints. Before v1.5.0 every
     #     non-PNG/non-JPEG sentinel rendered as "?".
-    test_group("bmp/gif — png_color_type_name knows the new sentinels");
-    assert_streq(png_color_type_name(275), "RGB (JPEG)",         "275 (0x113) → RGB (JPEG)");
-    assert_streq(png_color_type_name(513), "1bpp palette (BMP)",  "513 (0x201) → 1bpp palette (BMP)");
-    assert_streq(png_color_type_name(516), "4bpp palette (BMP)",  "516 (0x204) → 4bpp palette (BMP)");
-    assert_streq(png_color_type_name(520), "8bpp palette (BMP)",  "520 (0x208) → 8bpp palette (BMP)");
-    assert_streq(png_color_type_name(528), "16bpp (BMP)",         "528 (0x210) → 16bpp (BMP)");
-    assert_streq(png_color_type_name(536), "24bpp (BMP)",         "536 (0x218) → 24bpp (BMP)");
-    assert_streq(png_color_type_name(544), "32bpp (BMP)",         "544 (0x220) → 32bpp (BMP)");
-    assert_streq(png_color_type_name(770), "palette (GIF)",       "770 (0x302) → palette (GIF)");
-    assert_streq(png_color_type_name(776), "palette (GIF)",       "776 (0x308) → palette (GIF)");
+    test_group("bmp/gif — kii_source_type_name knows the new sentinels");
+    assert_streq(kii_source_type_name(275), "RGB (JPEG)",         "275 (0x113) → RGB (JPEG)");
+    assert_streq(kii_source_type_name(513), "1bpp palette (BMP)",  "513 (0x201) → 1bpp palette (BMP)");
+    assert_streq(kii_source_type_name(516), "4bpp palette (BMP)",  "516 (0x204) → 4bpp palette (BMP)");
+    assert_streq(kii_source_type_name(520), "8bpp palette (BMP)",  "520 (0x208) → 8bpp palette (BMP)");
+    assert_streq(kii_source_type_name(528), "16bpp (BMP)",         "528 (0x210) → 16bpp (BMP)");
+    assert_streq(kii_source_type_name(536), "24bpp (BMP)",         "536 (0x218) → 24bpp (BMP)");
+    assert_streq(kii_source_type_name(544), "32bpp (BMP)",         "544 (0x220) → 32bpp (BMP)");
+    assert_streq(kii_source_type_name(770), "palette (GIF)",       "770 (0x302) → palette (GIF)");
+    assert_streq(kii_source_type_name(776), "palette (GIF)",       "776 (0x308) → palette (GIF)");
     # The sentinel ranges must not swallow a neighbour: 512 (0x200, bpp=0) and
     # 768 (0x300, min_code_size=0) are both structurally impossible, and 545 /
     # 777 sit one past each block. All four stay unknown.
-    assert_streq(png_color_type_name(512), "?", "512 (0x200, bpp=0) → ?");
-    assert_streq(png_color_type_name(545), "?", "545 (one past BMP 32bpp) → ?");
-    assert_streq(png_color_type_name(768), "?", "768 (0x300, mcs=0) → ?");
-    assert_streq(png_color_type_name(777), "?", "777 (one past GIF range) → ?");
+    assert_streq(kii_source_type_name(512), "?", "512 (0x200, bpp=0) → ?");
+    assert_streq(kii_source_type_name(545), "?", "545 (one past BMP 32bpp) → ?");
+    assert_streq(kii_source_type_name(768), "?", "768 (0x300, mcs=0) → ?");
+    assert_streq(kii_source_type_name(777), "?", "777 (one past GIF range) → ?");
 
     # (e) a non-image file is now refused as "not any of the four", and the
     #     format tag stays UNKNOWN so main phrases it generically.
@@ -891,8 +891,8 @@ fn main() {
     _scratch_path(&path_nx, "kii-decode-notimage.txt");
     file_write_all(&path_nx, "not an image at all, just text\n", 31);
     var pstr_nx[160];
-    assert_eq(kii_decode_png(&path_nx, &pstr_nx), PNG_ERR_NOT_PNG,
-      "plain text → PNG_ERR_NOT_PNG");
+    assert_eq(kii_decode_image(&path_nx, &pstr_nx), IMG_ERR_UNRECOGNIZED,
+      "plain text → IMG_ERR_UNRECOGNIZED");
     assert_eq(load64(&pstr_nx + STRUCT_FORMAT_OFFSET), KII_FMT_UNKNOWN, "format stays UNKNOWN");
 
     test_subbyte_now_renders();

@@ -13,10 +13,10 @@ documented error message in
 on stderr, exit 1, no stdout.
 
 The `unrecognized image format` rejection fires at the signature
-sniff. `kii_decode_png` (`src/png.cyr`) reads the whole file first
+sniff. `kii_decode_image` (`src/image.cyr`) reads the whole file first
 (one open, capped at 256 MB), then `chitra_image_decode` finds none
 of the four signatures and returns `CHITRA_ERR_SIGNATURE`, which kii
-maps to `PNG_ERR_NOT_PNG`. It is the earliest decode rejection: no
+maps to `IMG_ERR_UNRECOGNIZED`. It is the earliest decode rejection: no
 image buffer has been allocated yet. (Corrected at v1.6.4: this cited
 a `png_check_signature` at `src/png.cyr:319` that the v1.2.0 re-fold
 deleted, and said kii had not read past the first 8 bytes. kii has

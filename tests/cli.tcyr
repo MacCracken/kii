@@ -44,14 +44,33 @@ fn main() {
     assert_eq(kii_validate_color(256), 0, "--color 256 rejected (tier-2, post-v1)");
     assert_eq(kii_validate_color(0 - 1), 0, "--color -1 rejected");
 
-    # ---- 1.3.0: kii_validate_mode + kii_mode_is_ascii ----------------
-    test_group("1.3.0 — kii_validate_mode / kii_mode_is_ascii");
-    assert_eq(kii_validate_mode("halfblock"), 1, "halfblock valid");
-    assert_eq(kii_validate_mode("ascii"),     1, "ascii valid");
-    assert_eq(kii_validate_mode("bogus"),     0, "bogus rejected");
-    assert_eq(kii_validate_mode(""),          0, "empty rejected");
-    assert_eq(kii_mode_is_ascii("ascii"),     1, "ascii -> is_ascii");
-    assert_eq(kii_mode_is_ascii("halfblock"), 0, "halfblock -> not ascii");
+    # ---- v1.7.0: --mode is a cmdit enum ------------------------------
+    # Until v1.7.0 kii validated --mode after the parse (kii_validate_mode)
+    # and compared strings (kii_mode_is_ascii). cmdit_enum now refuses an
+    # unknown choice during the parse, and cmdit_get_enum gives the index.
+    test_group("v1.7.0 — --mode is a cmdit enum");
+    var fsm = cmdit_new("kii");
+    kii_register_flags(fsm);
+    var argvm[24];
+    store64(&argvm + 0,  "kii");
+    store64(&argvm + 8,  "--mode");
+    store64(&argvm + 16, "bogus");
+    assert_eq(cmdit_parse_argv(fsm, 3, &argvm), CMDIT_RESULT_ERR, "--mode bogus fails the parse");
+    assert_eq(cmdit_error(fsm), CMDIT_ERR_BAD_ENUM, "error = BAD_ENUM");
+    assert_streq(kii_err_flag_name(fsm), "mode", "BAD_ENUM names --mode (the only enum flag)");
+    var fsm2 = cmdit_new("kii");
+    kii_register_flags(fsm2);
+    store64(&argvm + 16, "");
+    assert_eq(cmdit_parse_argv(fsm2, 3, &argvm), CMDIT_RESULT_ERR, "--mode '' fails the parse");
+    var fsm3 = cmdit_new("kii");
+    kii_register_flags(fsm3);
+    store64(&argvm + 16, "ascii");
+    assert_eq(cmdit_parse_argv(fsm3, 3, &argvm), CMDIT_OK, "--mode ascii parses");
+    assert_eq(cmdit_get_enum(fsm3, KII_F_MODE), KII_MODE_ASCII, "ascii → KII_MODE_ASCII");
+    var fsm4 = cmdit_new("kii");
+    kii_register_flags(fsm4);
+    assert_eq(cmdit_parse_argv(fsm4, 1, &argvm), CMDIT_OK, "no --mode parses");
+    assert_eq(cmdit_get_enum(fsm4, KII_F_MODE), KII_MODE_HALFBLOCK, "default → KII_MODE_HALFBLOCK");
 
     # ---- M1(a)(b)(c): flag-parse happy paths ------------------------
     # Each case builds a synthetic argv, registers kii's flag set into a
@@ -233,17 +252,34 @@ fn main() {
     # ---- v1.6.4 — the --width check and the frame-size cap ------------
     # P(-1): `--width -5` used to mean "fit the terminal" and exit 0, and a
     # narrow image at an ordinary --width produced gigabytes (S-1).
-    test_group("v1.6.4 — kii_width_error_line");
-    assert_eq(kii_width_error_line(0), 0, "0 (fit the terminal) is fine");
-    assert_eq(kii_width_error_line(1), 0, "1 is fine");
-    assert_eq(kii_width_error_line(KII_MAX_COLS), 0, "the maximum itself is fine");
+    # v1.7.0: cmdit_range enforces [0, KII_MAX_COLS] during the parse.
+    test_group("v1.7.0 — --width is range-checked by cmdit");
     assert_eq(KII_MAX_COLS, 100000, "KII_MAX_COLS is the 100000 the message quotes");
-    assert_streq(kii_width_error_line(KII_MAX_COLS + 1),
-      "kii: --width exceeds the maximum of 100000 columns\n", "past the maximum");
-    assert_streq(kii_width_error_line(0 - 5),
-      "kii: --width must not be negative (0 = fit the terminal)\n", "-5 is refused");
-    assert_streq(kii_width_error_line(0 - 100000000000),
-      "kii: --width must not be negative (0 = fit the terminal)\n", "a huge negative is refused");
+    var wvals[48];
+    store64(&wvals + 0,  "0");
+    store64(&wvals + 8,  "1");
+    store64(&wvals + 16, "100000");
+    store64(&wvals + 24, "100001");
+    store64(&wvals + 32, "-5");
+    store64(&wvals + 40, "-100000000000");
+    var wi = 0;
+    while (wi < 6) {
+        var fsw = cmdit_new("kii");
+        kii_register_flags(fsw);
+        var argvw[24];
+        store64(&argvw + 0,  "kii");
+        store64(&argvw + 8,  "--width");
+        store64(&argvw + 16, load64(&wvals + wi * 8));
+        var rw = cmdit_parse_argv(fsw, 3, &argvw);
+        if (wi < 3) {
+            assert_eq(rw, CMDIT_OK, "an in-range --width parses");
+        } else {
+            assert_eq(rw, CMDIT_RESULT_ERR, "an out-of-range --width fails the parse");
+            assert_eq(cmdit_error(fsw), CMDIT_ERR_OUT_OF_RANGE, "error = OUT_OF_RANGE");
+            assert_streq(kii_err_flag_name(fsw), "width", "OUT_OF_RANGE names --width (the only range flag)");
+        }
+        wi = wi + 1;
+    }
 
     test_group("v1.6.4 — kii_frame_cells_ok bounds the frame");
     assert_eq(KII_MAX_CELLS, 1048576, "KII_MAX_CELLS is the 1048576 main's message quotes");
@@ -293,12 +329,14 @@ fn main() {
                  "UNEXPECTED_VALUE fallback (no flag named)");
     assert_streq(kii_parse_error_line(CMDIT_ERR_NOMEM), "kii: out of memory\n", "NOMEM");
     assert_streq(kii_parse_error_line(CMDIT_ERR_ARGV), "kii: could not read the full command line\n", "ARGV");
+    # v1.7.0: reachable once --width / --mode moved onto cmdit_range / cmdit_enum.
+    assert_streq(kii_parse_error_line(CMDIT_ERR_OUT_OF_RANGE),
+      "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n", "OUT_OF_RANGE");
+    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM), "kii: --mode must be halfblock or ascii\n", "BAD_ENUM");
 
     test_group("v1.6.2 — kii_parse_error_line: unreachable codes keep the generic line");
     assert_streq(kii_parse_error_line(CMDIT_ERR_NONE), "kii: argument parse error\n", "NONE");
     assert_streq(kii_parse_error_line(CMDIT_ERR_REQUIRED_MISSING), "kii: argument parse error\n", "REQUIRED_MISSING");
-    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM), "kii: argument parse error\n", "BAD_ENUM");
-    assert_streq(kii_parse_error_line(CMDIT_ERR_OUT_OF_RANGE), "kii: argument parse error\n", "OUT_OF_RANGE");
     assert_streq(kii_parse_error_line(CMDIT_ERR_UNKNOWN_VERB), "kii: argument parse error\n", "UNKNOWN_VERB");
     assert_streq(kii_parse_error_line(CMDIT_ERR_MISSING_POSITIONAL), "kii: argument parse error\n", "MISSING_POSITIONAL");
     assert_streq(kii_parse_error_line(CMDIT_ERR_TOO_MANY_POSITIONAL), "kii: argument parse error\n", "TOO_MANY_POSITIONAL");

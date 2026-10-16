@@ -248,3 +248,14 @@ decode, ~83 % of it sankoch's inflate. Small images are where it shows: an icon 
 `--width 200` renders ~2.2× faster, ~2× in ASCII mode (O-1 plus the matcher's exact
 early exit, O-3), and ~13 % faster at the default size. Output is byte-identical for
 every opaque image (`docs/audit/2026-10-15-audit.md` § 3, P-12).
+
+## v1.7.0 — no performance change
+
+1.7.0 is a rename plus code-health work, with one change on the hot path: both render
+lanes now reach their row builder through one indirect call per row (`_kii_emit_frame`,
+`callptr`). Checked against v1.6.4 on the same host (load average 7–12, so CPU time rather
+than wall clock): a 256² icon at `--mode ascii --width 200` used 2.29 / 2.33 / 2.45 s of
+user CPU per 100 runs, against 2.25 / 2.37 / 2.39 s for v1.6.4; at `--width 200` the
+half-block lane ran 7.72 / 7.81 ms per run against 7.76 / 7.76 ms. The first interleaved
+`kii-bench` round matched v1.6.4 within noise (quantize 69 vs 70 ns; RAMGON 80×24 204 vs
+200 ms); a second round was disturbed by load and is not recorded. The v1.6.4 figures stand.

@@ -16,38 +16,38 @@
 
 | Doc | Tier | Last verified | Debt / notes |
 |---|---|---|---|
-| `README.md` | 1 | 2026-10-15 (v1.6.4) | Status → v1.6.4; arc gains the v1.6.4 bullet; § Building's pin is a pointer to `cyrius.cyml` (it read `6.5.35`) and its counts are 709 / ten surfaces / 8,011,000; `/dev/stdin`, the frame cap and the negative-`--width` refusal noted. |
+| `README.md` | 1 | 2026-10-15 (v1.7.0) | Status → v1.7.0; the arc gains the v1.7.0 bullet (the rename, the RGBA8-only downscale, the shared frame loop, cmdit range/enum). v1.6.4: § Building pin pointer and counts. |
 | `CLAUDE.md` | 1 | 2026-10-15 (v1.6.4) | Process step 6 names `VERSION` (read by `cyrius.cyml`), the `print_version` literal and CI's drift check — it listed `cyrius.cyml`, which only interpolates the version. Toolchain pin stays a pointer to `cyrius.cyml` (since v1.5.1). |
-| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.4) | `[1.6.4]` added (the P(-1) sweep: frame cap, single-open read, alpha over black, per-format diagnostics, the speedups, the CVE verification). Rolls per release; released entries are never edited. |
+| `CHANGELOG.md` | 1 | 2026-10-15 (v1.7.0) | `[1.7.0]` added (the name mapping, R-2 / R-7 / R-8, the two changed error lines, the `--help` line). Rolls per release; released entries are never edited. |
 | `CONTRIBUTING.md` | 1 | 2026-10-15 (v1.6.4) | The retired M0–M7 milestone text replaced: contributions target the roadmap's next pinned release; tier 2 at 1.8.0 / 1.9.0; formats via a chitra re-pin; the dep list names cmdit and chitra; current state 709 / 8,011,000 / 7 benches. |
 | `CODE_OF_CONDUCT.md` | 1 | 2026-05-22 | Contributor Covenant 2.1 pointer. |
-| `SECURITY.md` | 1 | 2026-10-15 (v1.6.4) | No in-repo decoder (chitra since v1.2.0); `cat x \| kii /dev/stdin`; the single-open read and the frame-size cap as mitigations; new § Accepted risks (TAB/LF, bidi/format characters, a writerless FIFO); the audit history lists all three audits. |
+| `SECURITY.md` | 1 | 2026-10-15 (v1.7.0) | Code names follow the v1.7.0 rename (`IMG_ERR_*`). v1.6.4: chitra (no in-repo decoder), `kii /dev/stdin`, the single-open read and frame cap, § Accepted risks, the audit history. |
 | `cyrius.cyml` | 1 | 2026-10-15 (v1.6.3) | **Manifest only** (39 lines): package, build, stdlib list, three git + tag deps with a one-line purpose each. `cyrius = "6.7.12"`, chitra 1.2.0. Pin history and rationale live in CHANGELOG / state.md / ADRs, never here. |
-| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.4) | v1.6.4 entry; 709 assertions (cli 163 / quant 123 / render 198 / ascii 17 / decode 208); module map names the v1.6.4 helpers; binary sizes incl. the aarch64 alignment padding; bench ranges from § v1.6.4; the CI re-vendor and `<8-byte file` claims corrected; the open list matches the roadmap. |
+| `docs/development/state.md` | 1 | 2026-10-15 (v1.7.0) | v1.7.0 entry; live sections use the new names (`src/image.cyr`, `IMG_ERR_*`, `kii_decode_image`); 710 assertions (cli 171 / quant 115 / render 199 / ascii 17 / decode 208) — the test-count line still said 642 after v1.6.4, now fixed; binary sizes; the open list starts at 1.8.0. |
 | `docs/benchmarks.md` | 1 | 2026-10-15 (v1.6.4) | v1.6.4 section: 1.6.4 against 1.6.3 interleaved — quantize ~4×, a 256² icon ~2× at `--width 200`, RAMGON unchanged (its time is chitra's inflate). Earlier sections are historical captures. |
-| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.4) | 1.6.4 section deleted (shipped). The sweep's deferred findings joined their pinned versions: 1.7.0 (dead decoder branches, shared emit loop, cmdit range/enum), 1.8.0 (tier 1 on real 8/16-colour SGR, SGR elision, real transparency), 1.9.0 (pixel-centre sampling), 1.10.0 (the glyph-table generator). The 16 MiB limit is stated per colour type. |
+| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.7.0) | 1.7.0 section deleted (shipped). Pinned next: 1.8.0 (tier 2 colour + the emit rework), 1.9.0 (dithering + pixel-centre sampling), 1.10.0 (ASCII refinements + the glyph-table generator); then gated-on-upstream, not-scheduled, 2.0. |
 | `docs/audit/2026-05-22-audit.md` | 1 | 2026-05-23 (v1.0.0 close + Appendix A) | 140 CVE/issue rows + 10 kii-specific findings + § Appendix A W3C PngSuite walk (added at M8 close). Load-bearing reference for ADR 0002. |
 | `docs/audit/chafa-comparison.md` | 1 | 2026-05-23 (v1.0.0 close) | **NEW at M8(b3).** kii vs `chafa --colors 16` across 6 curated fixtures. Byte-stream metrics + qualitative findings + acceptance-criterion close-out. Validates ADRs 0003 / 0004 / 0005 against chafa as reference impl. |
 | `docs/adr/README.md` | 2 | 2026-08-24 (v1.5.0) | Index lists ADRs 0001–0009 (0009 BMP/GIF-via-chitra added). |
-| `docs/adr/0008-jpeg-via-chitra.md` | 2 | 2026-10-15 (v1.6.4) | JPEG via chitra 0.3.0: signature dispatch + structural validation. **Amended at v1.6.4**: the "256 MB pre-read file cap" is now a capped read. Extended by ADR 0009. |
-| `docs/adr/0009-bmp-gif-via-chitra.md` | 2 | 2026-10-15 (v1.6.4) | BMP + GIF via chitra 1.0.0; the nameable-format rule. **Amended at v1.6.4**: kii calls 11 chitra functions (not nine); the GIF LZW / no-image / tail-fill wording now follows the rule. |
+| `docs/adr/0008-jpeg-via-chitra.md` | 2 | 2026-10-15 (v1.7.0) | JPEG via chitra 0.3.0. Amended at v1.6.4 (capped read) and **v1.7.0**: the rename it deferred is done. |
+| `docs/adr/0009-bmp-gif-via-chitra.md` | 2 | 2026-10-15 (v1.7.0) | BMP + GIF via chitra 1.0.0; the nameable-format rule. Amended at v1.6.4 (11 chitra functions; GIF wording) and **v1.7.0** (names). |
 | `docs/audit/2026-08-25-audit.md` | 2 | 2026-08-25 (v1.5.1) | The v1.5.1 P-1 sweep: 41 findings raised / 2 refuted / 39 folded into 16 work items. Dated record — not edited; its "forged text cannot contain control bytes" is qualified by the 2026-10-15 audit § 7 (bidi characters). |
 | `docs/audit/2026-10-15-audit.md` | 2 | 2026-10-15 (v1.6.4) | **NEW.** The v1.6.4 P(-1) sweep: 56 findings; 1 MEDIUM + 9 LOW + 1 INFO repaired, 3 optimizations adopted, ~30 doc corrections, 9 deferred to pinned versions, 2 refuted; the three zlib CVE classes verified to hold. |
 | `docs/adr/template.md` | 2 | 2026-05-22 (cyrius init template) | Fresh. |
 | `docs/adr/0001-png-decoder-in-repo.md` | 2 | 2026-10-15 (v1.6.4) | **Superseded by ADR 0006** (says so in its header). Historical. |
-| `docs/adr/0002-security-model.md` | 2 | 2026-10-15 (v1.6.4) | Amended at v1.5.1, v1.6.0 and **v1.6.4**: the C1–C4 table's anchors now name current functions (chitra by function and constant, not line); new commitments for the 16 MiB ceiling, the 1M-cell frame cap and the single-open read; the three sankoch CVE items recorded as never filed and now verified to hold. |
+| `docs/adr/0002-security-model.md` | 2 | 2026-10-15 (v1.7.0) | Amended at v1.5.1, v1.6.0, v1.6.4 (current anchors, new commitments, the CVE items verified) and **v1.7.0** (the name mapping). |
 | `docs/adr/0003-color-tier-discipline.md` | 2 | 2026-10-15 (v1.6.4) | Amended at v1.5.1 and **v1.6.4**: tier 2 → 1.8.0 / 1.9.0; the Consequences claim that no emit byte needs a feature under 30 years old is false (tier 1 emits `38;5;N`), resolved at 1.8.0. |
 | `docs/adr/0004-half-block-floor-glyph.md` | 2 | 2026-10-15 (v1.6.4) | **Amended at v1.6.4**: roadmap citation → § 2.0 — open. |
-| `docs/adr/0005-nearest-neighbor-downscale.md` | 2 | 2026-10-15 (v1.6.4) | **Amended at v1.6.4**: tier 2 → 1.9.0; records C-7 (the last source row and column are never sampled) and pixel-centre sampling pinned to 1.9.0. |
-| `docs/adr/0006-adopt-chitra-decoder.md` | 2 | 2026-10-15 (v1.6.4) | The v1.2.0 PNG re-fold (supersedes 0001). **Amended at v1.6.4**: alpha is composited over black (its "alpha is dropped" decision is superseded); quoted messages updated; the read was lseek-sized, now `file_read_whole_max`. |
+| `docs/adr/0005-nearest-neighbor-downscale.md` | 2 | 2026-10-15 (v1.7.0) | Amended at v1.6.4 (C-7, pixel-centre sampling → 1.9.0) and **v1.7.0** (`_extract_rgb` removed; downscale reads RGBA8 only). |
+| `docs/adr/0006-adopt-chitra-decoder.md` | 2 | 2026-10-15 (v1.7.0) | Amended at v1.6.4 (alpha over black, messages, the read) and **v1.7.0** (names; `_png_color_channels`, `_extract_rgb` and the dead pstruct slots gone). |
 | `docs/adr/0007-rendering-mode-taxonomy.md` | 2 | 2026-10-15 (v1.6.4) | The `--mode` lanes. **Amended at v1.6.4**: `emit_ascii_shape`; the cols·2 × rows·3 downscale; the ascii lane quantizes each cell's mean, not via `quantize_downscaled`; shape-vector shipped at v1.3.1. |
-| `docs/architecture/README.md` | 2 | 2026-10-15 (v1.6.4) | Module map redrawn for v1.6.4 (it still drew the pre-v1.2.0 decoder): file read → chitra → adapter → downscale → quantize / emit, plus the ascii lane; the module table lists the v1.6.4 helpers; item 001 cites `STRUCT_*` by name. |
-| `docs/guides/getting-started.md` | 2 | 2026-10-15 (v1.6.4) | Four formats; pin pointer; `/dev/stdin`; the error tables list every decode, post-decode and warning line plus a new exit-2 usage table, each checked against the binary; the orphan fragment and the v1.0 roadmap link fixed. |
+| `docs/architecture/README.md` | 2 | 2026-10-15 (v1.7.0) | Module map and table renamed (`src/image.cyr`, `kii_decode_image`, `IMG_ERR_*`); the shared `_kii_emit_frame` drawn; cli's cmdit range/enum; downscale RGBA8-only; item 001 records the retired slots and their unused offsets. |
+| `docs/guides/getting-started.md` | 2 | 2026-10-15 (v1.7.0) | `--help` block matches the v1.7.0 binary byte for byte (the `--mode <halfblock|ascii>` line); the usage table has the one `--width` range line. v1.6.4: complete error tables, four formats, `/dev/stdin`. |
 | `docs/examples/README.md` | 3 | 2026-10-15 (v1.6.4) | `cd kii` (was `cd cyrius-kii`). |
 | `docs/examples/01-ramgon-fixed-width/` | 3 | 2026-10-15 (v1.6.4) | Runs and matches (54,353 B, 32 rows). Notes: bench figures current, the time is sankoch's inflate inside chitra. |
-| `docs/examples/02-archlinux-logo-palette/` | 3 | 2026-10-15 (v1.6.4) | Runs and matches. The PLTE lookup is chitra's; the logo is a palette PNG with transparency, so 72 of its 3,200 cells changed at v1.6.4 (alpha over black) — `expected.txt` pins no frame bytes. |
-| `docs/examples/03-not-a-png-rejection/` | 3 | 2026-10-15 (v1.6.4) | Runs and matches. Notes: kii reads the whole file and chitra's sniff refuses it; a <8-byte file prints `unrecognized image format`; ESC is C0. |
-| `tests/{cli,quant,render,ascii,decode}.tcyr` | 2 | 2026-10-15 (v1.6.4) | **709 assertions** (cli 163 / quant 123 / render 198 / ascii 17 / decode 208). v1.6.4 added the width line, the frame cap, `-m`, every decode line per format, IS_DIR, pstruct zeroing, the 256 MB pin, chitra's code space, alpha compositing, and a quantizer reference grid. |
+| `docs/examples/02-archlinux-logo-palette/` | 3 | 2026-10-15 (v1.7.0) | Runs and matches. The PLTE lookup is chitra's, and the `_extract_rgb` palette branch the notes mentioned was removed at v1.7.0; 72 of 3,200 cells changed at v1.6.4 (alpha over black). |
+| `docs/examples/03-not-a-png-rejection/` | 3 | 2026-10-15 (v1.7.0) | Runs and matches. Notes use `kii_decode_image` / `IMG_ERR_UNRECOGNIZED`. |
+| `tests/{cli,quant,render,ascii,decode}.tcyr` | 2 | 2026-10-15 (v1.7.0) | **710 assertions** (cli 171 / quant 115 / render 199 / ascii 17 / decode 208). v1.7.0: cmdit's `--width` range and `--mode` enum, the RGBA8-only downscale guard; the dead colour-type helpers' tests removed with them. |
 | `tests/fixtures/oversize.png` | 3 | 2026-10-12 (v1.6.0) | **NEW.** Valid 2370×2370 black RGB PNG (16,447 B; 16,853,070 B inflated), just past sankoch's 16 MiB ceiling; ImageMagick-verified. |
 | `tests/fixtures/{gradient,color}.jpg` | 3 | 2026-06-27 (v1.4.0) | **NEW.** Baseline JPEG fixtures: 16×16 grayscale (chitra's ImageMagick-verified gradient, src ctype 257) + 8×8 YCbCr 4:4:4 (src ctype 259). |
 | `tests/fixtures/{gradient.bmp,color.gif}` | 3 | 2026-08-24 (v1.5.0) | 16×16 24-bpp BI_RGB ramp and a 16×16 GIF89a with four flat quadrants; both pixel-verified against ImageMagick. |
@@ -59,7 +59,7 @@
 | `LICENSE` | 1 | 2026-05-22 | GPL-3.0-only header (parity with bannermanor/hapi/etc.). |
 | `.gitignore` | 2 | 2026-05-22 | Standard scaffold. |
 
-## Debt summary at v1.6.4
+## Debt summary at v1.7.0
 
 The v1.6.4 P(-1) sweep walked every Tier-1 and Tier-2 doc against the tree and the
 binary ([`audit/2026-10-15-audit.md`](audit/2026-10-15-audit.md) § 3, P-14). It closed
