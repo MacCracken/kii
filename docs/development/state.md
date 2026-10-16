@@ -5,6 +5,20 @@
 
 ## Version
 
+**1.6.3** — cut 2026-10-15. **Toolchain `6.7.9` → `6.7.12`, chitra `1.1.3` → `1.2.0`.**
+darshana 1.3.0 and cmdit 1.4.0 are still the newest tags. No kii source changed except
+`print_version` → `kii 1.6.3` and two comments. The 6.7.10–6.7.12 language changes were
+audited against kii's source, not just built: the 6.7.12 compiler alone builds
+byte-identical binaries to 6.7.9. The stdlib's sankoch moves 2.8.3 → **2.8.7**, which:
+- **renders about 3.5× faster** end to end (RAMGON 723–863 ms → 204–245 ms), because 2.8.6
+  replaced the Huffman slow path that was ~93 % of the render;
+- **closes the 2.8.6 inflate floor** recorded at 1.6.1, so malformed deflate streams zlib
+  refuses are now refused here too.
+
+Output is byte-identical to 1.6.2: 130 of 130 cases, and 932 of 932 runs over 466 system
+images. **642 assertions** (x86_64 and aarch64); **8,011,000 fuzz iterations**, clean. The
+roadmap was rebuilt around pinned versions: a P(-1) sweep at 1.6.4, then 1.7.0–1.10.0, then 2.0.
+
 **1.6.2** — cut 2026-10-15. **The three parse errors cmdit 1.3.x added now get their own
 lines.** `kii --verbose=0` (and `=1`, `=`, `--help=x`, `--version=1`) prints `kii: --<flag> takes
 no value`. A command line the stdlib cannot read whole prints `could not read the full command
@@ -179,9 +193,9 @@ parser productized + extended) — dropped the hand-rolled parsing + `build_argv
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`; the build reports `compiler: …/versions/6.7.9/bin/cycc`). `lib/` re-vendored from the 6.7.9 snapshot at 1.6.0 with `rm -rf lib && mkdir lib && cyrius deps` (was 6.6.2 at 1.5.2, 6.5.35 at 1.5.0).
+- **Cyrius pin**: `6.7.12` (in `cyrius.cyml [package].cyrius`). `lib/` re-vendored from the 6.7.12 snapshot at 1.6.3 with `rm -rf lib && mkdir lib && rm cyrius.lock && cyrius deps` (was 6.7.9 at 1.6.0–1.6.2, 6.6.2 at 1.5.2, 6.5.35 at 1.5.0). The stdlib's sankoch is **2.8.7** (2.8.3 at 6.7.9).
 - **Dependency resolution is git + tag only** (since 1.6.0). cyrius 6.7.6+ resolves the tag by default and checks the commit pin in `cyrius.lock`; kii's manifest no longer names any `path`, so a local build and CI compile the same bundles. To build against a sibling checkout, add its `path` in a local edit and use `cyrius build --local`.
-- **`lib/` is 40 files** at 6.7.9 (39 at 1.5.x: the 6.7.9 allocator pulls in `alloc_cx.cyr` and `poison.cyr`, and `flags.cyr` is gone now that chitra ≥ 1.0.1's sidecar no longer lists it). History: it was 104 before 1.5.0. The tree had carried 62 undeclared stdlib bundles (`mabda`, `sigil`, `sandhi`, `patra`, `yukti`, `bayan`, `ganita`, `sakshi`, `vani`, …) that kii references nowhere — leftovers from an old full-snapshot vendor. They shadowed the pinned versions and produced a standing build warning. **`cyrius lib sync` cannot remove them** (it only overwrites declared modules); the canonical re-vendor is `rm -rf lib && mkdir lib && cyrius deps`, which is now also what CI runs.
+- **`lib/` is 40 files** at 6.7.12, the same set as at 6.7.9 (39 at 1.5.x: the 6.7.9 allocator pulls in `alloc_cx.cyr` and `poison.cyr`, and `flags.cyr` is gone now that chitra ≥ 1.0.1's sidecar no longer lists it). History: it was 104 before 1.5.0. The tree had carried 62 undeclared stdlib bundles (`mabda`, `sigil`, `sandhi`, `patra`, `yukti`, `bayan`, `ganita`, `sakshi`, `vani`, …) that kii references nowhere — leftovers from an old full-snapshot vendor. They shadowed the pinned versions and produced a standing build warning. **`cyrius lib sync` cannot remove them** (it only overwrites declared modules); the canonical re-vendor is `rm -rf lib && mkdir lib && cyrius deps`, which is now also what CI runs.
 
 ## Surface
 
@@ -230,28 +244,28 @@ Module map:
 
 ## Binary size
 
-Build: **902 KB** on host at v1.6.1 (`build/kii` = 923,976 bytes, unstripped, DCE off; the compiler reports 1,140 unreachable fns, ~523 KB, eliminable with `CYRIUS_DCE=1`). The +25,632 bytes over v1.6.0 come from the cmdit 1.4.0 and chitra 1.1.3 bundles. kii's source is unchanged. `--agnos` 938,088 bytes; `--aarch64` 1,087,600 bytes. At v1.6.0 it was **877 KB** (898,344 bytes), up from 683,584 bytes for v1.5.2 rebuilt from its own tree at 6.6.2: the growth is the 6.7.9 toolchain and the larger darshana 1.3.0 bundle — kii's own source got smaller (the local BG composer and the hand-rolled UTF-8 walk are gone). `--agnos` 908,376 bytes; `--aarch64` 1,086,544 bytes. Earlier: **668 KB** at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DCE off). The `~145 KB` this section reported was measured at v0.8.0 and never refreshed across the cmdit fold, the chitra re-fold, or the JPEG/BMP/GIF folds — it was low by **4.6×**. Most of the size is the vendored `chitra` bundle carrying four decoders plus `sankoch`; the compiler reports ~942 unreachable fns (~390 KB) eliminable with `CYRIUS_DCE=1`. kii gained no module at v1.5.0 or v1.5.1. (Corrected at the v1.5.1 P-1 sweep.)
+Build: **976 KB** on host at v1.6.3 (`build/kii` = 999,328 bytes, unstripped, DCE off; the compiler reports 1,209 unreachable fns, ~574 KB, eliminable with `CYRIUS_DCE=1`). The +75,240 bytes over v1.6.2 (924,088) are the stdlib's sankoch 2.8.7 bundle, mostly its new Brotli encoder; kii links it as a stdlib leaf and calls only inflate and CRC-32. `--agnos` 1,013,568 bytes; `--aarch64` 1,171,128 bytes. At v1.6.1 it was 923,976 bytes, the growth from the cmdit 1.4.0 and chitra 1.1.3 bundles. At v1.6.0 it was **877 KB** (898,344 bytes), up from 683,584 bytes for v1.5.2 rebuilt from its own tree at 6.6.2: the growth is the 6.7.9 toolchain and the larger darshana 1.3.0 bundle — kii's own source got smaller (the local BG composer and the hand-rolled UTF-8 walk are gone). `--agnos` 908,376 bytes; `--aarch64` 1,086,544 bytes. Earlier: **668 KB** at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DCE off). The `~145 KB` this section reported was measured at v0.8.0 and never refreshed across the cmdit fold, the chitra re-fold, or the JPEG/BMP/GIF folds — it was low by **4.6×**. Most of the size is the vendored `chitra` bundle carrying four decoders plus `sankoch`; the compiler reports ~942 unreachable fns (~390 KB) eliminable with `CYRIUS_DCE=1`. kii gained no module at v1.5.0 or v1.5.1. (Corrected at the v1.5.1 P-1 sweep.)
 
 ## Tests + bench
 
 - `cyrius test` → **642 assertions, all pass** across 5 split suites (cli 141 / quant 125 / render 188 / ascii 17 / decode 171), plus the `[build].test` entry `src/test.cyr` (6 entries). v1.6.2 added 43 in cli: the bool `=value` refusal naming its flag, and the exact parse-error line for every cmdit code. v1.6.0 added 49: cli +21 (strict RFC 3629 boundaries, both overlong CSI spellings, the `tty_has_ctl` wiring), render +24 (all 256 BG indices byte-identical to the retired composer, `_kii_term_envelope` incl. 1-row and half-set winsizes), decode +4 (`PNG_ERR_INFLATE_LIMIT` mapping + oversize fixture + format tag + the 16 MiB pin). The same five suites also pass under `cyrius test --aarch64` (qemu-aarch64). v1.5.1 added 39 (P-1 regressions: C1 sanitizer coverage in both encodings, the `--color` tier contract, the downscale overflow guard, and the `_emit_bg_256_buf` negative-pos guard). At v1.5.0 decode grew 105 → 166 (+61: BMP + GIF e2e against ImageMagick-verified fixtures, the eleven BMP/GIF/budget error mappings, the nine new source-sentinel names plus four range-boundary guards, and a non-image UNKNOWN-tag case) and render grew 137 → 156 (+19: BMP and GIF decode→downscale→quantize→emit e2e, including a real content check that the GIF's pure-red and pure-lime quadrants quantize to palette entries 1 and 2 — the NORMAL entries, not the bright ones, because nearest-RGB puts pure (255,0,0) at 85² from entry 1 but 85²+85² from entry 9). **`tests/quant.tcyr`'s 109 assertions run again for the first time since v1.2.0** — 48 palette calls passed two arguments to the three-argument `assert_eq(a, b, name)`, so the suite had been failing to compile; the v1.4.1 cut missed it by verifying only the render suite. decode grew 51 → 105 at v1.4.0 (+54 JPEG: 11 error mappings + sentinel names + format tag + grayscale & YCbCr e2e with pixel/chroma/row checks + progressive/malformed stubs); render +8 (a JPEG decode→downscale→quantize→emit e2e). Decoder-internal coverage lives in chitra's suite.
 - Fuzz: `cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz` → **8,011,000 iters, all clean, exit 0** (peak RSS **137,848 KB**, ~99 s wall on a loaded host, v1.6.0). The v1.6.0 surfaces: the path-sanitizer differential (1M; per run ≈ 284k inputs both walks accept, ≈ 203k only the strict RFC 3629 rule refuses, the rest both refuse; `bad=0`) and the terminal envelope (1M, `bad=0`); both were checked to fire on a deliberately wrong implementation. At v1.5.1 the harness ran 6,011,000 iters at ~136 MB. **The PNG surface only became real at v1.5.1**: the per-iteration `alloc_reset()` that bounds the heap also invalidated sankoch's cached CRC-32 table (a lazy-init singleton holding a heap pointer), so from iteration 2 onward 2999 of every 3000 inputs died at the signature check rather than reaching the chunk walker, inflate, unfilter or the PLTE bounds. Every `alloc_reset()` is now paired with `crc32_table = 0`; the measured return-code tally afterwards matches a no-reset run exactly. Ten surfaces: 10k arg-parser + 1M path-sanitizer + 1M geometry + 1k emit-pipeline + 1M PNG + 1M JPEG + 1M BMP + 1M GIF + **1M path-sanitizer differential** + **1M terminal envelope** (the last two run after the rest, so the first eight consume the same random stream they did through v1.5.2). sankoch's arena canary (2.7.10+) now also drops the CRC table on a reset; the `crc32_table = 0` lines are kept as a second guard. Each decode surface prefixes the real format signature (`\x89PNG`, `\xFF\xD8`, `BM`, `GIF89a`) so the random payload actually reaches that decoder rather than bouncing off the sniff. All four decode surfaces call `alloc_reset()` to rewind the never-free bump allocator each iteration (a matched signature makes chitra allocate marker/header/palette scratch before the input fails) — without it the heap would grow unboundedly. The **GIF surface is the highest-value of the four**: LZW builds a dictionary from attacker-controlled codes, the classic GIF-decoder CVE class.
-- Bench (see [`docs/benchmarks.md`](../benchmarks.md) § v1.6.0; measured at 6.7.9 on a loaded host, three runs, so ranges):
-  - `quantize_nearest_rgb @ 1024×1024`: **301–307 ns/op**
-  - `end-to-end RAMGON.png → 80×24 frame`: **765–786 ms/iter**
-  - `end-to-end RAMGON.png → 120×40 frame`: **754–791 ms/iter**
-  - `end-to-end RAMGON.png → 200×60 frame`: **759–806 ms/iter**
-  - The v1.5.2 binary, interleaved in the same session, ran end-to-end in 682–747 ms: the 6.7.9 toolchain is ~5–15 % slower here, kii's own code unchanged in effect.
+- Bench (see [`docs/benchmarks.md`](../benchmarks.md) § v1.6.3; measured at 6.7.12 on a loaded host, three runs, so ranges):
+  - `quantize_nearest_rgb @ 1024×1024`: **295–334 ns/op**
+  - `end-to-end RAMGON.png → 80×24 frame`: **206–233 ms/iter**
+  - `end-to-end RAMGON.png → 120×40 frame`: **204–240 ms/iter**
+  - `end-to-end RAMGON.png → 200×60 frame`: **207–245 ms/iter**
+  - The v1.6.2 binary, interleaved in the same session, ran end-to-end in 723–863 ms. The ~3.5× gain is the stdlib's sankoch 2.8.6 replacing its O(bits × num_symbols) Huffman slow path, which was ~93 % of the render through 6.7.9. kii's code did not change.
   - **M7(d) decode-latency matrix** (DoS-bound):
-    - `png_decode 256² class` (archlinux-logo 256×256, palette): **2.3–2.5 ms**
+    - `png_decode 256² class` (archlinux-logo 256×256, palette): **1.17–1.40 ms**
     - `png_decode 1024² class` (starfield 1597×1198, RGB): **SKIPPED** — the system fixture no longer ships on the dev host; the bench prints an explicit skip line rather than vanishing (v1.5.1)
-    - `png_decode 2048² class` (elarun-bg 2560×1600, RGB): **493–550 ms**
+    - `png_decode 2048² class` (elarun-bg 2560×1600, RGB): **370–451 ms**
     - Per-pixel decode throughput is content-dependent (compression-ratio-driven), not strictly size-dependent.
 
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `sankoch`, `thread` (`flags` dropped at the v1.1.0 cmdit re-fold). `sankoch` + `thread` stay post-decoder-re-fold — chitra's dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list, and kii's tests call `zlib_decompress` directly.
-- **External** (git + tag, no `path` since v1.6.0): `darshana 1.3.0` + **`cmdit 1.4.0`** + **`chitra 1.1.3`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0 → 1.0.0 at v1.5.0 → 1.0.3 at v1.6.0 → 1.1.3 at v1.6.1). Each is the newest tag that builds on cyrius 6.7.9. chitra 1.1.4 and later pin 6.7.12. chitra ≥ 1.1.0 declares its own `[deps.sankoch]` (`zlib` profile 2.8.7). kii's stdlib `sankoch` leaf takes precedence, so the profile is never vendored, and `cyrius.lock` carries only its commit pin. ⚠ The stdlib sankoch at 6.7.9 is 2.8.3, below the 2.8.6 floor chitra documents for zlib-strict inflate. A pin at cyrius ≥ 6.7.11 lifts it. Through v1.5.2 the manifest said darshana 1.0.0 / cmdit 1.2.4 / chitra 1.0.0 but the `path` overrides compiled 1.1.2 / 1.2.5 / 1.0.3. darshana supplies every escape kii writes (`tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`), the terminal size (`tty_winsize`) and the path-echo rule (`tty_has_ctl`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
+- **External** (git + tag, no `path` since v1.6.0): `darshana 1.3.0` + **`cmdit 1.4.0`** + **`chitra 1.2.0`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0 → 1.0.0 at v1.5.0 → 1.0.3 at v1.6.0 → 1.1.3 at v1.6.1 → 1.2.0 at v1.6.3). All three are the newest tags at 1.6.3. chitra ≥ 1.1.0 declares its own `[deps.sankoch]` (`zlib` profile 2.8.7). kii's stdlib `sankoch` leaf takes precedence, so the profile is never vendored, and `cyrius.lock` carries only its commit pin. The stdlib sankoch at 6.7.12 is 2.8.7, above the 2.8.6 floor chitra documents for zlib-strict inflate (it was 2.8.3, below it, through v1.6.2). Through v1.5.2 the manifest said darshana 1.0.0 / cmdit 1.2.4 / chitra 1.0.0 but the `path` overrides compiled 1.1.2 / 1.2.5 / 1.0.3. darshana supplies every escape kii writes (`tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`), the terminal size (`tty_winsize`) and the path-echo rule (`tty_has_ctl`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
 
 ## Cycle context
 
@@ -264,15 +278,14 @@ not a plan, and keeping a second ordered list here is how the two drift apart. T
 roadmap is forward-facing only: anything shipped is deleted from it rather than checked
 off, so if an item appears there it is genuinely still open.
 
-In brief, what is open as of v1.6.2:
+In brief, what is open as of v1.6.3 (the roadmap pins each to a version):
 
-- **Tier 2 colour** (256 / truecolour + dithering) — the likeliest next minor. The
-  `--color` flag already carries a real tier mechanism as of v1.5.1, so this extends an
-  existing seam.
-- **The `png.*` → `image.*` rename** — 28 symbols across 290 call sites; materially
-  overdue now that those names cover four formats. Wants its own cut.
-- **Progressive-DCT JPEG** — the one remaining format gap; arrives via a `chitra` re-pin.
-- **ASCII shape-vector refinements** — directional contrast + k-d-tree lookup.
-- **Two `sankoch` limitations** (S-1 Huffman slow path, S-2 16 MiB inflate cap) — re-verified open at 6.7.9; S-3 is fixed upstream. Re-verify at the next pin bump.
-- Cross-terminal verification and the zugot marketplace recipe, both carried from v1.0.
-- **v2.0 horizon**: full Block Elements glyph vocab, then Tier 3 (Sixel / Kitty / iTerm2).
+- **1.6.4** — a P(-1) sweep: five lenses with adversarial verification, including the
+  literal `syscall(60)` exits, the three zlib CVE-class transfers, and the doc-health debt.
+- **1.7.0** — the `png.*` → `image.*` / `PNG_ERR_*` → `IMG_ERR_*` rename.
+- **1.8.0** — Tier 2 colour: `--color 256` and `--color tc`.
+- **1.9.0** — Tier 2 dithering: `--dither ordered|fs`.
+- **1.10.0** — ASCII shape-vector refinements (directional contrast, k-d tree).
+- **Gated on upstream** — progressive JPEG and PNG past 16 MiB, each on a `chitra` re-pin.
+- **Not scheduled** — cross-terminal verification, the zugot recipe, the first BBS/MUD consumer.
+- **2.0** — full Block Elements glyph vocabulary, then Tier 3 (Sixel / Kitty / iTerm2).

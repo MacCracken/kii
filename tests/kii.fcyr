@@ -480,8 +480,8 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
     # before the decode loops run, and the per-iter scratch is stack-local.
     # P-1 (v1.5.1): alloc_reset() alone SILENTLY VOIDED this surface.
     # sankoch caches its CRC-32 table as a lazy-init singleton holding a HEAP
-    # pointer (lib/sankoch.cyr:327 `var crc32_table = 0;` + :334-337
-    # `if (crc32_table == 0) { crc32_table = _sankoch_alloc(16384); ... }`).
+    # pointer (`var crc32_table` in lib/sankoch.cyr, filled by
+    # `crc32_init_table` when it is 0).
     # alloc_reset() rewinds the bump allocator underneath that pointer, so from
     # iteration 2 onward the cached table ALIASED live decode memory and the
     # decoder mis-parsed everything: a return-code tally showed 2999 of 3000
@@ -499,10 +499,11 @@ fn fuzz_png_iter(scratch_buf, scratch_cap): i64 {
 # One JPEG-fuzz iteration. Always prepends SOI (0xFFD8) so the byte stream
 # sniffs as JPEG and routes through chitra's JPEG decoder, then appends a
 # random payload. Random bytes after SOI fail in the marker/segment parser,
-# but chitra_jpeg_scan_markers allocates its frame/quant/huff tables up front
-# (~22 KB) BEFORE that failure — so, like the PNG iter, this MUST rewind the
-# never-free bump allocator each iteration or it grows ~22 KB/iter (~22 GB
-# over 10⁶ iters → OOM). alloc_reset() below does that. Contract: kii_decode_png
+# but chitra's marker scan (`_chitra_jpeg_scan_markers` since chitra 1.2.0) can
+# allocate its frame/quant/huff tables (up to ~22 KB) BEFORE that failure — so,
+# like the PNG iter, this MUST rewind the never-free bump allocator each
+# iteration or it grows ~22 KB/iter (~22 GB over 10⁶ iters → OOM).
+# alloc_reset() below does that. Contract: kii_decode_png
 # never crashes; returns PNG_OK or any PNG_ERR_* cleanly.
 fn fuzz_jpeg_iter(scratch_buf, scratch_cap): i64 {
     store8(scratch_buf + 0, 0xFF);            # SOI marker high byte

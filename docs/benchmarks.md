@@ -192,3 +192,32 @@ sankoch's Huffman decoder (§ v1.5.1). The difference arrives with the toolchain
 the compiler and the stdlib it vendors, sankoch included — and is recorded so the
 next pin bump has a same-session baseline to compare against. Re-measure on an idle
 host before drawing a finer conclusion.
+
+## v1.6.3 — toolchain 6.7.9 → 6.7.12
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.12` (sankoch **2.8.7** in the stdlib), chitra
+`1.2.0`. ⚠ **Measured on a loaded host**: the load average was 7–11 during the runs, with a
+fuzz run and other jobs alongside. So the v1.6.2 binary (Cyrius 6.7.9, sankoch 2.8.3) was
+run in the same session, interleaved with the new one, three rounds each. Each figure is
+one full `kii-bench` run.
+
+| Bench | v1.6.3 (3 runs) | v1.6.2 (3 runs, same session) |
+|---|---:|---:|
+| `quantize_nearest_rgb @ 1024×1024` | 324 / 295 / 334 ns | 305 / 340 / 280 ns |
+| `end-to-end RAMGON.png → 80×24` | **233 / 206 / 214 ms** | 777 / 839 / 723 ms |
+| `end-to-end RAMGON.png → 120×40` | **240 / 205 / 204 ms** | 793 / 802 / 748 ms |
+| `end-to-end RAMGON.png → 200×60` | **245 / 207 / 208 ms** | 863 / 814 / 767 ms |
+| `png_decode (256² class)` — archlinux-logo | **1.40 / 1.19 / 1.17 ms** | 2.56 / 2.42 / 2.56 ms |
+| `png_decode (1024² class)` — starfield | SKIPPED | SKIPPED |
+| `png_decode (2048² class)` — elarun 2560×1600 | **451 / 370 / 375 ms** | 536 / 516 / 507 ms |
+
+**Reading**: end-to-end render is about **3.5× faster** (723–863 ms → 204–245 ms), and
+the 256² PNG decode about 2×. None of it is kii's code: the only source changes in 1.6.3
+are a version literal and two comments. With chitra held at 1.1.3, the 6.7.12 compiler
+alone builds byte-identical binaries to 6.7.9. The gain is the stdlib's sankoch moving
+2.8.3 → 2.8.7. **sankoch 2.8.6 replaced `_huff_decode`'s slow path**, the
+O(bits × num_symbols) nested scan that § v1.5.1 measured as ~93 % of the render, with
+canonical count/offset decoding (as zlib's `puff.c` does). § v1.5.1 predicted ~3.7× for
+exactly that change. The 2048² decode improves less (~20–30 %), consistent with a large
+photo spending more of its time outside the Huffman slow path. Quantize is unchanged within
+noise, as expected: it never touches sankoch.

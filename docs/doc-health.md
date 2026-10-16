@@ -16,16 +16,16 @@
 
 | Doc | Tier | Last verified | Debt / notes |
 |---|---|---|---|
-| `README.md` | 1 | 2026-10-15 (v1.6.2) | Status block → v1.6.2; the post-v1 arc gains the v1.6.1 (deps, manifest) and v1.6.2 (parse-error lines) entries; § Substrate names the cmdit 1.4.0 and chitra 1.1.3 pins. |
+| `README.md` | 1 | 2026-10-15 (v1.6.3) | Status block → v1.6.3; the post-v1 arc gains the v1.6.1–v1.6.3 entries; § Substrate names the cmdit 1.4.0 and chitra 1.2.0 pins. |
 | `CLAUDE.md` | 1 | 2026-08-25 (v1.5.1) | Identity line lists all four formats. **Toolchain pin de-inlined** — it read `6.0.1` for eleven releases past the real pin, so the number is now a pointer to `cyrius.cyml`, matching the file's own VERSION rule. |
-| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.2) | `[1.6.2]` added (named lines for cmdit's UNEXPECTED_VALUE / ARGV / NOMEM, +43 cli assertions). `[1.6.1]` above it: cmdit 1.4.0, chitra 1.1.3, the manifest cleanup, the sankoch-floor note. Rolls per release. |
+| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.3) | `[1.6.3]` added (cyrius 6.7.12 audited, chitra 1.2.0, sankoch 2.8.7: ~3.5× faster, inflate floor closed; the roadmap rebuilt). `[1.6.1]`/`[1.6.2]` above 1.6.0. Rolls per release. |
 | `CONTRIBUTING.md` | 1 | 2026-10-15 (v1.6.2) | Current-state line → 642 / 8,011,000 / 7 benches. v1.6.0: fuzz bullet (ten surfaces, any `bad` fails the run, `crc32_table` note qualified). Line 19 still describes the v1.0 M0–M7 milestone roadmap, which no longer exists (pre-existing debt). |
 | `CODE_OF_CONDUCT.md` | 1 | 2026-05-22 | Contributor Covenant 2.1 pointer. |
 | `SECURITY.md` | 1 | 2026-10-12 (v1.6.0) | Sanitizer bullet: darshana `tty_has_ctl`, strict RFC 3629 and why the overlong forms matter. Amplification bullet: the 16 MiB inflate ceiling and its own diagnostic. Fuzz bullet: ten surfaces / 8,011,000 iterations, failing exit. |
-| `cyrius.cyml` | 1 | 2026-10-15 (v1.6.1) | **Manifest only** (126 → 39 lines): package, build, stdlib list, three git + tag deps with a one-line purpose each. Pin history and rationale live in CHANGELOG / state.md / ADRs, never here. `repository` corrected to `MacCracken/kii`. Version interpolates `${file:VERSION}`. |
-| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.2) | v1.6.2 and v1.6.1 entries; **642 assertions** (cli 141); `src/cli.cyr` module line names the two new helpers; binary size refreshed at 1.6.1; External deps → darshana 1.3.0 / cmdit 1.4.0 / chitra 1.1.3 with the sankoch-floor note. |
-| `docs/benchmarks.md` | 1 | 2026-10-12 (v1.6.0) | v1.6.0 section: the 6.7.9 binary against the v1.5.2 binary, interleaved in one session on a loaded host (end-to-end ~5–15 % slower, attributed to the toolchain; re-measure idle). Earlier sections are historical captures. |
-| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.2) | Header → v1.6.2. No item shipped or opened at 1.6.1 or 1.6.2. |
+| `cyrius.cyml` | 1 | 2026-10-15 (v1.6.3) | **Manifest only** (39 lines): package, build, stdlib list, three git + tag deps with a one-line purpose each. `cyrius = "6.7.12"`, chitra 1.2.0. Pin history and rationale live in CHANGELOG / state.md / ADRs, never here. |
+| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.3) | v1.6.3 entry; toolchain 6.7.12 (sankoch 2.8.7), binary size (999,328 B host), bench ranges from § v1.6.3, deps darshana 1.3.0 / cmdit 1.4.0 / chitra 1.2.0, the open list rewritten to match the roadmap's pinned versions. |
+| `docs/benchmarks.md` | 1 | 2026-10-15 (v1.6.3) | v1.6.3 section: 1.6.3 against 1.6.2, interleaved in one session on a loaded host; end-to-end ~3.5× faster, attributed to sankoch 2.8.6's Huffman slow-path rewrite. Earlier sections are historical captures. |
+| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.3) | **Rebuilt around pinned versions**: 1.6.4 P(-1) sweep, 1.7.0 rename, 1.8.0 256/truecolour, 1.9.0 dithering, 1.10.0 ASCII refinements; gated-on-upstream, not-scheduled, 2.0 open, out of scope. The sankoch limitations table is gone (S-1 fixed upstream; S-2 is gated on chitra 1.3.0). |
 | `docs/audit/2026-05-22-audit.md` | 1 | 2026-05-23 (v1.0.0 close + Appendix A) | 140 CVE/issue rows + 10 kii-specific findings + § Appendix A W3C PngSuite walk (added at M8 close). Load-bearing reference for ADR 0002. |
 | `docs/audit/chafa-comparison.md` | 1 | 2026-05-23 (v1.0.0 close) | **NEW at M8(b3).** kii vs `chafa --colors 16` across 6 curated fixtures. Byte-stream metrics + qualitative findings + acceptance-criterion close-out. Validates ADRs 0003 / 0004 / 0005 against chafa as reference impl. |
 | `docs/adr/README.md` | 2 | 2026-08-24 (v1.5.0) | Index lists ADRs 0001–0009 (0009 BMP/GIF-via-chitra added). |
@@ -67,7 +67,7 @@
 
 - **Cross-terminal verification**: needs human-eye per-terminal pass (Linux console / xterm / Alacritty / kitty / tmux). v1.0 ships byte-stable; verification can land any time. (chafa visual review CLOSED at v1.0 — see `docs/audit/chafa-comparison.md`.)
 - **Marketplace recipe in zugot**: depends on zugot tooling.
-- **Three sankoch upstream items** (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers): file as sankoch issues.
+- **Three sankoch upstream items** (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers): file as sankoch issues. Pinned to the 1.6.4 P(-1) sweep, which verifies each against sankoch 2.8.7 first.
 - **CI bench step**: build-only would catch bitrot without per-PR timing noise.
 - **P-1 sweep (v1.5.1) closed most of this ledger's debt.** `SECURITY.md`,
   `CONTRIBUTING.md`, `README.md`, `CLAUDE.md`, `docs/guides/getting-started.md`,

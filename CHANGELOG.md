@@ -4,6 +4,75 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-10-15
+
+**Toolchain `6.7.9` → `6.7.12` and `[deps.chitra]` `1.1.3` → `1.2.0`. Renders about 3.5×
+faster with byte-identical output.** darshana 1.3.0 and cmdit 1.4.0 are still the newest
+tags. No kii source changed except the `--version` literal and two comments.
+
+Output was compared against 1.6.2:
+- **130 of 130** standard cases (6 images × both lanes × 8 width/flag combinations, plus the
+  decode diagnostics, usage errors and `--help`) are byte-identical.
+- **932 of 932** runs over 466 system images are byte-identical. That is every JPEG, GIF and
+  BMP under `/usr/share` plus every seventh PNG, at `--width 40` and `--mode ascii --width 30`;
+  456 decode and 10 are refused identically.
+
+**642 assertions** pass on x86_64 and under `cyrius test --aarch64`. **8,011,000 fuzz
+iterations** are all clean. Every target builds with zero warnings.
+
+### Changed
+- **Toolchain `6.7.9` → `6.7.12`.** The 6.7.10–6.7.12 changelog was audited against kii's
+  source for anything that changes what it compiles to: new or reserved identifiers,
+  precedence, literal folding, argument evaluation, `var buf[N]` sizing, struct and
+  multi-value semantics, and the stdlib modules kii links. Nothing applies, because kii uses
+  no struct, enum, generic, float, destructure or typed local, and no new stdlib name
+  collides with a kii global. Confirmed directly: with chitra held at 1.1.3, the 6.7.12
+  compiler builds **byte-identical** binaries to 6.7.9 for `src/main.cyr`, `src/test.cyr`,
+  every suite and both harnesses.
+  - `lib/` re-vendored from clean (`rm -rf lib && mkdir lib && rm cyrius.lock && cyrius deps`).
+    It is still 40 files, and 17 of them change.
+  - `args_init` now reads `/proc/self/cmdline` to the end instead of stopping at 2 MiB.
+    kii does not call it directly, and cmdit 1.4.0 still refuses a command line of 2 MiB or
+    more with `could not read the full command line` (1.6.2), so kii's behaviour is unchanged.
+- **The stdlib's sankoch moves 2.8.3 → 2.8.7**, bringing 2.8.4–2.8.6 with it:
+  - ⭐ **About 3.5× faster end to end.** sankoch 2.8.6 replaced `_huff_decode`'s slow path,
+    the O(bits × num_symbols) nested scan the v1.5.1 sweep measured as ~93 % of kii's render,
+    with canonical count/offset decoding (as zlib's `puff.c`). RAMGON → 80×24 went 723–839 ms
+    → 206–233 ms, and the 256² PNG decode 2.4–2.6 ms → 1.2–1.4 ms, interleaved in one session
+    (`docs/benchmarks.md` § v1.6.3). The roadmap's S-1 item closes upstream.
+  - **Inflate now refuses what zlib refuses.** Over-subscribed or incomplete Huffman code sets,
+    and `hdist` 31/32, are rejected. A PNG carrying such a stream used to decode and now reports
+    `DEFLATE decompression failed (corrupt IDAT)`. This closes the sankoch-floor caveat recorded
+    at 1.6.1. No valid image is affected: the 466-image run above is byte-identical.
+  - CRC-32 uses PCLMULQDQ on x86_64, with bit-identical results.
+  - `DECOMPRESS_MAX_OUTPUT` is still 16 MiB, so PNGs above ~5.6 megapixels are still refused
+    with `image too large to decode`.
+  - `build/kii` 924,088 → 999,328 bytes (unstripped, DCE off), almost all of it sankoch 2.8.7's
+    larger bundle (its new Brotli encoder), which kii links as a stdlib leaf.
+    `--agnos` → 1,013,568, `--aarch64` → 1,171,128.
+- **`[deps.chitra]` `1.1.3` → `1.2.0`.** Nothing frozen changed, and decode output is
+  byte-identical to 1.1.4. 1.2.0 renames chitra's 46 internal `chitra_*` functions to
+  `_chitra_*`. All 11 chitra functions kii calls are frozen names and still present. One
+  comment in `tests/kii.fcyr` cited `chitra_jpeg_scan_markers` and now uses the new name.
+- `tests/kii.fcyr`: a comment cited `lib/sankoch.cyr` by line number for the CRC-32 table
+  singleton. Those lines moved, so it now names `crc32_table` / `crc32_init_table` instead.
+  The `crc32_table = 0` beside each `alloc_reset()` is unchanged, and still redundant with
+  sankoch's arena guard.
+
+### Roadmap
+- `docs/development/roadmap.md` rebuilt around **pinned versions**:
+  - **1.6.4** — a P(-1) sweep. It carries in the literal `syscall(60)` exits, the three zlib
+    CVE-class transfers (to verify against sankoch 2.8.7's new checks), and the doc-health
+    debt.
+  - **1.7.0** — the format-neutral `image.*` / `IMG_ERR_*` rename.
+  - **1.8.0** — 256-colour and truecolour.
+  - **1.9.0** — dithering, split out of the old single Tier 2 item.
+  - **1.10.0** — the ASCII shape-vector refinements.
+
+  Progressive JPEG and PNG past 16 MiB wait on chitra re-pins. The two 2.0 items are listed as
+  open. Completed work is gone: the sankoch S-1 row (fixed upstream above) and the
+  limitations table it lived in.
+
 ## [1.6.2] - 2026-10-15
 
 **kii now names the three parse errors cmdit 1.3.x added, instead of printing `argument parse
