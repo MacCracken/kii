@@ -16,16 +16,16 @@
 
 | Doc | Tier | Last verified | Debt / notes |
 |---|---|---|---|
-| `README.md` | 1 | 2026-10-15 (v1.6.1) | Status block → v1.6.1; the post-v1 arc gains the v1.6.1 entry; § Substrate names the cmdit 1.4.0 and chitra 1.1.3 pins. |
+| `README.md` | 1 | 2026-10-15 (v1.6.2) | Status block → v1.6.2; the post-v1 arc gains the v1.6.1 (deps, manifest) and v1.6.2 (parse-error lines) entries; § Substrate names the cmdit 1.4.0 and chitra 1.1.3 pins. |
 | `CLAUDE.md` | 1 | 2026-08-25 (v1.5.1) | Identity line lists all four formats. **Toolchain pin de-inlined** — it read `6.0.1` for eleven releases past the real pin, so the number is now a pointer to `cyrius.cyml`, matching the file's own VERSION rule. |
-| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.1) | `[1.6.1]` added (cmdit 1.4.0, chitra 1.1.3, the `--bool=value` refusal, chitra 1.1.1's re-coded refusals as kii prints them, the manifest cleanup, the sankoch-floor note); rolls per release. |
-| `CONTRIBUTING.md` | 1 | 2026-10-12 (v1.6.0) | Fuzz bullet: ten surfaces, any `bad` fails the run, `crc32_table` note qualified (sankoch's arena canary covers it upstream). Current-state line → 599 / 8,011,000 / 7 benches. Line 19 still describes the v1.0 M0–M7 milestone roadmap, which no longer exists (pre-existing debt). |
+| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.2) | `[1.6.2]` added (named lines for cmdit's UNEXPECTED_VALUE / ARGV / NOMEM, +43 cli assertions). `[1.6.1]` above it: cmdit 1.4.0, chitra 1.1.3, the manifest cleanup, the sankoch-floor note. Rolls per release. |
+| `CONTRIBUTING.md` | 1 | 2026-10-15 (v1.6.2) | Current-state line → 642 / 8,011,000 / 7 benches. v1.6.0: fuzz bullet (ten surfaces, any `bad` fails the run, `crc32_table` note qualified). Line 19 still describes the v1.0 M0–M7 milestone roadmap, which no longer exists (pre-existing debt). |
 | `CODE_OF_CONDUCT.md` | 1 | 2026-05-22 | Contributor Covenant 2.1 pointer. |
 | `SECURITY.md` | 1 | 2026-10-12 (v1.6.0) | Sanitizer bullet: darshana `tty_has_ctl`, strict RFC 3629 and why the overlong forms matter. Amplification bullet: the 16 MiB inflate ceiling and its own diagnostic. Fuzz bullet: ten surfaces / 8,011,000 iterations, failing exit. |
 | `cyrius.cyml` | 1 | 2026-10-15 (v1.6.1) | **Manifest only** (126 → 39 lines): package, build, stdlib list, three git + tag deps with a one-line purpose each. Pin history and rationale live in CHANGELOG / state.md / ADRs, never here. `repository` corrected to `MacCracken/kii`. Version interpolates `${file:VERSION}`. |
-| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.1) | v1.6.1 entry; binary size refreshed (923,976 B host); External deps → darshana 1.3.0 / cmdit 1.4.0 / chitra 1.1.3 with the sankoch-floor note. Test and fuzz figures unchanged (599 / 8,011,000). |
+| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.2) | v1.6.2 and v1.6.1 entries; **642 assertions** (cli 141); `src/cli.cyr` module line names the two new helpers; binary size refreshed at 1.6.1; External deps → darshana 1.3.0 / cmdit 1.4.0 / chitra 1.1.3 with the sankoch-floor note. |
 | `docs/benchmarks.md` | 1 | 2026-10-12 (v1.6.0) | v1.6.0 section: the 6.7.9 binary against the v1.5.2 binary, interleaved in one session on a loaded host (end-to-end ~5–15 % slower, attributed to the toolchain; re-measure idle). Earlier sections are historical captures. |
-| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.1) | Header → v1.6.1. No item shipped or opened at 1.6.1. |
+| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.2) | Header → v1.6.2. No item shipped or opened at 1.6.1 or 1.6.2. |
 | `docs/audit/2026-05-22-audit.md` | 1 | 2026-05-23 (v1.0.0 close + Appendix A) | 140 CVE/issue rows + 10 kii-specific findings + § Appendix A W3C PngSuite walk (added at M8 close). Load-bearing reference for ADR 0002. |
 | `docs/audit/chafa-comparison.md` | 1 | 2026-05-23 (v1.0.0 close) | **NEW at M8(b3).** kii vs `chafa --colors 16` across 6 curated fixtures. Byte-stream metrics + qualitative findings + acceptance-criterion close-out. Validates ADRs 0003 / 0004 / 0005 against chafa as reference impl. |
 | `docs/adr/README.md` | 2 | 2026-08-24 (v1.5.0) | Index lists ADRs 0001–0009 (0009 BMP/GIF-via-chitra added). |

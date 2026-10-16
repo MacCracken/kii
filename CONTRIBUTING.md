@@ -44,7 +44,7 @@ Every behavior change needs at least:
 - For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **ten** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF, the path-sanitizer differential, and the terminal envelope); add to whichever the change touches, and give a new surface a `bad` count — any non-zero count fails the run. If you add a surface that calls `alloc_reset()`, also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it once silently voided a million iterations. (sankoch's arena canary has covered this upstream since 2.7.10, re-verified at cyrius 6.7.9; the line stays as a second guard.)
 - For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`. A bench guarded on a system fixture must report a visible SKIP when the fixture is absent, never vanish from the output.
 
-PRs without test coverage will be asked to add it. Current state: **599 unit assertions + 8,011,000 fuzz iters/run + 7 benches** as of v1.6.0.
+PRs without test coverage will be asked to add it. Current state: **642 unit assertions + 8,011,000 fuzz iters/run + 7 benches** as of v1.6.2.
 
 ## Commits and PRs
 

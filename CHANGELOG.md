@@ -4,6 +4,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-15
+
+**kii now names the three parse errors cmdit 1.3.x added, instead of printing `argument parse
+error`.** 1.6.1 moved to cmdit 1.4.0, and kii's error switch had no arm for these codes. Every
+other output is **byte-identical** to 1.6.1: 130 cases compared (the 124 from 1.6.1 plus six
+more flag forms), and 125 are identical. The other 5 are the bool `=value` forms below. Their
+exit code (2) and the usage text after the line are unchanged. **642 assertions** (was 599),
+passing on x86_64 and under `cyrius test --aarch64`.
+
+### Changed
+- **A bool flag given a value names the flag.** `kii --verbose=0 img.png` now prints
+  `kii: --verbose takes no value`, as do `--verbose=1` and `--verbose=`. `--help=x` and
+  `--version=1` likewise print `kii: --help takes no value` and `kii: --version takes no value`.
+  In 1.6.1 each printed `kii: argument parse error`, and before 1.6.1 `--verbose=0` turned
+  verbose **on**. The short form `-v=1` was already a bundled-flag error and still is. The value
+  the user typed is not echoed, so no argv byte reaches stderr. The flag name is kii's own
+  registration literal. (`CMDIT_ERR_UNEXPECTED_VALUE`, cmdit 1.3.1.)
+- **A command line the stdlib cannot read whole** prints `kii: could not read the full command
+  line` (`CMDIT_ERR_ARGV`, cmdit 1.3.2). This happens with arguments over 2 MiB in total, or
+  with no `/proc` mounted. cmdit refuses to parse a prefix.
+- **A refused allocation while parsing** prints `kii: out of memory` (`CMDIT_ERR_NOMEM`, cmdit
+  1.3.1). That includes `cmdit_new` returning a 0 handle, which cmdit 1.3.2 made safe to pass
+  on.
+- The lines moved out of `main`'s nested `if`/`else` into `kii_parse_error_line(err)` and
+  `kii_err_flag_name(fs)` in `src/cli.cyr`, so tests can check the exact bytes. The four lines
+  that existed before are byte-for-byte what `main` printed inline. Codes kii's flag set cannot
+  produce (required, enum, range, verb, positional-count, repeated) keep the generic line.
+
+### Added
+- **43 assertions** in `tests/cli.tcyr` (98 → 141):
+  - `--verbose=0`, `--verbose=`, `--help=x` and `--version=1` each give `UNEXPECTED_VALUE`
+    naming the right flag, and verbose stays off.
+  - `-v=1` is `BUNDLED`; `--width=5 --mode=ascii` still parse.
+  - `UNKNOWN` and `BUNDLED` name no flag.
+  - The exact line for every reachable code, and the generic line for each unreachable one and
+    for a code past the taxonomy.
+  - A 0 handle reports `NOMEM` and names no flag.
+
+  Three seeded reverts are caught, each as a failing verdict: the flag name, the `NOMEM` line
+  and the `ARGV` line. The flag-name checks test for 0 before comparing strings. Without that,
+  a regression crashed the suite with SIGSEGV instead of failing it.
+
 ## [1.6.1] - 2026-10-15
 
 **Dependencies to the newest tags that build on cyrius 6.7.9, and `cyrius.cyml` cut back to a
