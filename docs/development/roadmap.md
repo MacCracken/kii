@@ -3,44 +3,13 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.6.3**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.6.4**.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
 are pinned**: a release takes the items listed under it, and an item moves to another
 version only by editing this file. Work that depends on another repo shipping first
 has no version until it does (§ Gated on upstream).
-
-## 1.6.4 — P(-1) sweep
-
-A full audit, refactor and hardening pass over the whole surface at the cyrius 6.7.12
-pin, before the 1.7 line opens. Same method as the v1.5.1 P-1 sweep
-([`../audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md)):
-
-- **Five lenses**: correctness, security, refactor, optimization, docs.
-- **Every finding** goes through an adversarial refutation pass before it counts.
-- **Every repair** carries a regression test checked to fail against the pre-repair code.
-- **Rendering stays byte-identical** unless a finding says why it must not.
-- **Output**: `docs/audit/<date>-audit.md`, plus a CHANGELOG entry listing each change a
-  user can observe.
-
-Known going in:
-
-- **The test, fuzz and bench entry points exit with a literal `syscall(60, …)`**:
-  `tests/{ascii,cli,decode,quant,render}.tcyr`, `tests/kii.fcyr`, `tests/kii.bcyr`. 60 is
-  `exit` on x86_64 only. On aarch64 it is correct today only because the backend rewrites
-  it to 93, and on AGNOS 60 is `winsize`. Use the stdlib's `SYS_EXIT` (or `sys_exit`). One
-  exception: a binary built `--agnos` but run on a Linux host needs the host's exit number,
-  as darshana's `tests/agnos.tcyr` explains. Check how each build is run before choosing.
-- **The three zlib CVE-class transfers** (CVE-2004-0797 / 2005-1849 / 2005-2096,
-  [`../audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md)) were never filed as
-  sankoch issues. sankoch 2.8.6 added the Kraft over-subscription and incompleteness checks
-  that 2005-2096 is about, and cyrius 6.7.12 links 2.8.7. Verify each class against the
-  inflate kii links; close the ones that hold and file the ones that do not.
-- **The doc-health ledger's open debt**: ADR 0002's C1–C4 commitment table, whose code
-  anchors predate the v1.2.0 re-fold; the `docs/examples/` set; `CONTRIBUTING.md`'s
-  description of the retired v1.0 milestone roadmap; and the v1.1 → v1.4 row
-  reconciliation ([`../doc-health.md`](../doc-health.md)).
 
 ## 1.7.0 — Format-neutral rename of the image front-end
 
@@ -53,7 +22,18 @@ behaviour change, so it gets its own cut, ahead of the feature work that would o
 be written against the old names. See [ADR 0008](../adr/0008-jpeg-via-chitra.md)
 § Error-space + naming.
 
-## 1.8.0 — Tier 2 colour: 256-colour and truecolour
+The same cut takes the surface clean-ups the v1.6.4 sweep left for it
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md) § 6), all
+behaviour-neutral unless noted:
+
+- Trim `_extract_rgb` to the RGBA path the adapter always supplies, and drop the dead
+  `IDAT_*`, `PLTE_*` and `INTERLACE` pstruct slots (R-2).
+- Share the frame loop and row ending that `emit_halfblock` and `emit_ascii_shape`
+  each repeat (R-8).
+- Adopt cmdit's `cmdit_range` for `--width` and `cmdit_enum` for `--mode` in place of
+  kii's own checks (R-7). This changes those flags' error text, so list it.
+
+## 1.8.0 — Tier 2 colour, and the emit rework
 
 `--color 256` and `--color tc` (24-bit SGR) emit, on both render lanes. It extends an
 existing seam: since v1.5.1 `--color` drives a real tier mechanism (`quant_set_tier` in
@@ -63,11 +43,31 @@ carries all four composers: `tty_fg_256_buf` / `tty_bg_256_buf` for 256-colour a
 contract the half-block row already chains. Amends
 [ADR 0003](../adr/0003-color-tier-discipline.md)'s tier-1-only stance.
 
-## 1.9.0 — Tier 2 dithering
+The emit rework changes every frame's bytes, so the other emit changes the v1.6.4 sweep
+found ride the same release (one golden-output change, not three):
+
+- **Tier 1 on real 8/16-colour codes.** `--color 8` and `--color 16` emit the 256-colour
+  `38;5;N` / `48;5;N` today, which a strict 16-colour terminal or BBS client — the tier-1
+  floor's audience — may not parse. Move them to SGR 30–37 / 90–97 and 40–47 / 100–107
+  (C-11; ADR 0003's own Consequences promise this).
+- **SGR elision.** Skip an fg/bg escape that repeats the previous cell's in the same row
+  (per-row state, so each row stays self-contained). Measured 61–87 % smaller output and
+  ~2.6× faster over a 9600-baud line, with no visual difference in 128 runs (O-5).
+- **Real transparency.** v1.6.4 composites alpha over black; draw a transparent cell in
+  the terminal's default colours (SGR 39 / 49) instead, choosing `▀` or `▄` so an opaque
+  half keeps its colour.
+
+## 1.9.0 — Tier 2 dithering, and pixel-centre sampling
 
 `--dither none|ordered|fs`: ordered (Bayer) and Floyd-Steinberg error diffusion, on every
 colour tier. Orthogonal to `--mode`. Self-contained in the quantize layer. Default stays
 `none`, so existing frames do not change.
+
+Same release, because it also changes every downscaled frame: **pixel-centre sampling.**
+Nearest-neighbour `sx = dx·W/dst_w` never samples the last source column or row on a
+downscale, so a 1-px border shows on the top and left only (C-7). Sample centres,
+`((2dx+1)·W) / (2·dst_w)`, which stays in bounds and keeps the identity case. Amends
+[ADR 0005](../adr/0005-nearest-neighbor-downscale.md).
 
 ## 1.10.0 — ASCII shape-vector refinements
 
@@ -76,6 +76,9 @@ The two pieces deferred from Alex Harri's write-up at v1.3.1:
 - **Directional contrast enhancement**: normalize-by-max → power → denormalize on the cell
   vector before matching, to sharpen edges.
 - **A k-d-tree lookup** in place of the 27-glyph linear scan.
+- **Recreate the coverage-table generator.** `src/ascii.cyr`'s 27-glyph table was
+  generated offline (`gen_shape.py`, Liberation-Mono) by a scratch script that is not in
+  the repo, so the table cannot be regenerated today (R-12). Check the generator in.
 
 See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
 
@@ -88,7 +91,9 @@ See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
   re-pin, as PNG, baseline JPEG, BMP and GIF did, and kii's side is diagnostics, not decode
   ([ADR 0009](../adr/0009-bmp-gif-via-chitra.md)).
 - **PNG past 16 MiB inflated.** `zlib_decompress` still stops at sankoch's 16 MiB
-  `DECOMPRESS_MAX_OUTPUT` (unchanged at 2.8.7), so any PNG above ~5.6 megapixels is refused.
+  `DECOMPRESS_MAX_OUTPUT` (unchanged at 2.8.7). The limit is on inflated scanline bytes,
+  so a PNG above ~5.6 MP of 8-bit RGB (≈4.2 MP of RGBA; greyscale goes past 16 MP) is
+  refused.
   Since v1.6.0 kii says so: `image too large to decode (… 16 MiB ceiling)`. sankoch 2.7.13
   shipped `zlib_decompress_capped`, a caller-set ceiling, and chitra's roadmap pins using
   it to chitra 1.3.0. kii takes it on that re-pin, and the diagnostic then fires only past

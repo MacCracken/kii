@@ -1,15 +1,15 @@
 # cli.cyr — kii's flag registration + lightweight validation.
 #
-# Split out of main.cyr at M1 sub-bite (d) so the unit-test
-# (tests/kii.tcyr) and fuzz (tests/kii.fcyr) harnesses can wire
-# kii's exact flag set into a `flags` context without linking
-# the program entry point. Stdlib (incl. flags) is auto-included
-# via cyrius.cyml.
+# Split out of main.cyr at M1 sub-bite (d) so the unit tests
+# (tests/cli.tcyr) and the fuzz harness (tests/kii.fcyr) can wire
+# kii's exact flag set into a cmdit context without linking the
+# program entry point. Stdlib and cmdit are auto-included via
+# cyrius.cyml.
 #
-# main.cyr keeps the I/O glue (print_version, print_usage, argv
-# packing, dispatch) — those are intertwined with stdout/stderr
-# and don't lend themselves to in-process testing. The pure
-# parse + validate pieces live here.
+# main.cyr keeps the I/O glue (print_version, print_usage, dispatch)
+# — those are intertwined with stdout/stderr and don't lend themselves
+# to in-process testing. The pure parse + validate pieces, and the
+# exact text of each diagnostic line, live here.
 
 # ---- exit codes ---------------------------------------------------
 # Mirrors the AGNOS userland convention (anuenue, hapi, bannermanor):
@@ -33,17 +33,29 @@
 # (image files, args) without validation."
 var KII_MAX_COLS   = 100000;
 
+# Upper bound on the frame itself, in character cells (P(-1), v1.6.4).
+# KII_MAX_COLS bounds the width, but `--width N` derives the row count from
+# the image's aspect with no limit, so a narrow image turned an ordinary
+# width into millions of rows: a 392-byte 1x65535 GIF at `--width 80` wrote
+# ~4.4 GB of ANSI over minutes at 1.6 GB RSS. 1,048,576 cells (1024 x 1024)
+# is far past any terminal, still allows a deliberate large capture
+# (`--width 1000` of a square image is 500,000 cells), and bounds the worst
+# case at roughly 26 MB of output and 19 MB of buffers. (A 4M-cell cap was
+# tried first: the same GIF at `--width 8` still wrote 45 MB.)
+var KII_MAX_CELLS  = 1048576;
+
 var KII_EXIT_OK    = 0;
 var KII_EXIT_RUN   = 1;
 var KII_EXIT_USAGE = 2;
 
 # ---- flag indices ------------------------------------------------
-# Populated by kii_register_flags(fs). Initial sentinel = -1 so
-# unregistered access trips a bounds error in `_flags_entry`
-# rather than silently reading entry 0.
+# Populated by kii_register_flags(fs). The initial -1 marks "not registered
+# yet"; cmdit's getters return 0 (not an error) for a bad index, so reading
+# a flag before kii_register_flags gets 0, never a crash or a wrong entry.
 # --help/--version are auto-registered by cmdit_new (cmdit_parse returns
-# CMDIT_HELP / CMDIT_VERSION), so kii no longer tracks their indices —
-# width/color/verbose keep indices 2/3/4 (cmdit's auto help/version are 0/1).
+# CMDIT_HELP / CMDIT_VERSION), so kii does not track their indices —
+# width/color/verbose/mode take indices 2/3/4/5 (cmdit's auto help/version
+# are 0/1).
 var KII_F_WIDTH   = 0 - 1;
 var KII_F_COLOR   = 0 - 1;
 var KII_F_VERBOSE = 0 - 1;
@@ -51,7 +63,7 @@ var KII_F_MODE    = 0 - 1;
 
 # Register kii's flag surface into a cmdit context `fs` (caller owns
 # cmdit_new + cmdit_parse). cmdit_new already registered --help/-h (h=104)
-# and --version/-V (V=86), so kii adds only width/color/verbose. Short codes
+# and --version/-V (V=86), so kii adds width/color/verbose/mode. Short codes
 # are ASCII bytes: w = 119, c = 99 (mirror chafa's `-w`/`-c`). Defaults:
 # --width 0 is the M6 sentinel for "match terminal"; --color 16 picks the
 # higher fidelity tier within v1.0 scope. cmdit_bool takes no default (always 0).
@@ -64,8 +76,10 @@ fn kii_register_flags(fs): i64 {
     # rides stderr — pipe-pure by default.
     KII_F_VERBOSE = cmdit_bool(fs, 118, "verbose", "print decode summary to stderr after the frame");
     # --mode / -m (109): rendering lane. "halfblock" (default) = the ▀ fg/bg
-    # floor; "ascii" = text-glyph art (luminance ramp, colored fg). See ADR 0007.
-    KII_F_MODE    = cmdit_str (fs, 109, "mode", "halfblock", "render mode: halfblock (default) or ascii");
+    # floor; "ascii" = text-glyph art (shape-vector matching since v1.3.1,
+    # colored fg). See ADR 0007. cmdit appends "(default: halfblock)" itself,
+    # so the help text does not repeat it (it did through v1.6.3).
+    KII_F_MODE    = cmdit_str (fs, 109, "mode", "halfblock", "render mode: halfblock or ascii");
     return 0;
 }
 
@@ -93,6 +107,28 @@ fn kii_mode_is_ascii(mode): i64 {
     return streq(mode, "ascii");
 }
 
+# --width check: 0 if `w` is usable (0 = fit the terminal, or 1 to
+# KII_MAX_COLS), else the exact usage line main prints. P(-1) (v1.6.4) added
+# the negative case: `--width -5` used to fall through main's `width > 0`
+# test and silently mean "fit the terminal", exit 0. Both figures in the
+# text are pinned against KII_MAX_COLS in tests/cli.tcyr.
+fn kii_width_error_line(w): i64 {
+    if (w > KII_MAX_COLS) { return "kii: --width exceeds the maximum of 100000 columns\n"; }
+    if (w < 0)            { return "kii: --width must not be negative (0 = fit the terminal)\n"; }
+    return 0;
+}
+
+# Frame-size predicate (P(-1), v1.6.4): 1 if a `cols` x `rows` character
+# frame is within KII_MAX_CELLS, 0 if not. Division form, so the check cannot
+# itself overflow for any i64 input; non-positive dimensions are 0 (the
+# geometry layer never produces them, but the predicate does not assume it).
+fn kii_frame_cells_ok(cols, rows): i64 {
+    if (cols <= 0 || rows <= 0) { return 0; }
+    if (cols > KII_MAX_CELLS) { return 0; }
+    if (rows > KII_MAX_CELLS / cols) { return 0; }
+    return 1;
+}
+
 # ---- parse-error diagnostics ---------------------------------------
 # The stderr line main prints when cmdit_parse returns CMDIT_RESULT_ERR,
 # "kii: " prefix and newline included, so tests/cli.tcyr pins the exact
@@ -113,7 +149,7 @@ fn kii_parse_error_line(err): i64 {
     if (err == CMDIT_ERR_UNKNOWN)          { return "kii: unknown flag\n"; }
     if (err == CMDIT_ERR_MISSING_VALUE)    { return "kii: flag missing value\n"; }
     if (err == CMDIT_ERR_BAD_INT)          { return "kii: bad integer value\n"; }
-    if (err == CMDIT_ERR_BUNDLED)          { return "kii: bundled short flags not supported (use -x -y, not -xy)\n"; }
+    if (err == CMDIT_ERR_BUNDLED)          { return "kii: short flags take no attached value and cannot be bundled (use -w 40 -v, not -w40 or -wv)\n"; }
     if (err == CMDIT_ERR_UNEXPECTED_VALUE) { return "kii: flag takes no value\n"; }
     if (err == CMDIT_ERR_NOMEM)            { return "kii: out of memory\n"; }
     if (err == CMDIT_ERR_ARGV)             { return "kii: could not read the full command line\n"; }

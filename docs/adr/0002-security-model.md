@@ -226,3 +226,68 @@ and a 1,000,000-iteration differential surface in `tests/kii.fcyr` checks that t
 equals the v1.5.2 walk's on every input except exactly those carrying one of the four forms.
 Owning the rule in darshana also means the next consumer that echoes untrusted text to a
 terminal inherits it rather than writing its own.
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**. The v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)) checked each claim above
+against the tree. The corrections:
+
+**1. The C1–C4 table's code anchors predate the v1.2.0 re-fold.** Every C2–C4 guard now
+lives in `chitra` and reaches kii through `_kii_map_chitra_err` (`src/png.cyr`). Current
+anchors, cited by function and constant name rather than by `lib/chitra.cyr` line:
+
+| # | Defense | Code today |
+|---|---|---|
+| C1 | Stderr path-echo sanitization | `kii_path_has_control_bytes` (`src/cli.cyr`, wraps darshana's `tty_has_ctl`) + `_eprint_path_safe` (`src/main.cyr`) — unchanged |
+| C2 | Dimension caps (4096² pixels, 65535 per side, 256 MB) | chitra's `_chitra_parse_ihdr` with `CHITRA_MAX_DIM` (65535) and `CHITRA_MAX_PIXELS` (4096²), plus the `CHITRA_MAX_RAW_BYTES` (256 MB) inflated- and pixel-size caps in `_chitra_png_parse_raw` → `CHITRA_ERR_DIMENSIONS` → `PNG_ERR_DIMENSIONS` |
+| C2 | PNG § 11.2.2 cross-product | the depth table in `_chitra_parse_ihdr` → `CHITRA_ERR_BIT_DEPTH` → `PNG_ERR_BITDEPTH` |
+| C3 | IDAT-accumulator cap (256 MB) | `_chitra_png_parse_raw`, `idat_total > CHITRA_MAX_RAW_BYTES` → `CHITRA_ERR_OOM` → `PNG_ERR_IDAT_TOO_LARGE`. kii's own cap before decode is the read itself: `file_read_whole_max(path, KII_MAX_RAW_BYTES, …)` |
+| C3 | Compression-ratio cap (1100:1) | `CHITRA_MAX_INFLATE_RATIO` in `_chitra_png_parse_raw` → `CHITRA_ERR_DIMENSIONS` → `PNG_ERR_DIMENSIONS`. `PNG_ERR_RATIO_TOO_HIGH` is reserved and never produced ([ADR 0006](0006-adopt-chitra-decoder.md)) |
+| C4 | Duplicate PLTE, PLTE after IDAT | the `seen_plte` / `seen_idat` checks in `_chitra_png_parse_raw` → `CHITRA_ERR_BAD_CHUNK` → `PNG_ERR_HEADER` |
+
+**2. `KII_MAX_PIXELS` and `KII_MAX_DIM` do not exist.** § Decision names them. The pixel
+and per-side ceilings are chitra's `CHITRA_MAX_PIXELS` and `CHITRA_MAX_DIM`. kii defines
+only `KII_MAX_RAW_BYTES`, which since v1.6.4 is `CHITRA_MAX_RAW_BYTES` (256 MB).
+
+**3. Three commitments added since v1.0.**
+
+- **The 16 MiB inflate ceiling** (v1.6.0). chitra refuses a PNG whose pixel data would
+  inflate past sankoch's `DECOMPRESS_MAX_OUTPUT` before allocating anything
+  (`CHITRA_ERR_INFLATE_LIMIT` → `PNG_ERR_INFLATE_LIMIT`, "image too large to decode").
+- **The frame-size cap** (v1.6.4). `--width` is bounded by `KII_MAX_COLS` (100000, v1.5.1),
+  but the row count follows the image's aspect, so a 392-byte 1×65535 GIF at `--width 80`
+  asked for 2,621,400 rows, about 4.4 GB of ANSI. `kii_frame_cells_ok` (`src/cli.cyr`) now refuses any frame
+  over `KII_MAX_CELLS` (1,048,576 character cells) before downscale: `frame too large (…)`,
+  exit 1.
+- **The single-open read** (v1.6.4). `kii_decode_png` reads the input with the stdlib's
+  `file_read_whole_max`: one open, read to EOF, stop at `KII_MAX_RAW_BYTES`. It replaced an
+  `lseek` size probe followed by a second open, which misreported pipes and directories and
+  let the path change between the size check and the read. A pipe or `/dev/stdin` now takes
+  the same path as a file.
+
+**4. The three sankoch items were never filed, and they hold.** § Consequences (Neutral)
+says the CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers were "filed during the
+audit" and gated v1.0. They were never filed. The v1.6.4 sweep verified all three against
+the sankoch kii links (2.8.7), with ~474,000 crafted streams under poison redzones and no
+crash, overrun or verdict disagreement. The covering checks: Kraft completeness and
+over-subscription in `_huff_build`; the HLIT ≤ 286 and HDIST ≤ 30 bounds; and fixed
+512-entry root tables with no variable sub-tables, so there is no oversized-table case to
+reach. Nothing is left to file.
+
+**5. The coverage figures are v0.8.0's.** "3M+ iterations across five surfaces" and "470
+unit-test assertions" in § Decision were true at v0.8.0. At v1.6.4 they are 8,011,000
+iterations across ten surfaces and 709 assertions.
+
+**6. The restricted-emit list omits the ASCII lane.** Since v1.3.0, `--mode ascii` emits one
+printable ASCII glyph per cell, drawn from a fixed 27-entry table (`0x20`–`0x7E`), each after
+a foreground `38;5;N` only. The emit subset is therefore SGR `0` / `38;5;N` / `48;5;N`, `▀`,
+those glyphs, and LF. kii emits `▀` only; `▄` is allowed by the list but unused.
+
+**7. The palette alternative's citations are stale.** § Alternatives says
+`downscale.cyr:73` and `quant.cyr:129` bounds-check palette indices and substitute black.
+Since the v1.2.0 re-fold an out-of-range index never reaches kii: chitra rejects the file
+(`CHITRA_ERR_BAD_CHUNK` → `malformed PNG (bad chunk, ordering, or palette)`), which is
+stricter. `quant.cyr` has had no palette-lookup code since its image quantizer was deleted
+at v1.2.0, and the `downscale.cyr` branch (`_extract_rgb`'s `color_type == 3` path) is
+reached by no production input.

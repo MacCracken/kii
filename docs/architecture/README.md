@@ -4,62 +4,64 @@ Non-obvious constraints, quirks, and invariants that a reader cannot derive from
 
 Not decisions (those live in [`../adr/`](../adr/)) and not guides (those live in [`../guides/`](../guides/)). An item here describes *how the world is*, not *what we chose* or *how to do something*.
 
-## Module map (v0.7.0)
+## Module map (v1.6.4)
 
-The pipeline runs left-to-right; each module owns one stage. The shared `pstruct` (function-scope `var pstruct[160]` in `src/main.cyr`) carries data between stages via byte-offset slots declared in `src/png.cyr`.
+The pipeline runs top to bottom; each module owns one stage. The shared `pstruct` (function-scope `var pstruct[160]` in `src/main.cyr`) carries data between stages via byte-offset slots declared in `src/png.cyr`. kii has no decoder of its own: since the v1.2.0 re-fold every format is parsed inside `chitra` ([ADR 0006](../adr/0006-adopt-chitra-decoder.md)), and `src/png.cyr` is the adapter that feeds it. Redrawn at v1.6.4; the v0.7.0 map showed the in-repo chunk walk, sankoch inflate and filter undo that the re-fold deleted.
 
 ```
-                    ┌──────────────────────────────────────────────┐
-                    │  pstruct[160] — 20 i64 slots, byte-offset    │
-                    │  layout via STRUCT_*_OFFSET in png.cyr       │
-                    └──────────────────────────────────────────────┘
-                                       ▲    ▲    ▲    ▲
-                                       │    │    │    │
-   ┌────────────┐    ┌──────────┐    ┌─┴────┴────┴────┴────┐
-   │ main.cyr   │    │ cli.cyr  │    │ png.cyr (structure) │
-   │ orchestrator    │ flags    │    │ + IDAT + PLTE walk  │
-   └────┬───────┘    └──────────┘    └─────────────────────┘
-        │                                       ▲
-        ▼                                       │
-   ┌──────────────┐    ┌──────────────────┐    ┌┴────────────────┐
-   │ png decode   │───►│ png decode       │    │ palette.cyr     │
-   │ structure    │    │ pixels (sankoch  │    │ (Linux console  │
-   │              │    │ + filter undo)   │    │  16-color RGB)  │
-   └──────────────┘    └────────┬─────────┘    └────────┬────────┘
-                                │                       │
-                                ▼                       │
-   ┌────────────────┐    ┌──────────────────┐           │
-   │ emit.cyr       │    │ downscale.cyr    │           │
-   │ (geometry      │◄───│ nearest-neighbor │◄──────────┘
-   │  + half-block  │    │ + per-color_type │
-   │  ANSI)         │    │ RGB normalize    │
-   └───────┬────────┘    └──────────────────┘
-           │
-           ▼ stdout (fd 1)
-       80×24 ANSI frame
+  argv ─► cli.cyr     flag table; --width / --color / --mode checks;
+             │        path sanitizer for every echoed filename
+             ▼
+          main.cyr    orchestrator; every diagnostic goes to stderr as
+             │        "<path>: <msg>"
+             ▼
+          png.cyr     kii_decode_png
+             │          file_read_whole_max(path, 256 MB)   one open, read to EOF
+             │          signature sniff → KII_FMT_*         for per-format messages
+             │          chitra_image_decode ─────────────►  [deps.chitra]: PNG / JPEG /
+             │                                              BMP / GIF parsing and every
+             │                                              input guard → RGBA8
+             │          adapter: RGBA8 into pstruct as depth-8 color_type 6
+             ▼
+          emit.cyr    geometry: --width N, or the terminal via _kii_term_envelope
+          cli.cyr     kii_frame_cells_ok: at most KII_MAX_CELLS (1,048,576) cells
+             ▼
+          downscale.cyr  downscale_to_rgb: nearest-neighbour, alpha over black
+             │           (half-block: cols × rows·2;  ascii: cols·2 × rows·3)
+     ┌───────┴──────────────────────┐
+     ▼ --mode halfblock (default)   ▼ --mode ascii
+  quant.cyr  quantize_downscaled   ascii.cyr  emit_ascii_shape
+  (palette.cyr; --color tier)        2×3 shape match picks the glyph;
+     ▼                               the cell's mean colour goes through
+  emit.cyr   emit_halfblock          quantize_nearest_rgb for its fg
+     │                                    │
+     └──────────────┬─────────────────────┘
+                    ▼
+            stdout (fd 1): the ANSI frame, nothing else
 ```
 
-| Module | Owns | M-where |
+| Module | Owns | Since |
 |---|---|---|
-| `src/main.cyr` | I/O + orchestration; dispatches each stage; gates `--verbose` summary | M0+, restructured each milestone |
-| `src/cli.cyr` | Flag registration + `kii_validate_color` / `kii_validate_mode`; `KII_F_*` indices; `kii_path_has_control_bytes` (a wrapper over darshana's `tty_has_ctl` since v1.6.0) | M1 + M7(c) |
-| `src/png.cyr` | PNG decoder: signature, IHDR, CRC32, chunk walk, PLTE, IDAT, sankoch inflate, filter undo, pixel buffer; `STRUCT_*_OFFSET` layout | M2 + M3 + M4(c) PLTE |
+| `src/main.cyr` | I/O + orchestration; dispatches each stage; prints every diagnostic via `_eprint_path_msg` / `_eprint_path_safe`; gates the `--verbose` summary | M0, restructured each milestone |
+| `src/cli.cyr` | Flag registration + `kii_validate_color` / `kii_validate_mode`; `KII_F_*` indices; `KII_MAX_COLS` and `kii_width_error_line` (the `--width` usage lines); `KII_MAX_CELLS` and `kii_frame_cells_ok` (the frame-size cap, v1.6.4); `kii_parse_error_line`; `kii_path_has_control_bytes` (a wrapper over darshana's `tty_has_ctl` since v1.6.0) | M1 + M7(c) |
+| `src/png.cyr` | The chitra adapter: `kii_decode_png` (slurp, sniff, decode, adapt); `_kii_map_read_err` (read errno → `PNG_ERR_*`, v1.6.4); `_kii_map_chitra_err` (`ChitraErr` → `PNG_ERR_*`); `kii_decode_error_text` and `kii_incomplete_warning_text` (the text of every decode diagnostic and warning, v1.6.4); `png_color_type_name`; the `STRUCT_*_OFFSET` layout. The `png` names predate JPEG; the rename is roadmap 1.7.0 | M2, adapter since v1.2.0 |
 | `src/palette.cyr` | Linux-console 16-color ANSI palette + lazy init + accessors | M4(a) |
-| `src/quant.cyr` | RGB → palette-index quantization: scalar `quantize_nearest_rgb`, image-wide `quantize_nearest_image` (M4-test surface), `quantize_rgb_buf` + `quantize_downscaled` (M5+ pipeline) | M4(b)(d) + M5(c) |
-| `src/downscale.cyr` | Nearest-neighbor RGB resampler with per-color_type normalize | M5(b) |
+| `src/quant.cyr` | RGB → palette-index quantization: `quant_set_tier` (the `--color` tier), per-pixel `quantize_nearest_rgb`, and `quantize_rgb_buf` + `quantize_downscaled` for the half-block lane | M4(b)(d) + M5(c) |
+| `src/downscale.cyr` | Nearest-neighbor RGB resampler: `downscale_to_rgb` with a depth-8 RGBA fast path, `_extract_rgb` for the rest, and `_over_black` (alpha composited over black, v1.6.4) | M5(b) |
 | `src/emit.cyr` | Half-block ANSI emit (darshana composers) + `_kii_compute_target_geometry` + `_kii_compute_fit_geometry` + `_kii_term_envelope` (v1.6.0) + `_kii_write_all` | M5(c) + M6(a)(b) |
+| `src/ascii.cyr` | The `--mode ascii` lane: the 27-glyph coverage table, `_ascii_match`, `emit_ascii_shape` | v1.3.0, shape-vector v1.3.1 |
 
 ## Items
 
 ### 001 — pstruct byte-offset layout
 
-The `pstruct` buffer in `main.cyr` is **a packed array of 20 i64 slots**, accessed via the `STRUCT_*_OFFSET` constants in `src/png.cyr` (lines 84–98).
+The `pstruct` buffer in `main.cyr` is **a packed array of 20 i64 slots**, accessed via the `STRUCT_*_OFFSET` constants in `src/png.cyr` (`STRUCT_WIDTH_OFFSET` at 0 through `STRUCT_FORMAT_OFFSET` at 152).
 
-It is **not** a Cyrius struct type — Cyrius doesn't have first-class structs in v6.0.1, and the byte-offset approach was the simplest way to extend the layout per milestone without a typedef ceremony. Every consumer (png, palette, quant, downscale, emit) does `load64(pstruct + STRUCT_FOO_OFFSET)` to read; `store64(pstruct + STRUCT_BAR_OFFSET, v)` to write.
+It is **not** a Cyrius `struct` type. The byte-offset approach was the simplest way to extend the layout per milestone without a typedef ceremony, and every stage and test now addresses slots this way. (This note used to say Cyrius had no first-class structs, citing v6.0.1; the stdlib declares some today, e.g. `struct Str` in `lib/str.cyr`, so the layout is kii's choice rather than a language limit.) `kii_decode_png` zeroes all 20 slots before it writes any (since v1.6.4), so a slot a stage has not filled reads 0. Every consumer (png, quant, downscale, emit, ascii, main) does `load64(pstruct + STRUCT_FOO_OFFSET)` to read; `store64(pstruct + STRUCT_BAR_OFFSET, v)` to write.
 
-**Invariant**: when adding a slot, bump the offset to the next 8-aligned value AND bump `var pstruct[N]` in `main.cyr` to ≥ `last_offset + 8`. The 160-byte size at v0.7.0 covers offsets up to 152 inclusive (slot 19); slot 20 would need a bump to 168 minimum.
+**Invariant**: when adding a slot, bump the offset to the next 8-aligned value AND bump `var pstruct[N]` in `main.cyr` to ≥ `last_offset + 8`. The 160-byte size covers offsets up to 152 inclusive (slot 19, `STRUCT_FORMAT_OFFSET`); slot 20 would need a bump to 168 minimum. The zeroing loop in `kii_decode_png` is bounded by the same 160.
 
-The first four slots (WIDTH / HEIGHT / BIT_DEPTH / COLOR_TYPE) are deliberately at offsets 0–24 so `IHDR_*_OFFSET` (used by `png_decode_header`) and `STRUCT_*_OFFSET` (used by `png_decode_structure`) overlap there — same `_print_ihdr_summary` helper at M2 worked on either buffer. M3+ slots diverge after offset 32.
+The first four slots (WIDTH / HEIGHT / BIT_DEPTH / COLOR_TYPE) sit at offsets 0–24 because the M2 decoder's IHDR buffer used the same four offsets, so one summary helper could read either buffer. That decoder, its IHDR buffer and the helper were deleted in the v1.2.0 re-fold; the offsets stayed. Since then the adapter always writes BIT_DEPTH 8 and COLOR_TYPE 6, and the real source colour type goes in `STRUCT_SRC_COLOR_TYPE_OFFSET` (144) for `--verbose`. The `IDAT_*`, `PLTE_*` and `INTERLACE` slots stay 0 and no live path depends on them; dropping them is roadmap 1.7.0.
 
 ### 002 — half-block aspect math (cell-vs-source-pixel asymmetry)
 

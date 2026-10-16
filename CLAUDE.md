@@ -110,7 +110,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 3. **Test + benchmark additions** for new code (parser-path fuzz harnesses for image decoders)
 4. **Internal review** — performance, memory, correctness, edge cases (malformed input = parser stress)
 5. **Documentation** — update CHANGELOG, `docs/development/state.md`, any ADR the change earned
-6. **Version sync** — `VERSION`, `cyrius.cyml`, CHANGELOG header
+6. **Version sync** — `VERSION` (`cyrius.cyml` reads it via `${file:VERSION}`), the `print_version` literal in `src/main.cyr` (CI's version-drift check fails if it disagrees with `VERSION`), CHANGELOG header
 
 ## Naming
 

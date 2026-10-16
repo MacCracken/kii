@@ -221,3 +221,30 @@ canonical count/offset decoding (as zlib's `puff.c` does). § v1.5.1 predicted ~
 exactly that change. The 2048² decode improves less (~20–30 %), consistent with a large
 photo spending more of its time outside the Huffman slow path. Quantize is unchanged within
 noise, as expected: it never touches sankoch.
+
+## v1.6.4 — the P(-1) sweep's speedups
+
+Same host and toolchain as § v1.6.3 (Cyrius `6.7.12`, sankoch 2.8.7, chitra
+`1.2.0`), load average 3–8. The v1.6.3 binary was run interleaved with the new one,
+two rounds of `kii-bench` each, then 200 whole-process runs per row on a 256² icon
+(`/usr/share/pixmaps/kitty.png`), where kii's own stages are most of the work.
+
+| Bench | v1.6.4 | v1.6.3 (same session) |
+|---|---:|---:|
+| `quantize_nearest_rgb @ 1024×1024` | **74 / 71 ns** | 517 / 289 ns |
+| `end-to-end RAMGON.png → 80×24` | 213 / 202 ms | 213 / 203 ms |
+| `end-to-end RAMGON.png → 120×40` | 210 / 200 ms | 208 / 199 ms |
+| `end-to-end RAMGON.png → 200×60` | 209 / 203 ms | 212 / 202 ms |
+| `png_decode (256² class)` — archlinux-logo | 1.19 / 1.18 ms | 1.21 / 1.14 ms |
+| `png_decode (2048² class)` — elarun 2560×1600 | 383 / 370 ms | 396 / 369 ms |
+| icon 256², `--width 200`, whole process | **7.65 / 7.67 ms** | 16.6 / 16.8 ms |
+| icon 256², `--mode ascii --width 200`, whole process | **11.5 / 11.5 ms** | 22.8 / 22.9 ms |
+| icon 256², default 80×24, whole process | **3.73 / 3.74 ms** | 4.27 / 4.27 ms |
+
+**Reading**: quantize is ~4× faster (the first v1.6.3 run's 517 ns is an outlier; 289
+ns is typical) from reading the packed palette inline (O-1). Large-PNG renders do not
+move, because kii's own stages are 0.6 % of a RAMGON render; the time is chitra's
+decode, ~83 % of it sankoch's inflate. Small images are where it shows: an icon at
+`--width 200` renders ~2.2× faster, ~2× in ASCII mode (O-1 plus the matcher's exact
+early exit, O-3), and ~13 % faster at the default size. Output is byte-identical for
+every opaque image (`docs/audit/2026-10-15-audit.md` § 3, P-12).

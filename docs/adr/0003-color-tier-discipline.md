@@ -32,8 +32,8 @@ Two constraints shape the answer:
    [0,255]³). Tier-3 moves into the same OSC / DCS opcode family as
    CVE-2017-14146 / CVE-2026-41253 / CVE-2022-44702 attack classes;
    any kii emit of those payloads needs its own threat model
-   (see [`0002-security-model.md`](0002-security-model.md) § Tier-3
-   expansions).
+   (see [`0002-security-model.md`](0002-security-model.md) § Alternatives
+   considered, the Sixel / Kitty bullet).
 
 ## Decision
 
@@ -139,7 +139,7 @@ sub-ADRs covering dither selection.
 ## References
 
 - [`../../CLAUDE.md`](../../CLAUDE.md) § Color-tier discipline (durable)
-- [`0002-security-model.md`](0002-security-model.md) § Tier-3 expansions
+- [`0002-security-model.md`](0002-security-model.md) § Alternatives considered (Sixel / Kitty) and § Consequences, Neutral (post-v1 expansions need re-audit)
 - [`../audit/2026-05-22-audit.md`](../audit/2026-05-22-audit.md) § 3.4 terminal-emulator CVEs
 
 ---
@@ -162,3 +162,27 @@ Tier 2 (256-colour + truecolour + dithering) remains post-v1 and still amends
 this ADR when it lands.
 
 See [`../audit/2026-08-25-audit.md`](../audit/2026-08-25-audit.md) § A-6.
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**. The v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)) found three problems
+above:
+
+**1. Tier 2 is not "at v1.1".** § Decision, § Consequences (Neutral) and § Alternatives place
+tier 2 at v1.1. The roadmap now pins it: `--color 256` and `--color tc` at 1.8.0, dithering
+at 1.9.0 ([`../development/roadmap.md`](../development/roadmap.md)). Tier 3 stays open
+for 2.0.
+
+**2. "No emit byte requires a terminal feature less than 30 years old" is false.** Tier 1
+emits the 256-colour form `38;5;N` / `48;5;N` for both `--color 8` and `--color 16`, as
+§ Decision itself says for `--color 16`. This ADR's own table dates that form to
+xterm-256color (~2010+), and a strict 16-colour terminal or BBS client, the tier-1 floor's
+audience, may not parse it. The sweep confirmed the bytes (finding C-11). Roadmap 1.8.0
+moves tier 1 to SGR 30–37 / 90–97 (foreground) and 40–47 / 100–107 (background) as part of
+the emit rework, which changes every frame's bytes and so rides the same release as tier 2.
+
+**3. Two citations named a section that does not exist.** § Context and § References
+pointed to ADR 0002 "§ Tier-3 expansions". ADR 0002 has no such section; the relevant text
+is its Sixel / Kitty alternative and its note that post-v1 expansions need a re-audit. Both
+citations were corrected in place.

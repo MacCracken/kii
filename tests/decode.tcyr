@@ -26,7 +26,6 @@
 include "src/png.cyr"
 include "lib/assert.cyr"
 
-# Scratch dir for the file-I/O error-path fixtures (session-isolated).
 # Temp dir for the file-based adapter tests. Must be a path that exists +
 # is writable on ANY machine/CI runner — `/tmp` is POSIX-standard and is
 # what tests/kii.fcyr already uses. (Was a session-specific scratchpad,
@@ -363,8 +362,8 @@ fn main() {
     # ---- _kii_map_chitra_err: every ChitraErr → its PNG_ERR_* code --
     # The adapter preserves kii's per-error stderr diagnostics across
     # the re-fold. Documented collapses (ADR 0006): SIGNATURE→NOT_PNG,
-    # TRUNCATED→CHUNK, BAD_CHUNK→HEADER, UNSUPPORTED→BITDEPTH,
-    # OOM→IDAT_TOO_LARGE, OTHER→HEADER.
+    # TRUNCATED→CHUNK, BAD_CHUNK→HEADER, OOM→IDAT_TOO_LARGE, OTHER→HEADER.
+    # UNSUPPORTED keeps its own code since v1.5.1 (below).
     test_group("re-fold — _kii_map_chitra_err mapping");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_SIGNATURE),   PNG_ERR_NOT_PNG,        "SIGNATURE → NOT_PNG");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_TRUNCATED),   PNG_ERR_CHUNK,          "TRUNCATED → CHUNK");
@@ -382,7 +381,6 @@ fn main() {
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_OOM),         PNG_ERR_IDAT_TOO_LARGE, "OOM → IDAT_TOO_LARGE");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_CRC),         PNG_ERR_CRC,            "CRC → CRC");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_INTERLACE),   PNG_ERR_INTERLACE,      "INTERLACE → INTERLACE");
-    assert_eq(_kii_map_chitra_err(CHITRA_ERR_BIT_DEPTH),   PNG_ERR_BITDEPTH,       "BIT_DEPTH → BITDEPTH");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_DIMENSIONS),  PNG_ERR_DIMENSIONS,     "DIMENSIONS → DIMENSIONS");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_FILTER),      PNG_ERR_FILTER,         "FILTER → FILTER");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_NO_IDAT),     PNG_ERR_NO_IDAT,        "NO_IDAT → NO_IDAT");
@@ -548,12 +546,144 @@ fn main() {
     assert_eq(kii_decode_png(&path_mi, &pstr_mi), PNG_ERR_OPEN,
       "nonexistent path → PNG_ERR_OPEN");
 
+    # ---- v1.6.4 (P(-1)) — the slurp and the pstruct ------------------
+    # The slurp is now one open read to EOF under the cap (file_read_whole_max).
+    # The old lseek size probe called an ext4 directory "file exceeds size
+    # ceiling" (its htree EOF is ~2^63) and a pipe "cannot open file".
+    test_group("v1.6.4 — a directory → IS_DIR, not 'exceeds size ceiling'");
+    var pstr_dir[160];
+    assert_eq(kii_decode_png("tests/fixtures", &pstr_dir), PNG_ERR_IS_DIR,
+      "tests/fixtures (a directory) → PNG_ERR_IS_DIR");
+    assert_streq(kii_decode_error_text(PNG_ERR_IS_DIR, KII_FMT_UNKNOWN),
+      "is a directory, not an image file", "IS_DIR line");
+
+    # main's `var pstruct[160]` is uninitialized stack, and the adapter used
+    # to write only some slots, so the "has this stage run?" checks in
+    # quantize / emit could read a stale pointer. kii_decode_png zeroes the
+    # whole struct first; this fills it with garbage and checks that even an
+    # early-failing decode leaves all 20 slots 0.
+    test_group("v1.6.4 — kii_decode_png zeroes every pstruct slot");
+    var pstr_z[160];
+    var zs = 0;
+    while (zs < 160) { store64(&pstr_z + zs, 0 - 559038737); zs = zs + 8; }
+    kii_decode_png(&path_mi, &pstr_z);
+    var nonzero = 0;
+    zs = 0;
+    while (zs < 160) { if (load64(&pstr_z + zs) != 0) { nonzero = nonzero + 1; } zs = zs + 8; }
+    assert_eq(nonzero, 0, "all 20 slots zero after a failed decode");
+    var pstr_z2[160];
+    zs = 0;
+    while (zs < 160) { store64(&pstr_z2 + zs, 0 - 559038737); zs = zs + 8; }
+    assert_eq(kii_decode_png("tests/fixtures/color.gif", &pstr_z2), PNG_OK, "color.gif → PNG_OK");
+    assert_eq(load64(&pstr_z2 + STRUCT_DOWNSCALED_BUF_OFFSET), 0,
+      "a successful decode leaves the downscale slot 0 until downscale runs");
+    assert_eq(load64(&pstr_z2 + STRUCT_QUANTIZED_BUF_OFFSET), 0,
+      "… and the quantize slot 0 until quantize runs");
+
+    # The size-cap message quotes "256 MB". KII_MAX_RAW_BYTES is chitra's
+    # own CHITRA_MAX_RAW_BYTES; pin both so a chitra that moves its ceiling
+    # fails here instead of leaving the message wrong.
+    test_group("v1.6.4 — the slurp cap is chitra's 256 MB, as the message says");
+    assert_eq(KII_MAX_RAW_BYTES, CHITRA_MAX_RAW_BYTES, "kii's cap is chitra's");
+    assert_eq(KII_MAX_RAW_BYTES, 268435456, "256 MB, the figure the message quotes");
+
+    # ---- v1.6.4 (P(-1)) — the exact decode diagnostics ---------------
+    # Through v1.6.3 these lines lived inline in main's entry point, untested.
+    test_group("v1.6.4 — kii_decode_error_text: format-blind lines");
+    assert_streq(kii_decode_error_text(PNG_ERR_OPEN, KII_FMT_UNKNOWN), "cannot open file", "OPEN");
+    assert_streq(kii_decode_error_text(PNG_ERR_FILE_TOO_LARGE, KII_FMT_UNKNOWN),
+      "file exceeds size ceiling (max 256 MB)", "FILE_TOO_LARGE");
+    assert_streq(kii_decode_error_text(PNG_ERR_NOT_PNG, KII_FMT_UNKNOWN),
+      "unrecognized image format (expected PNG, JPEG, BMP, or GIF)", "NOT_PNG");
+    assert_streq(kii_decode_error_text(PNG_ERR_CRC, KII_FMT_PNG), "CRC check failed", "CRC");
+    assert_streq(kii_decode_error_text(PNG_ERR_INTERLACE, KII_FMT_PNG),
+      "unsupported interlace method (only 0=none / 1=Adam7 are valid)", "INTERLACE");
+    assert_streq(kii_decode_error_text(PNG_ERR_BITDEPTH, KII_FMT_PNG),
+      "unsupported bit depth for this color type (PNG § 11.2.2)", "BITDEPTH");
+    assert_streq(kii_decode_error_text(PNG_ERR_FILTER, KII_FMT_PNG),
+      "invalid PNG filter type (spec § 9 allows 0–4)", "FILTER");
+    assert_streq(kii_decode_error_text(PNG_ERR_IDAT_TOO_LARGE, KII_FMT_PNG),
+      "out of memory or image too large (possible decompression bomb)", "IDAT_TOO_LARGE");
+    assert_streq(kii_decode_error_text(PNG_ERR_INFLATE_LIMIT, KII_FMT_PNG),
+      "image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)", "INFLATE_LIMIT");
+    # C-4: chitra raises DIMENSIONS for a 0 width or height in every format,
+    # and the line used to say only "exceed policy ceiling".
+    assert_streq(kii_decode_error_text(PNG_ERR_DIMENSIONS, KII_FMT_GIF),
+      "image dimensions are zero or past the policy ceiling (max 16.7M px / 65535 per side / 256 MB)", "DIMENSIONS");
+    assert_streq(kii_decode_error_text(99, KII_FMT_PNG), "image decode failed", "an unknown code");
+
+    test_group("v1.6.4 — kii_decode_error_text: per-format lines");
+    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_PNG),
+      "malformed PNG (bad chunk, ordering, or palette)", "HEADER / PNG");
+    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_JPEG),
+      "malformed JPEG (bad marker, segment, or entropy data)", "HEADER / JPEG");
+    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_BMP),
+      "malformed BMP (bad DIB header, palette, or RLE stream)", "HEADER / BMP");
+    assert_streq(kii_decode_error_text(PNG_ERR_HEADER, KII_FMT_GIF),
+      "malformed GIF (bad descriptor or color table)", "HEADER / GIF");
+    assert_streq(kii_decode_error_text(PNG_ERR_CHUNK, KII_FMT_PNG),
+      "malformed PNG (truncated chunk stream)", "CHUNK / PNG");
+    assert_streq(kii_decode_error_text(PNG_ERR_CHUNK, KII_FMT_JPEG),
+      "truncated image (unexpected end of data)", "CHUNK / other");
+    assert_streq(kii_decode_error_text(PNG_ERR_UNSUPPORTED, KII_FMT_PNG),
+      "unsupported image feature (unrecognized critical chunk, compression method, or color type)", "UNSUPPORTED / PNG");
+    assert_streq(kii_decode_error_text(PNG_ERR_UNSUPPORTED, KII_FMT_JPEG),
+      "unsupported JPEG feature (progressive, arithmetic, 12-bit, non-baseline, CMYK/4-component, or an Adobe colour transform)",
+      "UNSUPPORTED / JPEG");
+    # C-5: chitra also refuses OS/2 Huffman 1D and BI_CMYK as BMP_COMPRESSION,
+    # which the old "BI_JPEG/BI_PNG compression" text did not cover.
+    assert_streq(kii_decode_error_text(PNG_ERR_UNSUPPORTED, KII_FMT_BMP),
+      "unsupported BMP feature (bit depth, compression method, or channel mask)", "UNSUPPORTED / BMP");
+    # C-5: a GIF LZW failure maps to PNG_ERR_INFLATE and an image-less GIF to
+    # PNG_ERR_NO_IDAT; both used to print the PNG wording.
+    assert_streq(kii_decode_error_text(PNG_ERR_INFLATE, KII_FMT_PNG),
+      "DEFLATE decompression failed (corrupt IDAT)", "INFLATE / PNG");
+    assert_streq(kii_decode_error_text(PNG_ERR_INFLATE, KII_FMT_GIF),
+      "corrupt GIF image data (bad LZW stream)", "INFLATE / GIF");
+    assert_streq(kii_decode_error_text(PNG_ERR_NO_IDAT, KII_FMT_PNG),
+      "no IDAT chunks (nothing to decode)", "NO_IDAT / PNG");
+    assert_streq(kii_decode_error_text(PNG_ERR_NO_IDAT, KII_FMT_GIF),
+      "no image in GIF (no image descriptor)", "NO_IDAT / GIF");
+
+    test_group("v1.6.4 — kii_incomplete_warning_text");
+    assert_streq(kii_incomplete_warning_text(KII_FMT_PNG),
+      "warning: incomplete PNG (no IEND chunk seen)", "PNG");
+    assert_streq(kii_incomplete_warning_text(KII_FMT_JPEG),
+      "warning: incomplete JPEG (truncated scan or no EOI marker)", "JPEG");
+    # C-5: chitra fills a short GIF frame with palette entry 0 at full alpha;
+    # the line used to say "zero-filled".
+    assert_streq(kii_incomplete_warning_text(KII_FMT_GIF),
+      "warning: incomplete GIF (image data ran out; the rest is drawn in palette colour 0)", "GIF");
+    assert_streq(kii_incomplete_warning_text(KII_FMT_BMP),
+      "warning: incomplete image (stream did not close cleanly)", "other");
+
+    # R-10: _kii_map_chitra_err falls back to PNG_ERR_HEADER for a code it does
+    # not know, which is how INFLATE_LIMIT (35) read as "malformed PNG" through
+    # v1.5.2. Pin chitra's code space: 1-35 are named, 36-98 are not. A chitra
+    # that adds code 36 fails here, so its mapping gets written.
+    test_group("v1.6.4 — chitra's error codes stop at 35 (a new one fails here)");
+    var named = 0;
+    var cc = 1;
+    while (cc <= 35) {
+        if (streq(chitra_err_name(cc), "unknown error") == 0) { named = named + 1; }
+        cc = cc + 1;
+    }
+    assert_eq(named, 35, "codes 1-35 are all named");
+    var unnamed = 0;
+    cc = 36;
+    while (cc <= 98) {
+        if (streq(chitra_err_name(cc), "unknown error") == 1) { unnamed = unnamed + 1; }
+        cc = cc + 1;
+    }
+    assert_eq(unnamed, 63, "codes 36-98 are all unnamed");
+
     # ---- JPEG e2e via chitra_image_decode (chitra 0.3.0, v1.4.0) ----
     # (a) the 16x16 grayscale baseline gradient (chitra's reference fixture,
     #     decoded byte-identical to ImageMagick). The adapter normalizes JPEG
     #     to depth-8 ct6 exactly like PNG; SRC_COLOR_TYPE carries the JPEG
     #     sentinel 257 (0x101 = 1 component), FORMAT = KII_FMT_JPEG, and the
-    #     IEND flag is forced 1 by chitra (JPEG has no IEND).
+    #     end-of-stream flag is 1: chitra decides it from the scan (a real
+    #     EOI after the last scan), and this fixture ends cleanly.
     test_group("jpeg — decode e2e (gradient.jpg, 16x16 grayscale)");
     var pstr_jpg[160];
     assert_eq(kii_decode_png("tests/fixtures/gradient.jpg", &pstr_jpg), PNG_OK,
@@ -564,7 +694,7 @@ fn main() {
     assert_eq(load64(&pstr_jpg + STRUCT_BIT_DEPTH_OFFSET),     8, "bit_depth = 8");
     assert_eq(load64(&pstr_jpg + STRUCT_SRC_COLOR_TYPE_OFFSET), 257, "src ctype 257 (JPEG gray)");
     assert_eq(load64(&pstr_jpg + STRUCT_FORMAT_OFFSET), KII_FMT_JPEG, "format = JPEG");
-    assert_eq(load64(&pstr_jpg + STRUCT_SEEN_IEND_OFFSET),     1, "JPEG seen_iend forced 1");
+    assert_eq(load64(&pstr_jpg + STRUCT_SEEN_IEND_OFFSET),     1, "JPEG ending in a real EOI → seen_iend 1");
     assert_eq(load64(&pstr_jpg + STRUCT_PIXELS_SIZE_OFFSET), 16 * 16 * 4, "pixels size = 16×16×4");
     assert(load64(&pstr_jpg + STRUCT_PIXELS_BUF_OFFSET) != 0, "pixels_buf non-null");
     # Decoded-pixel correctness through kii (row-0 horizontal ramp; R==G==B
@@ -771,4 +901,4 @@ fn main() {
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+syscall(SYS_EXIT, exit_code);

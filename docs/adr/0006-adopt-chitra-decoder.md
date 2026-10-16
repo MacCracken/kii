@@ -115,3 +115,41 @@ the consumer, and kii's own tests call `zlib_decompress` directly.
 - **Drop stdlib `sankoch` + `thread` after the flip.** Rejected: verified
   the chitra dist resolves them from the consumer's stdlib list and kii's
   tests call `zlib_decompress` directly. Both stay.
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**; kii still carries no decoder. The v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)) corrects four statements
+and supersedes one decision.
+
+**1. The file read was never `fstat`-sized, and is now a single capped read.** § Decision
+says the adapter "slurps the file with an exact-`fstat`-sized alloc" and rejects inputs over
+256 MB before reading. At v1.2.0 it sized the file with `lseek(SEEK_END)` and then opened it a
+second time to read it. That misreported pipes and `/dev/stdin` ("cannot open file") and
+an ext4 directory ("file exceeds size ceiling"), and let the path change between the two opens.
+Since v1.6.4 it calls the stdlib's `file_read_whole_max(path, KII_MAX_RAW_BYTES, &n)`: one
+open, read to EOF, stop with `-EFBIG` past 256 MB. A directory now reports `is a directory,
+not an image file` (`PNG_ERR_IS_DIR`, 18). (The decode call itself became
+`chitra_image_decode` at v1.4.0; see [ADR 0008](0008-jpeg-via-chitra.md).)
+
+**2. The quoted diagnostics have changed wording.** In § Accepted diagnostic deltas:
+
+- `not a PNG` now reads `unrecognized image format (expected PNG, JPEG, BMP, or GIF)`.
+- `dimensions exceed ceiling` now reads `image dimensions are zero or past the policy
+  ceiling (max 16.7M px / 65535 per side / 256 MB)`; chitra raises the same code for a zero
+  width or height.
+- `out of memory or IDAT too large` now reads `out of memory or image too large (possible
+  decompression bomb)`.
+
+The mappings themselves are unchanged. Every line's text is now in
+`kii_decode_error_text` (`src/png.cyr`), pinned by `tests/decode.tcyr`.
+
+**3. "Alpha is dropped" is superseded.** § Decision and § Consequences describe
+downscale's RGBA branch as dropping alpha, and call chitra's tRNS handling "invisible
+today". That held through v1.6.3, and it meant a transparent pixel rendered whatever RGB it
+stored: a GIF's transparent palette entry drew its colour, and a PNG storing
+`rgba(255,255,255,0)` drew white. Since v1.6.4 `downscale_to_rgb` composites each channel
+over black (`_over_black`, `(c·a + 127) / 255`, `src/downscale.cyr`). Alpha 255 returns the
+channel unchanged, so every opaque image is byte-identical; a fully transparent pixel
+renders black. Real transparency, drawing those cells in the terminal's default
+background, is roadmap work pinned to 1.8.0.

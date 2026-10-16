@@ -2,8 +2,13 @@ Frame: 80 cells wide × ~40 terminal rows (square source → tall when
 half-block-doubled).
 
 Per-cell escape format identical to example 01 — the palette-vs-RGBA
-distinction is internal (PLTE-lookup happens inside the M5 pipeline
-before SGR emission), so the emitted byte stream is the same shape.
+distinction is internal (the PLTE lookup happens inside chitra's
+decode, before kii sees any pixels), so the emitted byte stream is the
+same shape.
+
+The frame's bytes changed at v1.6.4 (67,405 → 67,400 bytes, 72 of 3,200
+cells): the logo's transparent pixels are now composited over black.
+This file pins no frame bytes, so the shape above still holds.
 
 Run produces exit code 0.
 

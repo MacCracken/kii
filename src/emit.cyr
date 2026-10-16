@@ -18,12 +18,15 @@
 # kii's quant.cyr produces. `\x1b[38;5;Nm` with N ∈ [0, 15] is the
 # widest-compat way to address them (named SGR 30–37 / 90–97 +
 # 40–47 / 100–107 splits FG/BG asymmetrically; the indexed form is
-# uniform). M6 may revisit if a target terminal rejects 256-color.
+# uniform). A strict 16-colour terminal or BBS client may not parse the
+# indexed form, though, which is exactly the tier-1 floor's audience; the
+# v1.6.4 sweep confirmed the bytes, and roadmap 1.8.0 moves tier 1 to the
+# 30–37/90–97 + 40–47/100–107 codes when it reworks emit per tier.
 #
-# Output sizing: hardcoded 80×24 at v0.6.0 — terminal-size detection
-# is M6. Source buffer is therefore 80×48 (24 rows × 2 source pixels
-# per char row); downscaling to that size happens BEFORE quantization
-# in downscale.cyr (M5(b)).
+# Output sizing: the frame is sized by main.cyr's geometry resolver —
+# `--width N`, or the terminal's own size via `_kii_term_envelope` below,
+# falling back to 80×24 off a TTY. Each character row covers 2 source rows,
+# and downscale.cyr resamples to that size BEFORE quantization.
 #
 # darshana surface used:
 #   tty_fg_256_buf(buf, pos, n)   — appends CSI 38;5;Nm
@@ -86,7 +89,7 @@ var EMIT_HALFBLOCK_B2 = 0x80;
 # **Minimum**: a 1-pixel source still produces a 1-row output, not 0.
 # Useful for pathological tiny inputs (avoids zero-height frames the
 # emit layer would reject as a bounds error).
-fn _kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src_rows) {
+fn _kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src_rows): i64 {
     if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
 
     var dst_cols = EMIT_DEFAULT_COLS;
@@ -122,7 +125,7 @@ fn _kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src
 # Defaults: a `max_cols <= 0` arg is treated as EMIT_DEFAULT_COLS;
 # `max_rows <= 0` as EMIT_DEFAULT_ROWS. So passing both as 0 gives the
 # classic 80×24 envelope — the non-TTY fallback main.cyr uses.
-fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_dst_src_rows) {
+fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_dst_src_rows): i64 {
     if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
 
     var cols = max_cols;
@@ -168,6 +171,12 @@ fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_ds
 #     dimension the terminal reports as > 0 is used, a 0 one falls back
 #     on its own. A 1-row terminal keeps its single row; any taller one
 #     gives up one row so the shell prompt lands below the frame.
+#   - A TTY that reports 0 rows gets EMIT_DEFAULT_ROWS - 1, not the bare
+#     default (P(-1), v1.6.4). 0 x 0 is how a serial line or a telnet
+#     session without size negotiation looks, and the full 24 rows scrolled
+#     the frame's top row off a real 24-row screen, where a measured 24-row
+#     pty got 23. Off a TTY the envelope stays 0 x 0 (the 80 x 24 frame a
+#     pipe has always received), since there is no prompt to make room for.
 #
 # Why not darshana's `tty_winsize_or` (1.2.0), which exists to replace
 # hand-written zero guards like this one: it treats a 0 in EITHER
@@ -186,7 +195,10 @@ fn _kii_term_envelope(detect_rc, term_rows, term_cols, out_fit_cols, out_fit_row
     if (detect_rc == 0) {
         if (term_cols > 0) { fit_cols = term_cols; }
         if (term_rows > 1) { fit_rows = term_rows - 1; }
-        else { if (term_rows == 1) { fit_rows = 1; } }
+        else {
+            if (term_rows == 1) { fit_rows = 1; }
+            else { fit_rows = EMIT_DEFAULT_ROWS - 1; }
+        }
     }
     store64(out_fit_cols, fit_cols);
     store64(out_fit_rows, fit_rows);
@@ -245,7 +257,7 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
 fn _kii_write_all(fd, buf, len): i64 {
     var off = 0;
     while (off < len) {
-        var n = syscall(1, fd, buf + off, len - off);
+        var n = sys_write(fd, buf + off, len - off);
         if (n > 0) { off = off + n; }
         else {
             # EINTR (-4) is a retry, not a failure. Anything else — and a
@@ -272,7 +284,7 @@ fn _kii_write_all(fd, buf, len): i64 {
 # CSI 0m (emit_halfblock_row_buf), so the terminal is left clean after
 # the last row. (This comment used to promise a final reset the function
 # has never emitted; corrected at v1.6.0.)
-fn emit_halfblock(pstruct) {
+fn emit_halfblock(pstruct): i64 {
     var qbuf = load64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET);
     var sw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
     var sh   = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);

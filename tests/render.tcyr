@@ -145,9 +145,47 @@ fn main() {
     store64(&pstr_d_a + STRUCT_PLTE_BUF_OFFSET,    0);
     assert_eq(downscale_to_rgb(&pstr_d_a, 1, 1), 0, "1x1 ct6 downscale → 0");
     var d_a_buf = load64(&pstr_d_a + STRUCT_DOWNSCALED_BUF_OFFSET);
-    assert_eq(load8(d_a_buf + 0), 12, "ct6 R extracted");
-    assert_eq(load8(d_a_buf + 1), 34, "ct6 G extracted");
-    assert_eq(load8(d_a_buf + 2), 56, "ct6 B extracted (alpha 200 dropped)");
+    # P(-1) (v1.6.4): alpha is composited over black, (c * a + 127) / 255,
+    # where it used to be dropped (12/34/56 came through at alpha 200).
+    assert_eq(load8(d_a_buf + 0),  9, "ct6 R composited over black (12 at alpha 200 → 9)");
+    assert_eq(load8(d_a_buf + 1), 27, "ct6 G composited over black (34 → 27)");
+    assert_eq(load8(d_a_buf + 2), 44, "ct6 B composited over black (56 → 44)");
+
+    test_group("v1.6.4 — alpha composites over black; opaque pixels are untouched");
+    # The C-2 repair. A fully transparent pixel used to render its hidden RGB:
+    # a GIF's transparent index is alpha 0 with its palette colour kept, so a
+    # magenta transparent entry drew magenta. Now alpha 0 is black, alpha 255
+    # is exactly the stored colour (so opaque images stay byte-identical),
+    # and the fast path and the general _extract_rgb path agree.
+    var pstr_d_t[160];
+    var tbuf[16];
+    store8(&tbuf + 0, 255); store8(&tbuf + 1, 0);   store8(&tbuf + 2, 255); store8(&tbuf + 3, 0);
+    store8(&tbuf + 4, 255); store8(&tbuf + 5, 255); store8(&tbuf + 6, 255); store8(&tbuf + 7, 0);
+    store8(&tbuf + 8, 200); store8(&tbuf + 9, 100); store8(&tbuf + 10, 7);  store8(&tbuf + 11, 255);
+    store8(&tbuf + 12, 255); store8(&tbuf + 13, 255); store8(&tbuf + 14, 255); store8(&tbuf + 15, 128);
+    var ts = 0;
+    while (ts < 160) { store64(&pstr_d_t + ts, 0); ts = ts + 8; }
+    store64(&pstr_d_t + STRUCT_WIDTH_OFFSET,       4);
+    store64(&pstr_d_t + STRUCT_HEIGHT_OFFSET,      1);
+    store64(&pstr_d_t + STRUCT_BIT_DEPTH_OFFSET,   8);
+    store64(&pstr_d_t + STRUCT_COLOR_TYPE_OFFSET,  6);
+    store64(&pstr_d_t + STRUCT_PIXELS_BUF_OFFSET,  &tbuf);
+    store64(&pstr_d_t + STRUCT_PIXELS_SIZE_OFFSET, 16);
+    assert_eq(downscale_to_rgb(&pstr_d_t, 4, 1), 0, "1x4 ct6 downscale → 0");
+    var d_t = load64(&pstr_d_t + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(d_t + 0) + load8(d_t + 1) + load8(d_t + 2), 0, "magenta at alpha 0 → black");
+    assert_eq(load8(d_t + 3) + load8(d_t + 4) + load8(d_t + 5), 0, "white at alpha 0 → black");
+    assert_eq(load8(d_t + 6), 200, "opaque R untouched");
+    assert_eq(load8(d_t + 7), 100, "opaque G untouched");
+    assert_eq(load8(d_t + 8),   7, "opaque B untouched");
+    assert_eq(load8(d_t + 9), 128, "white at alpha 128 → 128 (rounded)");
+    var rgb3[4];
+    _extract_rgb(&tbuf, 0, 0, 4, 6, 1, 0, 0, &rgb3);
+    assert_eq(load8(&rgb3 + 0) + load8(&rgb3 + 2), 0, "general path: magenta at alpha 0 → black too");
+    _extract_rgb(&tbuf, 2, 0, 4, 6, 1, 0, 0, &rgb3);
+    assert_eq(load8(&rgb3 + 0), 200, "general path: opaque R untouched");
+    _extract_rgb(&tbuf, 3, 0, 4, 6, 1, 0, 0, &rgb3);
+    assert_eq(load8(&rgb3 + 1), 128, "general path: alpha 128 agrees with the fast path");
 
     test_group("M5(b) — downscale rejects ungated calls + bad dims");
     # Ungated: pixels_buf == 0 (no decode run) → -1.
@@ -640,7 +678,9 @@ fn main() {
     assert_eq(e_r, 23, "24x80 → 23 rows (one left for the prompt)");
     _kii_term_envelope(0, 0, 0, &e_c, &e_r);
     assert_eq(e_c, 0, "0x0 (size never set) → cols 0 (default)");
-    assert_eq(e_r, 0, "0x0 (size never set) → rows 0 (default)");
+    # P(-1) (v1.6.4): a measured TTY that reports 0 rows keeps the prompt row,
+    # as a measured 24-row TTY does (it used to get all 24 and scroll).
+    assert_eq(e_r, 23, "0x0 (size never set) → rows 23 (default less the prompt row)");
     # A-8 (v1.5.1): a 1-row terminal keeps both its row and its columns.
     _kii_term_envelope(0, 1, 100, &e_c, &e_r);
     assert_eq(e_c, 100, "1x100 → keeps its 100 columns (A-8)");
@@ -652,7 +692,7 @@ fn main() {
     # columns, wider than the line); kii keeps the measured dimension.
     _kii_term_envelope(0, 0, 40, &e_c, &e_r);
     assert_eq(e_c, 40, "0x40 → keeps the 40 measured columns");
-    assert_eq(e_r, 0,  "0x40 → rows 0 (default)");
+    assert_eq(e_r, 23, "0x40 → rows 23 (default less the prompt row)");
     _kii_term_envelope(0, 30, 0, &e_c, &e_r);
     assert_eq(e_c, 0,  "30x0 → cols 0 (default)");
     assert_eq(e_r, 29, "30x0 → keeps the measured rows, less the prompt row");
@@ -667,4 +707,4 @@ fn main() {
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+syscall(SYS_EXIT, exit_code);

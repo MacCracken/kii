@@ -30,8 +30,7 @@ var _palette_inited = 0;
 
 # Idempotent palette builder. Hand-coded constants per the Linux
 # console table — same numeric values you'd grep out of the
-# kernel's default_color_table. Lazy-init pattern matches the
-# png_crc_init / _png_fuzz_init_prefix idiom.
+# kernel's default_color_table. Lazily initialised on first use.
 fn palette_init(): i64 {
     if (_palette_inited == 1) { return 0; }
     var p = &_ANSI_PALETTE_RGB;

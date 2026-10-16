@@ -148,3 +148,28 @@ interpolation, no averaging.
 - [`0003-color-tier-discipline.md`](0003-color-tier-discipline.md) § Consequences (banding amplification)
 - [`0004-half-block-floor-glyph.md`](0004-half-block-floor-glyph.md) § geometry interaction
 - [`../benchmarks.md`](../benchmarks.md) § v0.6.0 Breakdown (downscale is ~0.5% of pipeline cost)
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**. The v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)) records three changes:
+
+**1. Tier 2 is not "at v1.1".** § Alternatives and § Trigger for revisit place the tier-2
+toolkit at v1.1. The roadmap pins dithering (`--dither none|ordered|fs`) to 1.9.0. A
+`--filter` option is not on the roadmap.
+
+**2. The sampling formula misses the last source column and row (finding C-7).**
+`sx = (dx × src_w) / dst_w` reaches at most `((dst_w − 1) × src_w) / dst_w`, which on a
+downscale is below `src_w − 1`; the same holds for `sy`. Column 0 and row 0 are always
+sampled. So an image with a 1-px border shows it on the top and left only. The fix is
+pixel-centre sampling, `sx = ((2·dx + 1) × src_w) / (2 · dst_w)`, which stays in bounds and
+keeps the identity case. It changes every downscaled frame, so it is pinned to 1.9.0 with
+the dithering work rather than shipped in a patch release.
+
+**3. The extraction path changed.** § Decision says each pixel is read through
+`_extract_rgb`. Since v1.6.4 `downscale_to_rgb` reads the depth-8 RGBA that the chitra
+adapter always supplies on a fast path, with the same `sx` / `sy` and the same bytes;
+`_extract_rgb` serves the other colour types, which only tests reach. Both paths now
+composite alpha over black (`_over_black`, `(c·a + 127) / 255`) instead of dropping it, so
+opaque images are byte-identical and a transparent pixel renders black
+([ADR 0006](0006-adopt-chitra-decoder.md) amendment).

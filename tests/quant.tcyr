@@ -15,6 +15,26 @@ include "src/quant.cyr"
 include "src/png.cyr"
 include "lib/assert.cyr"
 
+# The pre-v1.6.4 quantize_nearest_rgb body, kept here as the reference the
+# optimized one is checked against.
+fn _ref_nearest(r, g, b, tier): i64 {
+    var best_idx = 0;
+    var dr = r - palette_r(0);
+    var dg = g - palette_g(0);
+    var db = b - palette_b(0);
+    var best_d2 = dr * dr + dg * dg + db * db;
+    var i = 1;
+    while (i < tier) {
+        dr = r - palette_r(i);
+        dg = g - palette_g(i);
+        db = b - palette_b(i);
+        var d2 = dr * dr + dg * dg + db * db;
+        if (d2 < best_d2) { best_d2 = d2; best_idx = i; }
+        i = i + 1;
+    }
+    return best_idx;
+}
+
 fn main() {
     alloc_init();
 
@@ -169,15 +189,34 @@ fn main() {
     assert(lum_mid   <= lum_light, "luminance non-decreasing: mid ≤ light");
     assert(lum_light <= lum_white, "luminance non-decreasing: light ≤ white");
 
-    test_group("M4(b) — _color_dist2 sanity");
-    # Pin a few canonical distance² values so a sign / overflow
-    # / typo regression trips here rather than in the larger
-    # quantization-acceptance suite.
-    assert_eq(_color_dist2(0,   0,   0,   0,   0,   0  ), 0,   "dist²(black, black) = 0");
-    assert_eq(_color_dist2(255, 0,   0,   170, 0,   0  ), 7225, "dist²(pure-red, entry-1) = 85²");
-    assert_eq(_color_dist2(255, 0,   0,   0,   255, 0  ), 130050, "dist²(pure-red, pure-green) = 2 × 255²");
-    # Negative deltas square cleanly — the (r1 - r2) can go negative.
-    assert_eq(_color_dist2(0,   0,   0,   255, 255, 255), 195075, "dist²(black, white) = 3 × 255²");
+    # v1.6.4 (P(-1) O-1): quantize_nearest_rgb reads the packed palette
+    # directly and inlines the distance. It must pick exactly what the old
+    # accessor-based body picked, at both tiers. The reference below IS that
+    # old body (palette_r/g/b + squared distance + strict-< tie-break); the
+    # grid steps 17 per channel, so it covers 0 and 255 and every palette
+    # level (0, 85, 170, 255) plus the midpoints between them.
+    test_group("v1.6.4 — quantize_nearest_rgb matches the reference body");
+    var tier = 8;
+    while (tier <= 16) {
+        quant_set_tier(tier);
+        var mism = 0;
+        var gr = 0;
+        while (gr <= 255) {
+            var gg = 0;
+            while (gg <= 255) {
+                var gb = 0;
+                while (gb <= 255) {
+                    if (quantize_nearest_rgb(gr, gg, gb) != _ref_nearest(gr, gg, gb, tier)) { mism = mism + 1; }
+                    gb = gb + 17;
+                }
+                gg = gg + 17;
+            }
+            gr = gr + 17;
+        }
+        assert_eq(mism, 0, "4,096 grid colours: no mismatch against the reference body");
+        tier = tier + 8;
+    }
+    quant_set_tier(16);
 
     # ---- M3(c) — _png_color_channels --------------------------------
     test_group("M3(c) — _png_color_channels");
@@ -292,4 +331,4 @@ fn main() {
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+syscall(SYS_EXIT, exit_code);

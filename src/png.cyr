@@ -38,8 +38,9 @@
 #     read + a size cap the streaming decoder used to get for free),
 #   - the pstruct contract + STRUCT_*_OFFSET layout that downscale.cyr /
 #     quant.cyr / emit.cyr consume,
-#   - the PNG_ERR_* code space + per-error stderr diagnostics in main.cyr
-#     (chitra's ChitraErr codes map onto these via _kii_map_chitra_err),
+#   - the PNG_ERR_* code space and the text of each diagnostic
+#     (kii_decode_error_text, below; chitra's ChitraErr codes map onto the
+#     codes via _kii_map_chitra_err),
 #   - _png_color_channels + png_color_type_name (used downstream),
 #   - the ANSI-injection path sanitizer (cli.cyr/main.cyr — never decoder
 #     code, untouched by the re-fold).
@@ -80,7 +81,7 @@ var PNG_ERR_INTERLACE = 7;  # Unrecognized interlace METHOD (the spec allows onl
 # releases after chitra 0.2.1 was the release that ADDED
 # Adam7. kii has decoded interlaced PNG since v1.2.2 and
 # tests/decode.tcyr asserts PNG_OK for it. (P-1, v1.5.1)
-var PNG_ERR_BITDEPTH  = 8;  # Sub-byte depth {1,2,4} or unsupported color_type
+var PNG_ERR_BITDEPTH  = 8;  # A depth / colour-type pair PNG § 11.2.2 forbids (e.g. palette at 16)
 var PNG_ERR_NO_IDAT   = 9;  # Zero IDAT chunks (structurally valid but no pixel data)
 var PNG_ERR_INFLATE   = 10; # zlib_decompress failed or produced the wrong size
 var PNG_ERR_FILTER    = 11; # Unknown filter byte (per-row filter ∈ {0,1,2,3,4} per spec § 9)
@@ -98,12 +99,16 @@ var PNG_ERR_UNSUPPORTED    = 16; # Valid image, but an unsupported feature. JPEG
 # the diagnostic doesn't cite the PNG §11.2.2 bit-depth
 # table for a non-PNG input.
 var PNG_ERR_INFLATE_LIMIT  = 17; # v1.6.0. A VALID PNG whose pixel data inflates past
-# sankoch's DECOMPRESS_MAX_OUTPUT (16 MiB — ~5.6 MP of RGB), so
+# sankoch's DECOMPRESS_MAX_OUTPUT (16 MiB of inflated scanlines:
+# ~5.6 MP of 8-bit RGB, ~4.2 MP of RGBA), so
 # no linked decompressor can emit it. chitra 1.0.1 gave this its
 # own ChitraErr (35, CHITRA_ERR_INFLATE_LIMIT) and refuses it
 # before allocating; kii had no arm for it, so through v1.5.2 the
 # file fell through to the generic fallback and was reported as
 # "malformed PNG". Not a corruption code — the file is fine.
+var PNG_ERR_IS_DIR         = 18; # v1.6.4. The path is a directory. The old lseek
+# size probe reported an ext4 directory as "file exceeds size
+# ceiling" (its htree EOF is ~2^63); the read now says EISDIR.
 
 # ---- detected input format (for format-aware diagnostics) ----------
 # The adapter sniffs the signature before decode and records the format in
@@ -117,12 +122,20 @@ var KII_FMT_JPEG    = 2;
 var KII_FMT_BMP     = 3;   # v1.5.0 — chitra 0.4.0 BMP
 var KII_FMT_GIF     = 4;   # v1.5.0 — chitra 0.5.0 GIF (first frame only)
 
-# Single-buffer ceiling for the file slurp. kii reads the whole PNG into
+# Single-buffer ceiling for the file slurp. kii reads the whole file into
 # memory (chitra decodes an in-memory (src,len) span, not a path), so a
-# pathologically large file is an OOM-DoS vector the old streaming reader
-# didn't have — reject before allocating. Matches chitra's own
-# CHITRA_MAX_RAW_BYTES so kii never slurps a file chitra would refuse.
-var KII_MAX_RAW_BYTES = 268435456;  # 256 MB
+# pathologically large input is an OOM-DoS vector the old streaming reader
+# didn't have. The reader stops at this many bytes and reports EFBIG. It IS
+# chitra's own ceiling, so kii never slurps a file chitra would refuse;
+# tests/decode.tcyr pins it at 256 MB, the figure main's diagnostic quotes.
+var KII_MAX_RAW_BYTES = CHITRA_MAX_RAW_BYTES;
+
+# The three errno values the slurp distinguishes (file_read_whole_max returns
+# them negated). Linux numbering; on a target that reports a bare -1 they
+# fall through to PNG_ERR_OPEN, which is still a true statement.
+var _KII_ENOMEM = 12;
+var _KII_EISDIR = 21;
+var _KII_EFBIG  = 27;
 
 # ---- pstruct layout (the downstream contract) ----------------------
 # downscale.cyr / quant.cyr / emit.cyr read these offsets. main.cyr
@@ -163,9 +176,9 @@ var STRUCT_FORMAT_OFFSET          = 152;  # detected input format (KII_FMT_*); s
 # the SOURCE color_type (STRUCT_SRC_COLOR_TYPE_OFFSET) so a palette /
 # greyscale input still reports its real format even though pixels are
 # normalized to RGBA8. PNG names are the short forms from spec § 11.2.2; the
-# two JPEG cases (257/259) decode chitra's source-color-type sentinel
-# (chitra_image_source_color_type = 256 + component_count) so a JPEG
-# --verbose line names YCbCr/greyscale instead of falling through to "?".
+# three JPEG cases (257/259/275) decode chitra's source-color-type sentinel
+# (0x100 + component_count, with 0x10 set for an Adobe transform-0 RGB file)
+# so a JPEG --verbose line names its colour space instead of falling to "?".
 fn png_color_type_name(color_type): i64 {
     if (color_type == 0) { return "greyscale"; }
     if (color_type == 2) { return "RGB"; }
@@ -190,9 +203,9 @@ fn png_color_type_name(color_type): i64 {
 }
 
 # Color-type → channels-per-pixel per spec § 11.2.2 / Table 11.1.
-# downscale.cyr / quant.cyr derive bytes-per-pixel from this. Post-
-# re-fold the adapter sets COLOR_TYPE=6 so the live path is channels=4,
-# but the full table is kept (quant's M4 image-wide path + tests).
+# downscale.cyr derives bytes-per-pixel from this. Post-re-fold the adapter
+# sets COLOR_TYPE=6, so the live path is channels=4; the other rows are
+# reached only by tests. Trimming them is part of the 1.7.0 rename.
 fn _png_color_channels(color_type): i64 {
     if (color_type == 0) { return 1; }
     if (color_type == 2) { return 3; }
@@ -237,7 +250,7 @@ fn _kii_map_chitra_err(code): i64 {
     # Malformed / corrupt baseline-JPEG structure -> PNG_ERR_HEADER; main
     # branches the wording on STRUCT_FORMAT (-> "malformed JPEG ..."). These
     # never collide with a PNG input — chitra routes by signature first, so
-    # a PNG only ever yields codes 1-12.
+    # a PNG only ever yields codes 1-12, plus 35 (INFLATE_LIMIT, below).
     if (code == CHITRA_ERR_JPEG_MARKER)  { return PNG_ERR_HEADER; }
     if (code == CHITRA_ERR_JPEG_SOF)     { return PNG_ERR_HEADER; }
     if (code == CHITRA_ERR_JPEG_DQT)     { return PNG_ERR_HEADER; }
@@ -285,16 +298,19 @@ fn _kii_map_chitra_err(code): i64 {
     return PNG_ERR_HEADER;   # CHITRA_ERR_OTHER + any unknown -> generic malformed
 }
 
-# ---- file size (for the pre-read DoS cap) --------------------------
-# lseek(fd, 0, SEEK_END) returns the byte size without a stat struct.
-# SYS_LSEEK + O_RDONLY resolve per-arch from the stdlib. Returns the
-# size, or -1 if the file can't be opened.
-fn kii_file_size(path): i64 {
-    var fd = file_open(path, O_RDONLY, 0);
-    if (fd < 0) { return 0 - 1; }
-    var sz = syscall(SYS_LSEEK, fd, 0, 2);    # whence 2 = SEEK_END
-    file_close(fd);
-    return sz;
+# ---- the slurp's failure → PNG_ERR_* -------------------------------
+# `n` is file_read_whole_max's negative errno. Through v1.6.3 kii sized the
+# file with lseek(SEEK_END), then opened it a SECOND time to read it (P(-1),
+# v1.6.4). That misreported everything that is not a regular file: a pipe or
+# `/dev/stdin` (ESPIPE) said "cannot open file", an ext4 directory (htree EOF
+# ~2^63) said "file exceeds size ceiling", and the double open let the path
+# change between the size check and the read. The stdlib reader opens once,
+# reads to EOF under the cap, and says why it stopped.
+fn _kii_map_read_err(n): i64 {
+    if (n == 0 - _KII_EFBIG)  { return PNG_ERR_FILE_TOO_LARGE; }
+    if (n == 0 - _KII_EISDIR) { return PNG_ERR_IS_DIR; }
+    if (n == 0 - _KII_ENOMEM) { return PNG_ERR_IDAT_TOO_LARGE; }
+    return PNG_ERR_OPEN;
 }
 
 # ---- the decode front-end ------------------------------------------
@@ -307,24 +323,22 @@ fn kii_file_size(path): i64 {
 # diagnostics. Returns PNG_OK (0) on success, or a PNG_ERR_* code (mapped
 # from ChitraErr or raised by the file layer) on failure.
 fn kii_decode_png(path, pstruct): i64 {
-    # Default the format tag UNKNOWN so the early file-layer error returns
-    # (open / too-large / empty) still leave main a defined value to read.
-    store64(pstruct + STRUCT_FORMAT_OFFSET, KII_FMT_UNKNOWN);
+    # Zero every slot first (P(-1), v1.6.4). main's `var pstruct[160]` is an
+    # uninitialized stack array, and the adapter writes only some slots, so the
+    # "has this stage run yet?" checks in quantize / emit read whatever an
+    # earlier call left on the stack. A zeroed struct makes them mean what
+    # they say. This also defaults the format tag to KII_FMT_UNKNOWN (0) for
+    # the early file-layer returns.
+    var slot = 0;
+    while (slot < 160) { store64(pstruct + slot, 0); slot = slot + 8; }
 
-    # ---- size cap BEFORE the slurp (the old streaming reader never
-    # held the whole file; the in-memory boundary does, so a giant file
-    # is an OOM vector — reject pre-read). ----
-    var sz = kii_file_size(path);
-    if (sz < 0)  { return PNG_ERR_OPEN; }
-    if (sz == 0) { return PNG_ERR_NOT_PNG; }      # empty file isn't a PNG
-    if (sz > KII_MAX_RAW_BYTES) { return PNG_ERR_FILE_TOO_LARGE; }
-
-    # ---- exact-sized slurp (NOT a 256 MB overcommit) ----
-    var src = alloc(sz);
-    if (src == 0) { return PNG_ERR_IDAT_TOO_LARGE; }   # alloc failure ~ OOM
-    var n = file_read_all(path, src, sz);
-    if (n < 0)  { return PNG_ERR_OPEN; }
-    if (n == 0) { return PNG_ERR_NOT_PNG; }
+    # ---- slurp, capped: one open, read to EOF, at most KII_MAX_RAW_BYTES
+    # (the old streaming reader never held the whole file; this one does, so
+    # the cap is the OOM guard). Works on pipes and /dev/stdin too. ----
+    var n = 0;
+    var src = file_read_whole_max(path, KII_MAX_RAW_BYTES, &n);
+    if (src == 0) { return _kii_map_read_err(n); }
+    if (n == 0) { return PNG_ERR_NOT_PNG; }        # an empty file is no image
 
     # ---- sniff the format from the signature so main can phrase a decode
     # failure per format. chitra_image_decode does the same routing
@@ -381,4 +395,70 @@ fn kii_decode_png(path, pstruct): i64 {
     store64(pstruct + STRUCT_SEEN_IEND_OFFSET, chitra_image_seen_iend(img));
     store64(pstruct + STRUCT_SRC_COLOR_TYPE_OFFSET, chitra_image_source_color_type(img));
     return PNG_OK;
+}
+
+# ---- decode diagnostics (the `<path>: <text>` lines main prints) ----
+# The text for each PNG_ERR_* code, phrased for the detected format `fmt`
+# (KII_FMT_*). Through v1.6.3 these lived inline in main's entry point, where
+# no test could reach them; tests/decode.tcyr now pins every line. P(-1),
+# v1.6.4, also made four of them true for every format:
+#   - INFLATE on a GIF is a corrupt LZW stream, not "DEFLATE … IDAT";
+#   - NO_IDAT on a GIF is a file with no image descriptor, not "no IDAT";
+#   - DIMENSIONS fires for a zero width or height as well as an oversized one;
+#   - the BMP "unsupported" line names compression in general, since chitra
+#     also refuses OS/2 Huffman 1D and BI_CMYK there, not just BI_JPEG/BI_PNG.
+# The 256 MB and 16 MiB figures are pinned in tests/decode.tcyr against
+# KII_MAX_RAW_BYTES and sankoch's DECOMPRESS_MAX_OUTPUT.
+fn kii_decode_error_text(rc, fmt): i64 {
+    if (rc == PNG_ERR_OPEN)           { return "cannot open file"; }
+    if (rc == PNG_ERR_IS_DIR)         { return "is a directory, not an image file"; }
+    if (rc == PNG_ERR_FILE_TOO_LARGE) { return "file exceeds size ceiling (max 256 MB)"; }
+    if (rc == PNG_ERR_NOT_PNG)        { return "unrecognized image format (expected PNG, JPEG, BMP, or GIF)"; }
+    if (rc == PNG_ERR_HEADER) {
+        if (fmt == KII_FMT_JPEG) { return "malformed JPEG (bad marker, segment, or entropy data)"; }
+        if (fmt == KII_FMT_BMP)  { return "malformed BMP (bad DIB header, palette, or RLE stream)"; }
+        if (fmt == KII_FMT_GIF)  { return "malformed GIF (bad descriptor or color table)"; }
+        return "malformed PNG (bad chunk, ordering, or palette)";
+    }
+    if (rc == PNG_ERR_CRC)            { return "CRC check failed"; }
+    if (rc == PNG_ERR_CHUNK) {
+        # PNG names its truncation after the chunk stream; every other format
+        # (and an unrecognized one) gets the generic wording.
+        if (fmt == KII_FMT_PNG) { return "malformed PNG (truncated chunk stream)"; }
+        return "truncated image (unexpected end of data)";
+    }
+    if (rc == PNG_ERR_INTERLACE)      { return "unsupported interlace method (only 0=none / 1=Adam7 are valid)"; }
+    if (rc == PNG_ERR_BITDEPTH)       { return "unsupported bit depth for this color type (PNG § 11.2.2)"; }
+    if (rc == PNG_ERR_UNSUPPORTED) {
+        if (fmt == KII_FMT_BMP)  { return "unsupported BMP feature (bit depth, compression method, or channel mask)"; }
+        if (fmt == KII_FMT_JPEG) { return "unsupported JPEG feature (progressive, arithmetic, 12-bit, non-baseline, CMYK/4-component, or an Adobe colour transform)"; }
+        return "unsupported image feature (unrecognized critical chunk, compression method, or color type)";
+    }
+    if (rc == PNG_ERR_NO_IDAT) {
+        if (fmt == KII_FMT_GIF) { return "no image in GIF (no image descriptor)"; }
+        return "no IDAT chunks (nothing to decode)";
+    }
+    if (rc == PNG_ERR_INFLATE) {
+        if (fmt == KII_FMT_GIF) { return "corrupt GIF image data (bad LZW stream)"; }
+        return "DEFLATE decompression failed (corrupt IDAT)";
+    }
+    if (rc == PNG_ERR_FILTER)         { return "invalid PNG filter type (spec § 9 allows 0–4)"; }
+    if (rc == PNG_ERR_DIMENSIONS)     { return "image dimensions are zero or past the policy ceiling (max 16.7M px / 65535 per side / 256 MB)"; }
+    if (rc == PNG_ERR_IDAT_TOO_LARGE) { return "out of memory or image too large (possible decompression bomb)"; }
+    if (rc == PNG_ERR_INFLATE_LIMIT)  { return "image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)"; }
+    return "image decode failed";
+}
+
+# The warning main prints when a frame decoded but its stream did not end the
+# way its format says it should (STRUCT_SEEN_IEND == 0). chitra sets that flag
+# from a real per-format decision: PNG had no IEND, a JPEG scan ran out or had
+# no EOI, a GIF's codes ran out before the frame was full. BMP forces 1; the
+# last line covers it and any future format. For GIF, chitra fills the missing
+# pixels with palette entry 0 at full alpha, so the text says so (through
+# v1.6.3 it claimed "zero-filled", which rendered as whatever colour entry 0 is).
+fn kii_incomplete_warning_text(fmt): i64 {
+    if (fmt == KII_FMT_PNG)  { return "warning: incomplete PNG (no IEND chunk seen)"; }
+    if (fmt == KII_FMT_JPEG) { return "warning: incomplete JPEG (truncated scan or no EOI marker)"; }
+    if (fmt == KII_FMT_GIF)  { return "warning: incomplete GIF (image data ran out; the rest is drawn in palette colour 0)"; }
+    return "warning: incomplete image (stream did not close cleanly)";
 }

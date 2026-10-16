@@ -102,3 +102,33 @@ alternative is rendering formats kii cannot name in an error message.
 are actively misleading. The rename to `image.*`/`IMG_ERR_*` remains tracked
 (`docs/development/roadmap.md`) and deferred, on the same smallest-first grounds as at v1.4.0 — but
 the case for it is now materially stronger than it was with two formats.
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**. The v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)) found that kii had not
+fully met this ADR's own rule, *a format kii renders is a format kii must be able to talk
+about*, and corrected three statements:
+
+**1. kii calls 11 chitra functions, not nine.** § Context says "all nine names kii calls".
+kii called eleven at v1.5.0 and still does: the four signature predicates
+(`chitra_png_check_signature`, `chitra_jpeg_check_signature`, `chitra_bmp_check_signature`,
+`chitra_gif_check_signature`), `chitra_image_decode`, `chitra_err_code`, and five
+accessors (`chitra_image_width`, `_height`, `_pixels`, `_seen_iend`,
+`_source_color_type`). All eleven are frozen names in chitra 1.2.0.
+
+**2. Two GIF diagnostics named the wrong format.** § Error-code mapping maps GIF LZW to
+`PNG_ERR_INFLATE` and an image-less GIF to `PNG_ERR_NO_IDAT`. `main.cyr` phrased
+`HEADER`, `CHUNK` and `UNSUPPORTED` per format, but these two only for PNG, so through
+v1.6.3 a corrupt GIF printed `DEFLATE decompression failed
+(corrupt IDAT)` and an image-less one `no IDAT chunks (nothing to decode)`. Since v1.6.4
+they print `corrupt GIF image data (bad LZW stream)` and `no image in GIF (no image
+descriptor)`. The BMP line also changed, to `unsupported BMP feature (bit depth, compression
+method, or channel mask)`, because chitra refuses OS/2 Huffman 1D and `BI_CMYK` as well as
+`BI_JPEG` / `BI_PNG`. The text of every line moved from `main.cyr` to
+`kii_decode_error_text` (`src/png.cyr`), and `tests/decode.tcyr` pins each one per format.
+
+**3. A truncated GIF is not "zero-filled".** § `seen_iend` stops being PNG-only says the missing tail is
+zero-filled. chitra fills it with palette entry 0 at full alpha, so it draws in whatever
+colour that entry is. The warning, now `kii_incomplete_warning_text`, reads
+`warning: incomplete GIF (image data ran out; the rest is drawn in palette colour 0)`.

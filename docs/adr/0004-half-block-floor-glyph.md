@@ -125,7 +125,7 @@ or 1-bit imagery, not 16-color photographic).
 - **Scheduled**: **v2.0.0 — full Block Elements glyph vocab**
   (U+2580..U+259F). Captured in
   [`../development/roadmap.md`](../development/roadmap.md) §
-  Roadmap ahead. Closes the bytewise + visual-detail gap
+  2.0 — open. Closes the bytewise + visual-detail gap
   with chafa documented in
   [`../audit/chafa-comparison.md`](../audit/chafa-comparison.md)
   (kii's 5.9×–69× byte verbosity vs chafa is driven by
@@ -152,3 +152,9 @@ or 1-bit imagery, not 16-color photographic).
 - [`../../CLAUDE.md`](../../CLAUDE.md) § Domain-specific rules (half-block FLOOR rule)
 - [`../architecture/README.md`](../architecture/README.md) § Half-block aspect math
 - Unicode 16.0, Block Elements (U+2580..U+259F)
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**. One correction: § Trigger for revisit cited the roadmap's
+"§ Roadmap ahead", a section that no longer exists. The Block Elements item now sits under
+roadmap § 2.0 — open, still unpinned. The citation was corrected in place.

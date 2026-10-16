@@ -16,68 +16,67 @@
 
 | Doc | Tier | Last verified | Debt / notes |
 |---|---|---|---|
-| `README.md` | 1 | 2026-10-15 (v1.6.3) | Status block → v1.6.3; the post-v1 arc gains the v1.6.1–v1.6.3 entries; § Substrate names the cmdit 1.4.0 and chitra 1.2.0 pins. |
-| `CLAUDE.md` | 1 | 2026-08-25 (v1.5.1) | Identity line lists all four formats. **Toolchain pin de-inlined** — it read `6.0.1` for eleven releases past the real pin, so the number is now a pointer to `cyrius.cyml`, matching the file's own VERSION rule. |
-| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.3) | `[1.6.3]` added (cyrius 6.7.12 audited, chitra 1.2.0, sankoch 2.8.7: ~3.5× faster, inflate floor closed; the roadmap rebuilt). `[1.6.1]`/`[1.6.2]` above 1.6.0. Rolls per release. |
-| `CONTRIBUTING.md` | 1 | 2026-10-15 (v1.6.2) | Current-state line → 642 / 8,011,000 / 7 benches. v1.6.0: fuzz bullet (ten surfaces, any `bad` fails the run, `crc32_table` note qualified). Line 19 still describes the v1.0 M0–M7 milestone roadmap, which no longer exists (pre-existing debt). |
+| `README.md` | 1 | 2026-10-15 (v1.6.4) | Status → v1.6.4; arc gains the v1.6.4 bullet; § Building's pin is a pointer to `cyrius.cyml` (it read `6.5.35`) and its counts are 709 / ten surfaces / 8,011,000; `/dev/stdin`, the frame cap and the negative-`--width` refusal noted. |
+| `CLAUDE.md` | 1 | 2026-10-15 (v1.6.4) | Process step 6 names `VERSION` (read by `cyrius.cyml`), the `print_version` literal and CI's drift check — it listed `cyrius.cyml`, which only interpolates the version. Toolchain pin stays a pointer to `cyrius.cyml` (since v1.5.1). |
+| `CHANGELOG.md` | 1 | 2026-10-15 (v1.6.4) | `[1.6.4]` added (the P(-1) sweep: frame cap, single-open read, alpha over black, per-format diagnostics, the speedups, the CVE verification). Rolls per release; released entries are never edited. |
+| `CONTRIBUTING.md` | 1 | 2026-10-15 (v1.6.4) | The retired M0–M7 milestone text replaced: contributions target the roadmap's next pinned release; tier 2 at 1.8.0 / 1.9.0; formats via a chitra re-pin; the dep list names cmdit and chitra; current state 709 / 8,011,000 / 7 benches. |
 | `CODE_OF_CONDUCT.md` | 1 | 2026-05-22 | Contributor Covenant 2.1 pointer. |
-| `SECURITY.md` | 1 | 2026-10-12 (v1.6.0) | Sanitizer bullet: darshana `tty_has_ctl`, strict RFC 3629 and why the overlong forms matter. Amplification bullet: the 16 MiB inflate ceiling and its own diagnostic. Fuzz bullet: ten surfaces / 8,011,000 iterations, failing exit. |
+| `SECURITY.md` | 1 | 2026-10-15 (v1.6.4) | No in-repo decoder (chitra since v1.2.0); `cat x \| kii /dev/stdin`; the single-open read and the frame-size cap as mitigations; new § Accepted risks (TAB/LF, bidi/format characters, a writerless FIFO); the audit history lists all three audits. |
 | `cyrius.cyml` | 1 | 2026-10-15 (v1.6.3) | **Manifest only** (39 lines): package, build, stdlib list, three git + tag deps with a one-line purpose each. `cyrius = "6.7.12"`, chitra 1.2.0. Pin history and rationale live in CHANGELOG / state.md / ADRs, never here. |
-| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.3) | v1.6.3 entry; toolchain 6.7.12 (sankoch 2.8.7), binary size (999,328 B host), bench ranges from § v1.6.3, deps darshana 1.3.0 / cmdit 1.4.0 / chitra 1.2.0, the open list rewritten to match the roadmap's pinned versions. |
-| `docs/benchmarks.md` | 1 | 2026-10-15 (v1.6.3) | v1.6.3 section: 1.6.3 against 1.6.2, interleaved in one session on a loaded host; end-to-end ~3.5× faster, attributed to sankoch 2.8.6's Huffman slow-path rewrite. Earlier sections are historical captures. |
-| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.3) | **Rebuilt around pinned versions**: 1.6.4 P(-1) sweep, 1.7.0 rename, 1.8.0 256/truecolour, 1.9.0 dithering, 1.10.0 ASCII refinements; gated-on-upstream, not-scheduled, 2.0 open, out of scope. The sankoch limitations table is gone (S-1 fixed upstream; S-2 is gated on chitra 1.3.0). |
+| `docs/development/state.md` | 1 | 2026-10-15 (v1.6.4) | v1.6.4 entry; 709 assertions (cli 163 / quant 123 / render 198 / ascii 17 / decode 208); module map names the v1.6.4 helpers; binary sizes incl. the aarch64 alignment padding; bench ranges from § v1.6.4; the CI re-vendor and `<8-byte file` claims corrected; the open list matches the roadmap. |
+| `docs/benchmarks.md` | 1 | 2026-10-15 (v1.6.4) | v1.6.4 section: 1.6.4 against 1.6.3 interleaved — quantize ~4×, a 256² icon ~2× at `--width 200`, RAMGON unchanged (its time is chitra's inflate). Earlier sections are historical captures. |
+| `docs/development/roadmap.md` | 1 | 2026-10-15 (v1.6.4) | 1.6.4 section deleted (shipped). The sweep's deferred findings joined their pinned versions: 1.7.0 (dead decoder branches, shared emit loop, cmdit range/enum), 1.8.0 (tier 1 on real 8/16-colour SGR, SGR elision, real transparency), 1.9.0 (pixel-centre sampling), 1.10.0 (the glyph-table generator). The 16 MiB limit is stated per colour type. |
 | `docs/audit/2026-05-22-audit.md` | 1 | 2026-05-23 (v1.0.0 close + Appendix A) | 140 CVE/issue rows + 10 kii-specific findings + § Appendix A W3C PngSuite walk (added at M8 close). Load-bearing reference for ADR 0002. |
 | `docs/audit/chafa-comparison.md` | 1 | 2026-05-23 (v1.0.0 close) | **NEW at M8(b3).** kii vs `chafa --colors 16` across 6 curated fixtures. Byte-stream metrics + qualitative findings + acceptance-criterion close-out. Validates ADRs 0003 / 0004 / 0005 against chafa as reference impl. |
 | `docs/adr/README.md` | 2 | 2026-08-24 (v1.5.0) | Index lists ADRs 0001–0009 (0009 BMP/GIF-via-chitra added). |
-| `docs/adr/0008-jpeg-via-chitra.md` | 2 | 2026-08-24 (v1.5.0) | JPEG via chitra 0.3.0: signature-based format dispatch + JPEG validation posture (no CRC → structural). Realizes ADR 0006's JPEG line. Still accurate at v1.5.0; extended by ADR 0009. |
-| `docs/adr/0009-bmp-gif-via-chitra.md` | 2 | 2026-08-24 (v1.5.0) | **NEW.** BMP + GIF via chitra 1.0.0 — the re-pin that needed no decode change; sets the rule that a format kii renders is a format kii must be able to name in an error. Extends ADR 0008, discharges ADR 0006. |
-| `docs/audit/2026-08-25-audit.md` | 2 | 2026-08-25 (v1.5.1) | **NEW.** The P-1 sweep: 41 findings raised / 2 refuted / 39 folded into 16 work items, plus a "What the sweep did NOT find" section, the refuted findings, and four accepted risks (TAB/LF allow-list, sankoch's 16 MiB inflate cap, the sankoch Huffman hot spot, the deferred `png.*` → `image.*` rename). |
+| `docs/adr/0008-jpeg-via-chitra.md` | 2 | 2026-10-15 (v1.6.4) | JPEG via chitra 0.3.0: signature dispatch + structural validation. **Amended at v1.6.4**: the "256 MB pre-read file cap" is now a capped read. Extended by ADR 0009. |
+| `docs/adr/0009-bmp-gif-via-chitra.md` | 2 | 2026-10-15 (v1.6.4) | BMP + GIF via chitra 1.0.0; the nameable-format rule. **Amended at v1.6.4**: kii calls 11 chitra functions (not nine); the GIF LZW / no-image / tail-fill wording now follows the rule. |
+| `docs/audit/2026-08-25-audit.md` | 2 | 2026-08-25 (v1.5.1) | The v1.5.1 P-1 sweep: 41 findings raised / 2 refuted / 39 folded into 16 work items. Dated record — not edited; its "forged text cannot contain control bytes" is qualified by the 2026-10-15 audit § 7 (bidi characters). |
+| `docs/audit/2026-10-15-audit.md` | 2 | 2026-10-15 (v1.6.4) | **NEW.** The v1.6.4 P(-1) sweep: 56 findings; 1 MEDIUM + 9 LOW + 1 INFO repaired, 3 optimizations adopted, ~30 doc corrections, 9 deferred to pinned versions, 2 refuted; the three zlib CVE classes verified to hold. |
 | `docs/adr/template.md` | 2 | 2026-05-22 (cyrius init template) | Fresh. |
-| `docs/adr/0001-png-decoder-in-repo.md` | 2 | 2026-05-22 (v0.7.0 — first ADR) | First ADR; captures the M3-era decision to keep the PNG decoder in-repo until a 2nd consumer surfaces. |
-| `docs/adr/0002-security-model.md` | 2 | 2026-10-12 (v1.6.0) | Threat model + M7(c) hardening commitments (C1–C4) + accepted residual risks. Amended at v1.5.1 (C1 reversal) and **at v1.6.0** (the sanitizer moves to darshana's `tty_has_ctl`; strict RFC 3629), both appended rather than edited in place. The C1–C4 table's code anchors still predate the v1.2.0 re-fold (carried debt). |
-| `docs/adr/0003-color-tier-discipline.md` | 2 | 2026-08-25 (v1.5.1) | Captures tier-1 (8/16-color) scope; tier-2/tier-3 deferral. **Amended at v1.5.1**: the "`--color 8` reservation without activation" is resolved — the flag had parsed and ignored its argument since M1 and now selects a real tier. |
-| `docs/adr/0004-half-block-floor-glyph.md` | 2 | 2026-05-23 (v1.0.0 close) | **NEW at M8(c2).** Captures `▀`/`▄` glyph-pair-as-floor choice; quarter-blocks + braille post-v1. |
-| `docs/adr/0005-nearest-neighbor-downscale.md` | 2 | 2026-05-23 (v1.0.0 close) | **NEW at M8(c3).** Captures nearest-neighbor downscale choice; bilinear/Lanczos defer to tier-2 alongside dithering. |
-| `docs/architecture/README.md` | 2 | 2026-10-12 (v1.6.0, partial) | Item 004 rewritten (darshana now supplies every escape; the chained-`pos` contract, the per-row budget, `tty_has_ctl`'s arguments, why not `tty_winsize_or`); `cli.cyr` and `emit.cyr` module rows refreshed. **Still stale**: the `png.cyr` row describes the in-repo decoder deleted at v1.2.0, the `quant.cyr` row names the removed `quantize_nearest_image`, and `ascii.cyr` has no row. |
-| `docs/guides/getting-started.md` | 2 | 2026-10-15 (v1.6.1) | Clone URL corrected (`cyrius-kii` → `kii`; the former does not exist). v1.6.0: pin line → 6.7.9, the `image too large to decode` row, the suppressed-path note. |
-| `docs/examples/README.md` | 3 | 2026-05-23 (v1.0.0 close) | **Backfilled at M8(c5).** Index + convention for the examples dir. |
-| `docs/examples/01-ramgon-fixed-width/` | 3 | 2026-08-25 (v1.5.1) | RAMGON.png happy path (RGBA color_type=6). Corrected: `expected.txt` claimed the frame ends with an "implicit" reset and "no trailing escape" — it ends with an explicit `ESC [ 0 m`, which is what protects the prompt. |
-| `docs/examples/02-archlinux-logo-palette/` | 3 | 2026-08-25 (v1.5.1) | Palette PNG (color_type=3). Corrected: the notes described `_extract_rgb` doing the PLTE lookup, which moved into chitra at the v1.2.0 re-fold. |
-| `docs/examples/03-not-a-png-rejection/` | 3 | 2026-08-25 (v1.5.1) | Error-path diagnostic + exit-code contract. Corrected at v1.5.1: `expected.txt` expected `not a PNG`, unemittable since v1.2.0 — running the example's own `run.sh` falsified it. Now re-verified by execution. |
-| `tests/{cli,quant,render,ascii,decode}.tcyr` | 2 | 2026-10-12 (v1.6.0) | **599 assertions** across the 5 split suites (cli 98 / quant 125 / render 188 / ascii 17 / decode 171); v1.6.0 added 49 (strict RFC 3629, the 256-index BG composer sweep, `_kii_term_envelope`, `PNG_ERR_INFLATE_LIMIT`). |
+| `docs/adr/0001-png-decoder-in-repo.md` | 2 | 2026-10-15 (v1.6.4) | **Superseded by ADR 0006** (says so in its header). Historical. |
+| `docs/adr/0002-security-model.md` | 2 | 2026-10-15 (v1.6.4) | Amended at v1.5.1, v1.6.0 and **v1.6.4**: the C1–C4 table's anchors now name current functions (chitra by function and constant, not line); new commitments for the 16 MiB ceiling, the 1M-cell frame cap and the single-open read; the three sankoch CVE items recorded as never filed and now verified to hold. |
+| `docs/adr/0003-color-tier-discipline.md` | 2 | 2026-10-15 (v1.6.4) | Amended at v1.5.1 and **v1.6.4**: tier 2 → 1.8.0 / 1.9.0; the Consequences claim that no emit byte needs a feature under 30 years old is false (tier 1 emits `38;5;N`), resolved at 1.8.0. |
+| `docs/adr/0004-half-block-floor-glyph.md` | 2 | 2026-10-15 (v1.6.4) | **Amended at v1.6.4**: roadmap citation → § 2.0 — open. |
+| `docs/adr/0005-nearest-neighbor-downscale.md` | 2 | 2026-10-15 (v1.6.4) | **Amended at v1.6.4**: tier 2 → 1.9.0; records C-7 (the last source row and column are never sampled) and pixel-centre sampling pinned to 1.9.0. |
+| `docs/adr/0006-adopt-chitra-decoder.md` | 2 | 2026-10-15 (v1.6.4) | The v1.2.0 PNG re-fold (supersedes 0001). **Amended at v1.6.4**: alpha is composited over black (its "alpha is dropped" decision is superseded); quoted messages updated; the read was lseek-sized, now `file_read_whole_max`. |
+| `docs/adr/0007-rendering-mode-taxonomy.md` | 2 | 2026-10-15 (v1.6.4) | The `--mode` lanes. **Amended at v1.6.4**: `emit_ascii_shape`; the cols·2 × rows·3 downscale; the ascii lane quantizes each cell's mean, not via `quantize_downscaled`; shape-vector shipped at v1.3.1. |
+| `docs/architecture/README.md` | 2 | 2026-10-15 (v1.6.4) | Module map redrawn for v1.6.4 (it still drew the pre-v1.2.0 decoder): file read → chitra → adapter → downscale → quantize / emit, plus the ascii lane; the module table lists the v1.6.4 helpers; item 001 cites `STRUCT_*` by name. |
+| `docs/guides/getting-started.md` | 2 | 2026-10-15 (v1.6.4) | Four formats; pin pointer; `/dev/stdin`; the error tables list every decode, post-decode and warning line plus a new exit-2 usage table, each checked against the binary; the orphan fragment and the v1.0 roadmap link fixed. |
+| `docs/examples/README.md` | 3 | 2026-10-15 (v1.6.4) | `cd kii` (was `cd cyrius-kii`). |
+| `docs/examples/01-ramgon-fixed-width/` | 3 | 2026-10-15 (v1.6.4) | Runs and matches (54,353 B, 32 rows). Notes: bench figures current, the time is sankoch's inflate inside chitra. |
+| `docs/examples/02-archlinux-logo-palette/` | 3 | 2026-10-15 (v1.6.4) | Runs and matches. The PLTE lookup is chitra's; the logo is a palette PNG with transparency, so 72 of its 3,200 cells changed at v1.6.4 (alpha over black) — `expected.txt` pins no frame bytes. |
+| `docs/examples/03-not-a-png-rejection/` | 3 | 2026-10-15 (v1.6.4) | Runs and matches. Notes: kii reads the whole file and chitra's sniff refuses it; a <8-byte file prints `unrecognized image format`; ESC is C0. |
+| `tests/{cli,quant,render,ascii,decode}.tcyr` | 2 | 2026-10-15 (v1.6.4) | **709 assertions** (cli 163 / quant 123 / render 198 / ascii 17 / decode 208). v1.6.4 added the width line, the frame cap, `-m`, every decode line per format, IS_DIR, pstruct zeroing, the 256 MB pin, chitra's code space, alpha compositing, and a quantizer reference grid. |
 | `tests/fixtures/oversize.png` | 3 | 2026-10-12 (v1.6.0) | **NEW.** Valid 2370×2370 black RGB PNG (16,447 B; 16,853,070 B inflated), just past sankoch's 16 MiB ceiling; ImageMagick-verified. |
 | `tests/fixtures/{gradient,color}.jpg` | 3 | 2026-06-27 (v1.4.0) | **NEW.** Baseline JPEG fixtures: 16×16 grayscale (chitra's ImageMagick-verified gradient, src ctype 257) + 8×8 YCbCr 4:4:4 (src ctype 259). |
-| `tests/kii.bcyr` | 2 | 2026-05-23 (v1.0.0 close) | **Seven benches**: M4 scalar + M5/M6 end-to-end (3 sizes) + **M7(d) decode-latency matrix (3 source-resolution classes)**. |
-| `tests/kii.fcyr` | 2 | 2026-10-12 (v1.6.0) | **Ten fuzz surfaces at 8,011,000 total iters**: the eight from v1.5.1 plus the path-sanitizer differential against the v1.5.2 walk (1M) and the terminal envelope (1M), run last so the first eight keep their random streams. Any non-zero `bad` now exits 1. |
-| `.github/workflows/ci.yml` | 1 | 2026-05-22 (post-0.2.0) | `workflow_call:` + binary-name fix + version-drift smoke + fuzz step landed. **Still pending**: CHANGELOG-extracted release notes, aarch64 cross-build (tracked in `[Unreleased]` CHANGELOG). |
-| `.github/workflows/release.yml` | 1 | 2026-05-22 (post-0.2.0) | Binary-name fix landed. CHANGELOG-extracted release notes + multi-arch builds pending. |
+| `tests/fixtures/{gradient.bmp,color.gif}` | 3 | 2026-08-24 (v1.5.0) | 16×16 24-bpp BI_RGB ramp and a 16×16 GIF89a with four flat quadrants; both pixel-verified against ImageMagick. |
+| `tests/fixtures/visual-review/` | 3 | 2026-05-23 (v1.0.0 close) | The chafa-comparison fixture set (`docs/audit/chafa-comparison.md`); no test references it. |
+| `tests/kii.bcyr` | 2 | 2026-10-15 (v1.6.4) | **Seven benches**: M4 scalar + end-to-end (3 sizes) + the M7(d) decode-latency matrix (3 classes; the 1024² fixture is absent on the dev host and prints an explicit skip, v1.5.1). Exit via `SYS_EXIT` since v1.6.4. |
+| `tests/kii.fcyr` | 2 | 2026-10-15 (v1.6.4) | **Ten fuzz surfaces, 8,011,000 iterations.** v1.6.4: the geometry surface checks the geometry contract and the frame-cell predicate (an off-by-one fails 999,970 of 1M); the envelope reference follows the 0-row rule; exit via `SYS_EXIT`. |
+| `.github/workflows/ci.yml` | 1 | 2026-08-24 (v1.5.0) | Installs the pinned toolchain from `cyrius.cyml`, `cyrius deps`, build, version-drift check, `cyrius test`, fuzz. **Still pending**: CHANGELOG-extracted release notes, an aarch64 cross-build step, a benchmark build. A comment still calls the repo `cyrius-kii` (cosmetic). |
+| `.github/workflows/release.yml` | 1 | 2026-08-24 (v1.5.0) | Binary-name fix landed. CHANGELOG-extracted release notes + multi-arch builds pending. |
 | `LICENSE` | 1 | 2026-05-22 | GPL-3.0-only header (parity with bannermanor/hapi/etc.). |
 | `.gitignore` | 2 | 2026-05-22 | Standard scaffold. |
 
-## Debt summary at v1.0.0
+## Debt summary at v1.6.4
 
-- **Tier-1 docs**: all fresh. **Carry-forward** from v0.3.0: `release.yml` multi-arch / CHANGELOG-extracted-notes / Sigstore punch list still pending a dedicated CI cycle. **CI doesn't yet run benchmarks** — should be a follow-up step alongside the version-drift + fuzz + test steps already wired.
-- **Tier-2 docs**: all 5 ADRs landed (0001–0005); getting-started + examples backfilled at M8. No tier-2 debt at v1.0.
-- **Fuzz coverage**: 3M+ iters across 5 surfaces clean. No expansion needed at v1.0.
-- **Per-chunk length cap table** (audit Finding 6): LANDED at M8(b2). IEND-length-zero + generic 256 MB per-chunk cap; covers the libpng CVE-2017-12652 class.
-- **W3C PNG test-suite walk**: LANDED at M8(b4). 14/14 broken rejected, 82/162 valid OK, 0 crashes. Audit § Appendix A captures results.
-- **Repo hygiene**: `tests/fixtures/RAMGON.png` (1973 KB) — moved from top level at M8(b1).
+The v1.6.4 P(-1) sweep walked every Tier-1 and Tier-2 doc against the tree and the
+binary ([`audit/2026-10-15-audit.md`](audit/2026-10-15-audit.md) § 3, P-14). It closed
+the debt this ledger carried: ADR 0002's C1–C4 table has current anchors, all three
+examples run and match, CONTRIBUTING no longer describes the retired v1.0 milestone
+roadmap, the v1.1 → v1.4 row reconciliation is done (every row above re-dated), and the
+three sankoch CVE-class items are verified to hold — nothing to file.
 
-### Carried forward to v1.x (NOT v1.0 blockers)
+Still open:
 
-- **Cross-terminal verification**: needs human-eye per-terminal pass (Linux console / xterm / Alacritty / kitty / tmux). v1.0 ships byte-stable; verification can land any time. (chafa visual review CLOSED at v1.0 — see `docs/audit/chafa-comparison.md`.)
-- **Marketplace recipe in zugot**: depends on zugot tooling.
-- **Three sankoch upstream items** (CVE-2004-0797 / 2005-1849 / 2005-2096 class transfers): file as sankoch issues. Pinned to the 1.6.4 P(-1) sweep, which verifies each against sankoch 2.8.7 first.
-- **CI bench step**: build-only would catch bitrot without per-PR timing noise.
-- **P-1 sweep (v1.5.1) closed most of this ledger's debt.** `SECURITY.md`,
-  `CONTRIBUTING.md`, `README.md`, `CLAUDE.md`, `docs/guides/getting-started.md`,
-  `docs/architecture/README.md`, `docs/benchmarks.md` and
-  `docs/development/state.md` were each walked claim-by-claim against the tree and
-  corrected; see [`docs/audit/2026-08-25-audit.md`](audit/2026-08-25-audit.md)
-  § A-11. The stale-claim debt noted below from the v1.5.0 dep audit is **closed**.
-  What remains open is the `docs/examples/` set and ADR 0002's C1–C4 commitment
-  table, whose code anchors moved in the v1.2.0 re-fold.
-- **Ledger reconciliation debt (v1.1 → v1.4)**: this ledger lapsed after the v1.0.0 close — several rows still carry v1.0-era dates/facts (`README.md` Status/Substrate blocks, `benchmarks.md`, `guides/getting-started.md`, `examples/`, `architecture/README.md`, the `0001–0007` ADR rows) that postdate the cmdit re-fold (v1.1), the chitra re-fold (v1.2), and the `--mode ascii` lanes (v1.3). The v1.4.0 cut refreshed only the rows it directly touched (the JPEG wiring). A full walk of every Tier-1/2 row against current reality is owed and tracked here.
+- **CI**: no CHANGELOG-extracted release notes, no aarch64 cross-build step, no
+  benchmark build (build-only would catch bitrot without per-PR timing noise). A
+  `ci.yml` comment still calls the repo `cyrius-kii`.
+- **Cross-terminal verification** and the **zugot marketplace recipe** — both outside
+  kii's control (roadmap § Not scheduled).
+- `docs/examples/03-…/expected.txt` says "~20 distinct error paths"; there are ~32 now.
+  The example still runs and matches.
 
 ## Refresh discipline
 

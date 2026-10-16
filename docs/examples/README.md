@@ -9,9 +9,11 @@ example is a directory with:
 - `notes.md` — what the example demonstrates and why it's
   representative
 
-Every example is run from the kii repo root (`cd cyrius-kii && ./build/kii ...`).
-Captured outputs use kii at v0.8.0+; byte-exact reproduction across
-minor cuts is part of the [v1.0 stable-emit contract](../adr/0003-color-tier-discipline.md).
+Every example is run from the kii repo root (`cd kii && ./build/kii ...`).
+All three were last run against their `expected.txt` at v1.6.4. Byte-exact
+reproduction across minor cuts is part of the [v1.0 stable-emit contract](../adr/0003-color-tier-discipline.md);
+when a release changes emitted bytes on purpose, as v1.6.4 did for
+transparent pixels, the CHANGELOG lists it and the affected example says so.
 
 ## Index
 

@@ -9,9 +9,11 @@
 # ATTRIBUTION: the shape-vector technique (per-cell N-region coverage
 # vectors + nearest-glyph match) is from Alex Harri, "ASCII Art Rendering"
 # — https://alexharri.com/blog/ascii-rendering. kii uses a 6-region (2x3)
-# variant of his idea; the per-glyph coverage table is computed offline
-# from the Liberation-Mono font (scratch gen_shape.py) and normalized to
-# the 0..255 cell-luminance scale. The Euclidean nearest-neighbour and the
+# variant of his idea; the per-glyph coverage table was computed offline
+# from the Liberation-Mono font and normalized to the 0..255 cell-luminance
+# scale. The generator (gen_shape.py) was a scratch script and is NOT in the
+# repo, so the table cannot be regenerated as is; recreating the generator
+# is part of roadmap 1.10.0, which changes the matcher anyway. The Euclidean nearest-neighbour and the
 # Rec.709 luma are standard (no attribution needed). Deferred refinements
 # from the blog (directional contrast enhancement, k-d-tree lookup) are
 # tracked — see docs/development/roadmap.md and ADR 0007.
@@ -34,7 +36,7 @@ fn _ascii_luma(r, g, b): i64 {
     return (54 * r + 183 * g + 19 * b) >> 8;
 }
 
-# === GENERATED (gen_shape.py, Liberation-Mono 24x48) — do not hand-edit ===
+# === GENERATED (gen_shape.py, Liberation-Mono 24x48; generator not in repo) ===
 var ASCII_SHAPE_COUNT = 27;
 var ASCII_SHAPE_GLYPHS[32];
 var ASCII_SHAPE_COV[192];
@@ -241,24 +243,49 @@ fn _ascii_shape_init(): i64 {
 # coverage vector is nearest in squared-Euclidean distance. Ties resolve to
 # the lower index (strict `<`), so glyph 0 (space) wins an all-dark cell.
 # Max distance 6*255^2 ~= 390k — well within i64.
+#
+# P(-1) O-3 (v1.6.4): the 6 region values are loaded once per cell rather
+# than once per glyph, the coverage table is walked by pointer, and a glyph
+# stops being scored once its first three terms already reach best_d. That
+# is exact: the remaining terms are >= 0 and a glyph needs d < best_d to
+# win, so the pick never changes (checked on 20 M vectors against the old
+# body). With O-1 it makes the ASCII lane's emit ~2x faster.
 fn _ascii_match(v): i64 {
-    _ascii_shape_init();
+    if (_ascii_shape_inited == 0) { _ascii_shape_init(); }
+    var v0 = load8(v);
+    var v1 = load8(v + 1);
+    var v2 = load8(v + 2);
+    var v3 = load8(v + 3);
+    var v4 = load8(v + 4);
+    var v5 = load8(v + 5);
+    # Seed with glyph 0 so the loop body needs no sentinel.
+    var cp = &ASCII_SHAPE_COV;
+    var e = v0 - load64(cp);
+    var best_d = e * e;
+    e = v1 - load64(cp + 8);  best_d = best_d + e * e;
+    e = v2 - load64(cp + 16); best_d = best_d + e * e;
+    e = v3 - load64(cp + 24); best_d = best_d + e * e;
+    e = v4 - load64(cp + 32); best_d = best_d + e * e;
+    e = v5 - load64(cp + 40); best_d = best_d + e * e;
     var best_g = 0;
-    var best_d = 0 - 1;
-    var g = 0;
+    var g = 1;
+    cp = cp + 48;
     while (g < ASCII_SHAPE_COUNT) {
-        var d = 0;
-        var r = 0;
-        while (r < 6) {
-            var diff = load8(v + r) - load64(&ASCII_SHAPE_COV + (g * 6 + r) * 8);
-            d = d + diff * diff;
-            r = r + 1;
-        }
-        if (best_d < 0 || d < best_d) {
-            best_d = d;
-            best_g = g;
+        e = v0 - load64(cp);
+        var d = e * e;
+        e = v1 - load64(cp + 8);  d = d + e * e;
+        e = v2 - load64(cp + 16); d = d + e * e;
+        if (d < best_d) {
+            e = v3 - load64(cp + 24); d = d + e * e;
+            e = v4 - load64(cp + 32); d = d + e * e;
+            e = v5 - load64(cp + 40); d = d + e * e;
+            if (d < best_d) {
+                best_d = d;
+                best_g = g;
+            }
         }
         g = g + 1;
+        cp = cp + 48;
     }
     return load64(&ASCII_SHAPE_GLYPHS + best_g * 8);
 }
@@ -270,29 +297,30 @@ fn _ascii_match(v): i64 {
 # mean quantized color. Returns the new pos, or -1. (Buffer-targeting so
 # tests can assert the exact bytes — same split as emit_halfblock_row_buf.)
 fn emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, buf, pos): i64 {
+    # The three sub-sample rows of this character row are fixed for the whole
+    # row, so their base is computed once (O-3). The 6 samples are visited in
+    # region order r0c0 r0c1 r1c0 r1c1 r2c0 r2c1: step right after an even k,
+    # down-and-left after an odd one.
+    var stride = sub_w * 3;
+    var r0 = rgb + (cy * 3) * stride;
+    var vec[6];
     var cx = 0;
     while (cx < cols) {
-        var vec[6];
         var sumr = 0;
         var sumg = 0;
         var sumb = 0;
-        var rr = 0;
-        while (rr < 3) {
-            var cc = 0;
-            while (cc < 2) {
-                var sx = cx * 2 + cc;
-                var sy = cy * 3 + rr;
-                var o = rgb + (sy * sub_w + sx) * 3;
-                var pr = load8(o + 0);
-                var pg = load8(o + 1);
-                var pb = load8(o + 2);
-                store8(&vec + (rr * 2 + cc), _ascii_luma(pr, pg, pb));
-                sumr = sumr + pr;
-                sumg = sumg + pg;
-                sumb = sumb + pb;
-                cc = cc + 1;
-            }
-            rr = rr + 1;
+        var rp = r0 + cx * 6;
+        var k = 0;
+        while (k < 6) {
+            var pr = load8(rp + 0);
+            var pg = load8(rp + 1);
+            var pb = load8(rp + 2);
+            store8(&vec + k, _ascii_luma(pr, pg, pb));
+            sumr = sumr + pr;
+            sumg = sumg + pg;
+            sumb = sumb + pb;
+            if (k % 2 == 0) { rp = rp + 3; } else { rp = rp - 3 + stride; }
+            k = k + 1;
         }
         var glyph = _ascii_match(&vec);
         var fg = quantize_nearest_rgb(sumr / 6, sumg / 6, sumb / 6);
@@ -311,8 +339,8 @@ fn emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, buf, pos): i64 {
 
 # emit_ascii_shape — render the full frame to fd 1 (stdout). Reads
 # STRUCT_DOWNSCALED_* (the finer (cols*2 x rows*3) RGB buffer main.cyr
-# produces for ASCII mode). Returns 0, or -1 if downscale wasn't run / dims
-# invalid. Per-row heap buffer sized from cols (no fixed-stack overflow —
+# produces for ASCII mode). Returns 0, -1 if downscale wasn't run / dims
+# invalid, or -2 if a write to stdout failed. Per-row heap buffer sized from cols (no fixed-stack overflow —
 # the v1.2.1 lesson): each cell is <=11 B fg + 1 glyph, + per-row reset/LF.
 fn emit_ascii_shape(pstruct): i64 {
     var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);

@@ -1,7 +1,7 @@
 # kii — top-level test entry (referenced by cyrius.cyml [build].test).
-# For unit tests, prefer adding cases to tests/kii.tcyr.
-
-include "lib/syscalls.cyr"
+# The unit tests live in the split suites tests/{cli,quant,render,ascii,
+# decode}.tcyr, which `cyrius test` discovers on its own; add cases there.
+# Stdlib resolves from cyrius.cyml, so nothing is included here.
 
 fn main() {
     return 0;

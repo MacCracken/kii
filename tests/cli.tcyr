@@ -230,6 +230,56 @@ fn main() {
     assert_eq(cmdit_parse_argv(fs17, 2, &argv17), CMDIT_RESULT_ERR, "--bogus rejected");
     assert_eq(kii_err_flag_name(fs17), 0, "UNKNOWN names no flag");
 
+    # ---- v1.6.4 — the --width check and the frame-size cap ------------
+    # P(-1): `--width -5` used to mean "fit the terminal" and exit 0, and a
+    # narrow image at an ordinary --width produced gigabytes (S-1).
+    test_group("v1.6.4 — kii_width_error_line");
+    assert_eq(kii_width_error_line(0), 0, "0 (fit the terminal) is fine");
+    assert_eq(kii_width_error_line(1), 0, "1 is fine");
+    assert_eq(kii_width_error_line(KII_MAX_COLS), 0, "the maximum itself is fine");
+    assert_eq(KII_MAX_COLS, 100000, "KII_MAX_COLS is the 100000 the message quotes");
+    assert_streq(kii_width_error_line(KII_MAX_COLS + 1),
+      "kii: --width exceeds the maximum of 100000 columns\n", "past the maximum");
+    assert_streq(kii_width_error_line(0 - 5),
+      "kii: --width must not be negative (0 = fit the terminal)\n", "-5 is refused");
+    assert_streq(kii_width_error_line(0 - 100000000000),
+      "kii: --width must not be negative (0 = fit the terminal)\n", "a huge negative is refused");
+
+    test_group("v1.6.4 — kii_frame_cells_ok bounds the frame");
+    assert_eq(KII_MAX_CELLS, 1048576, "KII_MAX_CELLS is the 1048576 main's message quotes");
+    assert_eq(kii_frame_cells_ok(80, 24), 1, "80x24 is fine");
+    assert_eq(kii_frame_cells_ok(1024, 1024), 1, "1024x1024 is exactly the cap");
+    assert_eq(kii_frame_cells_ok(1024, 1025), 0, "one row past the cap is refused");
+    assert_eq(kii_frame_cells_ok(1048576, 1), 1, "a 1-row frame of the full cap");
+    assert_eq(kii_frame_cells_ok(1048577, 1), 0, "wider than the cap is refused");
+    # The same image at --width 8: 262,140 rows x 8 = 2,097,120 cells.
+    assert_eq(kii_frame_cells_ok(8, 262140), 0, "1x65535 at --width 8 is refused too");
+    # The S-1 reproduction: a 1x65535 image at --width 80 asks for
+    # 65535 * 80 / 2 = 2,621,400 rows.
+    assert_eq(kii_frame_cells_ok(80, 2621400), 0, "1x65535 at --width 80 is refused");
+    assert_eq(kii_frame_cells_ok(0, 5), 0, "0 columns is refused");
+    assert_eq(kii_frame_cells_ok(5, 0), 0, "0 rows is refused");
+    assert_eq(kii_frame_cells_ok(4611686018427387904, 4611686018427387904), 0,
+      "no overflow at 2^62 x 2^62");
+
+    test_group("v1.6.4 — --mode / -m parse and default");
+    var fs18 = cmdit_new("kii");
+    kii_register_flags(fs18);
+    var argv18[32];
+    store64(&argv18 + 0,  "kii");
+    store64(&argv18 + 8,  "-m");
+    store64(&argv18 + 16, "ascii");
+    store64(&argv18 + 24, "img.png");
+    assert_eq(cmdit_parse_argv(fs18, 4, &argv18), CMDIT_OK, "-m ascii parses");
+    assert_streq(cmdit_get_str(fs18, KII_F_MODE), "ascii", "-m ascii → ascii");
+    var fs19 = cmdit_new("kii");
+    kii_register_flags(fs19);
+    var argv19[16];
+    store64(&argv19 + 0, "kii");
+    store64(&argv19 + 8, "img.png");
+    assert_eq(cmdit_parse_argv(fs19, 2, &argv19), CMDIT_OK, "no --mode parses");
+    assert_streq(cmdit_get_str(fs19, KII_F_MODE), "halfblock", "--mode defaults to halfblock");
+
     # ---- v1.6.2 — kii_parse_error_line: the exact stderr bytes --------
     # The four pre-1.6.2 lines are byte-identical to what main printed
     # inline through v1.6.1.
@@ -238,7 +288,7 @@ fn main() {
     assert_streq(kii_parse_error_line(CMDIT_ERR_MISSING_VALUE), "kii: flag missing value\n", "MISSING_VALUE");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_INT), "kii: bad integer value\n", "BAD_INT");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BUNDLED),
-                 "kii: bundled short flags not supported (use -x -y, not -xy)\n", "BUNDLED");
+                 "kii: short flags take no attached value and cannot be bundled (use -w 40 -v, not -w40 or -wv)\n", "BUNDLED");
     assert_streq(kii_parse_error_line(CMDIT_ERR_UNEXPECTED_VALUE), "kii: flag takes no value\n",
                  "UNEXPECTED_VALUE fallback (no flag named)");
     assert_streq(kii_parse_error_line(CMDIT_ERR_NOMEM), "kii: out of memory\n", "NOMEM");
@@ -407,4 +457,4 @@ fn main() {
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+syscall(SYS_EXIT, exit_code);

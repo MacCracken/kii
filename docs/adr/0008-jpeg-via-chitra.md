@@ -105,3 +105,13 @@ tight, byte-identical-verifiable change.
 - **Map unsupported JPEG modes onto the existing `PNG_ERR_BITDEPTH`.** Rejected: that
   path's message cites "PNG §11.2.2," which is wrong for a progressive/arithmetic/12-bit
   JPEG. A distinct `PNG_ERR_UNSUPPORTED` keeps the diagnostic honest.
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**. One correction from the v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)): § Validation posture lists
+"the 256 MB pre-read file cap". Since v1.6.4 there is no size check ahead of the read. kii
+reads the file once with the stdlib's `file_read_whole_max`, which stops at
+`KII_MAX_RAW_BYTES` (256 MB, defined as chitra's `CHITRA_MAX_RAW_BYTES`) and reports
+`file exceeds size ceiling (max 256 MB)`. The cap still applies to every format before any
+decode starts.

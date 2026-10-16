@@ -35,10 +35,28 @@
 
 include "src/png.cyr"
 
+# Composite one channel byte over black: c * a / 255, rounded. Exact at the
+# ends: a = 255 returns c unchanged (so opaque images render byte-identically)
+# and a = 0 returns 0.
+#
+# P(-1) (v1.6.4): kii used to DROP alpha, so a fully transparent pixel
+# rendered whatever RGB it happened to store. chitra gives a GIF's
+# transparent index alpha 0 but keeps its palette colour, so a GIF whose
+# transparent entry is magenta drew magenta where the image is empty; a PNG
+# icon storing rgba(255,255,255,0) drew white. Black is the tier-1 BBS
+# background. Real transparency (the terminal's default background) needs
+# emit-side work and is on the roadmap.
+fn _over_black(c, a): i64 {
+    return (c * a + 127) / 255;
+}
+
 # Per-color_type RGB extraction for ONE source pixel at (sx, sy).
 # Writes the R/G/B byte values into out_buf[0..3]. Returns 0 on
-# success, -1 on bad color_type / missing PLTE. Mirrors quant.cyr's
-# inline dispatch but writes RGB instead of a palette index.
+# success, -1 on bad color_type / missing PLTE. Alpha types are
+# composited over black (_over_black). Since the v1.2.0 re-fold the
+# adapter always hands over depth-8 RGBA, which downscale_to_rgb reads on
+# its own fast path; this general form is reached by 16-bit RGBA and by
+# tests. Trimming it to RGBA is part of the 1.7.0 rename.
 #
 # bit_depth handling: bps = bit_depth / 8 (1 or 2 bytes per sample);
 # we always read the HIGH byte at depth=16 (truncation — full-
@@ -82,18 +100,20 @@ fn _extract_rgb(pixels, sx, sy, width, color_type, bps, plte_buf, plte_size, out
         return 0;
     }
     if (color_type == 4) {
-        # Greyscale + alpha: grey sample (drop alpha).
-        var v = load8(pixels + pix_off);
+        # Greyscale + alpha: grey sample, composited over black.
+        var ga = load8(pixels + pix_off + 1 * bps);
+        var v = _over_black(load8(pixels + pix_off), ga);
         store8(out_buf + 0, v);
         store8(out_buf + 1, v);
         store8(out_buf + 2, v);
         return 0;
     }
     if (color_type == 6) {
-        # RGBA: take R, G, B and drop alpha.
-        store8(out_buf + 0, load8(pixels + pix_off + 0 * bps));
-        store8(out_buf + 1, load8(pixels + pix_off + 1 * bps));
-        store8(out_buf + 2, load8(pixels + pix_off + 2 * bps));
+        # RGBA: R, G, B composited over black by A.
+        var a = load8(pixels + pix_off + 3 * bps);
+        store8(out_buf + 0, _over_black(load8(pixels + pix_off + 0 * bps), a));
+        store8(out_buf + 1, _over_black(load8(pixels + pix_off + 1 * bps), a));
+        store8(out_buf + 2, _over_black(load8(pixels + pix_off + 2 * bps), a));
         return 0;
     }
     return 0 - 1;
@@ -103,7 +123,7 @@ fn _extract_rgb(pixels, sx, sy, width, color_type, bps, plte_buf, plte_size, out
 # buffer of size dst_w × dst_h × 3 bytes. Stores ptr + dimensions
 # into pstruct's STRUCT_DOWNSCALED_*_OFFSET slots. Returns 0 on
 # success, -1 on:
-#   - png_decode_pixels not yet run (STRUCT_PIXELS_BUF_OFFSET == 0)
+#   - no decoded pixels yet (STRUCT_PIXELS_BUF_OFFSET == 0)
 #   - bad color_type
 #   - PLTE missing for color_type=3
 #   - dst_w / dst_h <= 0
@@ -115,9 +135,9 @@ fn _extract_rgb(pixels, sx, sy, width, color_type, bps, plte_buf, plte_size, out
 # tier-1 pixel-art aesthetic for small input images.
 #
 # Time complexity: O(dst_w × dst_h) — independent of source size.
-# RAMGON-to-80×48 is 3840 _extract_rgb calls + 3840 stores, sub-
-# millisecond on warm cache. The quantizer (per quant.cyr bench)
-# is 274 ns/op so 80×48 quantize is ~1 ms. Emit dwarfs both.
+# RAMGON-to-80×48 is ~0.1 ms; at v1.6.4 kii's whole share of a
+# RAMGON render (downscale + quantize + emit) is under 1 %, the rest
+# being chitra's decode (docs/benchmarks.md).
 fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     if (dst_w <= 0 || dst_h <= 0) { return 0 - 1; }
 
@@ -157,6 +177,41 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     var out_bytes = dst_w * dst_h * 3;
     var out_buf = alloc(out_bytes);
     if (out_buf == 0) { return 0 - 1; }
+
+    # The live path (P(-1) O-4, v1.6.4). The chitra adapter always hands over
+    # depth-8 RGBA, so read R, G, B straight off the source row: no per-pixel
+    # _extract_rgb call, channel lookup or color_type dispatch, ~4x faster.
+    # Same sx / sy formulas as the general loop below, and the same
+    # composite over black, so the bytes match it exactly.
+    if (color_type == 6 && bps == 1) {
+        var fdy = 0;
+        var op = out_buf;
+        while (fdy < dst_h) {
+            var fsy = (fdy * src_h) / dst_h;
+            var rowp = pixels + fsy * src_w * 4;
+            var fdx = 0;
+            while (fdx < dst_w) {
+                var sp = rowp + ((fdx * src_w) / dst_w) * 4;
+                var fa = load8(sp + 3);
+                if (fa == 255) {
+                    store8(op, load8(sp));
+                    store8(op + 1, load8(sp + 1));
+                    store8(op + 2, load8(sp + 2));
+                } else {
+                    store8(op, _over_black(load8(sp), fa));
+                    store8(op + 1, _over_black(load8(sp + 1), fa));
+                    store8(op + 2, _over_black(load8(sp + 2), fa));
+                }
+                op = op + 3;
+                fdx = fdx + 1;
+            }
+            fdy = fdy + 1;
+        }
+        store64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET, out_buf);
+        store64(pstruct + STRUCT_DOWNSCALED_W_OFFSET,   dst_w);
+        store64(pstruct + STRUCT_DOWNSCALED_H_OFFSET,   dst_h);
+        return 0;
+    }
 
     var dy = 0;
     while (dy < dst_h) {

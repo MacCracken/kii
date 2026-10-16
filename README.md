@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.6.3** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v1.6.4** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to the 8- or 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
@@ -55,6 +55,11 @@ shared substrate, which is the point:
 - **v1.6.3** — cyrius 6.7.12 and chitra 1.2.0. Rendering is about 3.5× faster with
   byte-identical output, because the stdlib's sankoch replaced the Huffman decode path that
   dominated every render.
+- **v1.6.4** — a P(-1) audit sweep. A 392-byte GIF that `--width 80` turned into ~4.4 GB of
+  ANSI is now stopped by a 1,048,576-cell frame cap. Pipes, `/dev/stdin` and directories are
+  read correctly, transparent pixels render black instead of their hidden colour, and small
+  images render about 2× faster at wide output; every opaque frame is byte-identical.
+  ([full report](docs/audit/2026-10-15-audit.md))
 
 ### Supported input formats
 
@@ -80,7 +85,7 @@ kii [OPTIONS] <image>
 
 | Flag | Default | What it does |
 |---|---|---|
-| `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000. |
+| `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000; negative values are refused. |
 | `-c, --color <N>` | `16` | Colour tier: `16` uses the full ANSI palette, `8` restricts to the normal-intensity half. |
 | `-m, --mode <M>` | `halfblock` | `halfblock` emits `▀` cells at double vertical resolution; `ascii` emits text glyphs chosen by shape. |
 | `-v, --verbose` | off | Print a dimensions/format summary to **stderr** after the frame. |
@@ -97,6 +102,10 @@ kii image.png > frame.ansi         # pure ANSI on stdout; diagnostics stay on st
 
 The frame goes to **stdout** and every diagnostic to **stderr**, so `kii img.png | …`
 pipes clean. Exit codes: `0` success, `1` runtime failure, `2` usage error.
+
+To read an image from a pipe, name it as a path: `cat img.png | kii /dev/stdin` (or
+`kii <(…)`). A frame over 1,048,576 character cells is refused with
+`frame too large (…); use a smaller --width`.
 
 Two conditions render a frame *and* warn on stderr, exiting `0`: a PNG with no `IEND`,
 and a truncated JPEG or GIF (the partial frame is what decoded).
@@ -143,13 +152,14 @@ cyrius build src/main.cyr build/kii   # compile
 ./build/kii image.png                 # quantize a PNG
 ```
 
-Toolchain pin: `cyrius = "6.5.35"` (in [`cyrius.cyml`](cyrius.cyml)).
+Toolchain pin: the `cyrius = "…"` line in [`cyrius.cyml`](cyrius.cyml) is the source of
+truth, so read it there.
 
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 550 assertions across 5 suites (cli/quant/render/ascii/decode)
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 8 fuzz surfaces, 6,011,000 iters (arg/path/geom/emit/PNG/JPEG/BMP/GIF)
+cyrius test                           # 709 assertions across 5 suites (cli/quant/render/ascii/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 10 fuzz surfaces, 8,011,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF)
 cyrius bench tests/kii.bcyr                                     # 7 benches (quantize, end-to-end, decode-latency)
 ```
 

@@ -37,8 +37,8 @@
 # Determinism: fixed seed (1) + Numerical Recipes LCG. Same byte
 # sequences every CI run; failures bisect cleanly.
 #
-# Stdlib + flags + cli.cyr + png.cyr auto-included via cyrius.cyml
-# + the includes below.
+# Stdlib and the cmdit / darshana / chitra bundles auto-resolve from
+# cyrius.cyml; the project modules come from the includes below.
 
 include "src/cli.cyr"
 include "src/png.cyr"
@@ -343,8 +343,11 @@ fn fuzz_path_diff_iter(buf, cap): i64 {
 # random winsize answers — many of them 0, 1 or half-set, which is where the
 # v1.5.1 A-8 defect lived. Invariants: a failed detection is 0 x 0; each
 # dimension is used iff it is > 0, rows less the prompt row (a 1-row
-# terminal keeps 1); and the resulting frame is never wider than a measured
-# column count or taller than the envelope's rows.
+# terminal keeps 1); a measured TTY reporting 0 rows gets the default less
+# the prompt row (v1.6.4, C-8 — this surface failed 83,256 of 1M iterations
+# against the new rule until its reference was updated, which is the
+# surface doing its job); and the resulting frame is never wider than a
+# measured column count or taller than the envelope's rows.
 fn _fz_dim(): i64 {
     if (_fuzz_rand() % 3 == 0) { return _fuzz_rand() % 4; }
     return _fuzz_rand() % 65536;
@@ -366,6 +369,7 @@ fn fuzz_envelope_iter(): i64 {
         if (cols > 0) { want_c = cols; }
         if (rows > 1) { want_r = rows - 1; }
         if (rows == 1) { want_r = 1; }
+        if (rows == 0) { want_r = EMIT_DEFAULT_ROWS - 1; }
     }
     if (fc != want_c || fr != want_r) { return 0 - 1; }
     var dw = 0;
@@ -383,26 +387,60 @@ fn fuzz_envelope_iter(): i64 {
 # ---- M7(b) geometry fuzz surface -----------------------------------
 # Random (src_w, src_h, max_cols, max_rows) inputs to the M6 geometry
 # helpers. Drive both _kii_compute_target_geometry (--width N path)
-# and _kii_compute_fit_geometry (terminal-fit path). Contract: both
-# return 0 (success) or -1 (clean rejection); never crash on
-# adversarial input including 0s, very large values, and asymmetric
-# aspect ratios. The fuzz inputs are bounded to [0, 65535] for each
-# field — large enough to exercise overflow paths, small enough to
-# fit in the i64 multiplications without wrapping (which would be a
-# separate finding, not a geometry bug).
+# and _kii_compute_fit_geometry (terminal-fit path), plus the v1.6.4
+# frame-size predicate main applies to their output. The fuzz inputs
+# are bounded to [0, 65535] for each field — large enough to exercise
+# overflow paths, small enough to fit in the i64 multiplications
+# without wrapping.
+#
+# P(-1) (v1.6.4): through v1.6.3 this checked only that each helper
+# returned 0 or -1, which are the only values either can return, so the
+# surface could fail only by crashing. It now checks the contract:
+#   - each helper succeeds exactly when the source has both dimensions;
+#   - the --width path is exactly `width` columns (80 when 0) and
+#     max(1, src_h * cols / (src_w * 2)) character rows, as an even
+#     source-row count;
+#   - the fit path stays inside its envelope (0 = the 80 x 24 default);
+#   - kii_frame_cells_ok agrees with the plain product against KII_MAX_CELLS.
+# It draws the same five random numbers per iteration as before, so the
+# surfaces after it see the random stream they always did.
 fn fuzz_geom_iter(): i64 {
     var src_w    = _fuzz_rand() % 65536;
     var src_h    = _fuzz_rand() % 65536;
     var max_cols = _fuzz_rand() % 65536;
     var max_rows = _fuzz_rand() % 65536;
     var width_n  = _fuzz_rand() % 65536;
+    var has_src = 0;
+    if (src_w > 0 && src_h > 0) { has_src = 1; }
 
     var out_w  = 0;
     var out_sr = 0;
     var rc1 = _kii_compute_target_geometry(src_w, src_h, width_n, &out_w, &out_sr);
-    if (rc1 != 0 && rc1 != (0 - 1)) { return 0 - 1; }
+    if (has_src == 0) { if (rc1 != 0 - 1) { return 0 - 1; } }
+    else {
+        if (rc1 != 0) { return 0 - 1; }
+        var want_c = width_n;
+        if (want_c == 0) { want_c = EMIT_DEFAULT_COLS; }
+        var want_r = (src_h * want_c) / (src_w * 2);
+        if (want_r < 1) { want_r = 1; }
+        if (out_w != want_c) { return 0 - 1; }
+        if (out_sr != want_r * 2) { return 0 - 1; }
+        var cells_ok = 0;
+        if (out_w * want_r <= KII_MAX_CELLS) { cells_ok = 1; }
+        if (kii_frame_cells_ok(out_w, out_sr / 2) != cells_ok) { return 0 - 1; }
+    }
+
     var rc2 = _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, &out_w, &out_sr);
-    if (rc2 != 0 && rc2 != (0 - 1)) { return 0 - 1; }
+    if (has_src == 0) { if (rc2 != 0 - 1) { return 0 - 1; } }
+    else {
+        if (rc2 != 0) { return 0 - 1; }
+        var cap_c = max_cols;
+        if (cap_c == 0) { cap_c = EMIT_DEFAULT_COLS; }
+        var cap_r = max_rows;
+        if (cap_r == 0) { cap_r = EMIT_DEFAULT_ROWS; }
+        if (out_w < 1 || out_w > cap_c) { return 0 - 1; }
+        if (out_sr < 2 || out_sr % 2 != 0 || out_sr / 2 > cap_r) { return 0 - 1; }
+    }
     return 0;
 }
 
@@ -796,4 +834,4 @@ fn main(): i64 {
 }
 
 var r = main();
-syscall(60, r);
+syscall(SYS_EXIT, r);

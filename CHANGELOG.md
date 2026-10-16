@@ -4,6 +4,146 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-15
+
+**The P(-1) sweep.** Five audit lenses — correctness, security, refactor,
+optimization, docs — plus a verification of the three zlib CVE-class transfers
+ran over v1.6.3. Every material finding went to an independent refuter. Full
+report: [`docs/audit/2026-10-15-audit.md`](docs/audit/2026-10-15-audit.md).
+
+- **Found:** 56 findings. Repaired with regression tests: 1 MEDIUM, 9 LOW and
+  1 INFO. Also fixed: code health and ~30 doc corrections.
+- **Changed:** 9 findings deferred, each to a pinned roadmap version; 3
+  byte-identical optimizations adopted; 2 hypotheses refuted.
+- **CVE classes:** all three hold against the linked sankoch 2.8.7, so nothing
+  is filed.
+- **Output:** every opaque image renders byte-identically to v1.6.3. That covers
+  130 standard cases and 466 system images. What changed:
+  - transparent images (below);
+  - the new and reworded diagnostics;
+  - two `--help` lines.
+- **Tests:** **709 assertions** (was 642) pass on x86_64 and under
+  `cyrius test --aarch64`. **8,011,000 fuzz iterations** are all clean.
+
+### Security
+- **A small image could produce gigabytes of output** (MEDIUM). `--width N`
+  derives the row count from the image's aspect, and nothing limited it. A
+  392-byte 1×65535 GIF at `--width 80` asked for 2.6 million rows: about 4.4 GB
+  of ANSI after minutes at 1.6 GB RSS. New `KII_MAX_CELLS` (1,048,576 character
+  cells) is checked after geometry on both lanes. Past it, kii prints
+  `<path>: frame too large (over 1048576 cells); use a smaller --width` and exits
+  1. Ordinary sizes are unaffected: `--width 1000` of a square image is 500,000
+  cells.
+
+### Fixed
+- **Pipes, `/dev/stdin`, process substitution and FIFOs now render; a directory
+  says so.** kii measured the file with `lseek`, then opened it a second time to
+  read it. That broke three things:
+  - a pipe printed "cannot open file";
+  - an ext4 directory printed "file exceeds size ceiling (max 256 MB)";
+  - the path could change between the size check and the read.
+
+  kii now reads with the stdlib's `file_read_whole_max`: one open, read to EOF,
+  capped at 256 MB. A directory prints `is a directory, not an image file`
+  (new `PNG_ERR_IS_DIR`, 18). `cat image.png | kii /dev/stdin` works.
+- ⚠ **Transparent pixels render black instead of their hidden colour.** kii
+  dropped alpha, which ADR 0006 had recorded as deliberate. So a GIF whose
+  transparent palette entry is magenta drew magenta where the image is empty,
+  and a PNG storing `rgba(255,255,255,0)` drew white. Alpha is now composited
+  over black as `(c·a + 127) / 255`. At alpha 255 that is exactly `c`, so
+  opaque images are byte-identical. Of 466 system images, the 325 whose output
+  changed are all transparent. Real transparency (the terminal's default
+  background) is pinned to 1.8.0.
+- **GIF errors named a PNG chunk.**
+  - A corrupt LZW stream printed `DEFLATE decompression failed (corrupt IDAT)`.
+    It now prints `corrupt GIF image data (bad LZW stream)`.
+  - A GIF with no image printed `no IDAT chunks`. It now prints
+    `no image in GIF (no image descriptor)`.
+  - The incomplete-frame warning said "tail zero-filled". chitra actually fills
+    the tail with palette entry 0. It now says `(image data ran out; the rest is
+    drawn in palette colour 0)`.
+- **A zero width or height** printed "image dimensions exceed policy ceiling".
+  It now prints `image dimensions are zero or past the policy ceiling (…)`.
+- **BMP features named none of the causes.** An OS/2 Huffman or `BI_CMYK` BMP
+  printed "unsupported BMP feature (bit depth, BI_JPEG/BI_PNG compression, …)".
+  It now prints `(bit depth, compression method, or channel mask)`.
+- **A negative `--width`** (`-5`, `=-5`, `-w -5`) silently meant "fit the
+  terminal". It now prints `kii: --width must not be negative (0 = fit the
+  terminal)` and exits 2.
+- **`--verbose` said "→ 16-color" under `--color 8`.** It prints the active tier
+  now.
+- **A terminal reporting 0 rows got no row for the prompt.** That is how a serial
+  line or a telnet session without size negotiation looks. kii drew 24 rows and
+  the top one scrolled off a 24-row screen. It now draws 23, as a measured
+  24-row terminal gets. Output to a pipe is unchanged.
+- **The short-flag error gave the wrong advice.** `-w5` and `-v=1` were told to
+  "use -x -y, not -xy". The message is now `kii: short flags take no attached
+  value and cannot be bundled (use -w 40 -v, not -w40 or -wv)`. In `--help`,
+  `--mode` no longer says "(default)" twice, and an example no longer claims
+  "(80x24)".
+- **The pstruct is zeroed before decode.** `main`'s `var pstruct[160]` is
+  uninitialized stack, which made the "has this stage run?" checks in quantize
+  and emit dead code. There was no production impact, because every slot was
+  written before it was read.
+- **No raw syscall numbers remain.** `SYS_EXIT` replaces `syscall(60, …)` in the
+  seven test, fuzz and bench entry points, and `sys_write` replaces five
+  `syscall(1, …)` writes in `src/`.
+- **The geometry fuzz surface could only fail by crashing.** It now checks the
+  geometry contract. A one-off row error fails 999,970 of 1M iterations.
+
+### Changed
+- **Faster on small images.** None of these changes the output.
+  - `quantize_nearest_rgb` reads the palette inline: ~4×, with all 2²⁴ RGB
+    values identical at both tiers.
+  - The ASCII matcher stops scoring a glyph once it cannot win (an exact early
+    exit): ~2×.
+  - RGBA downscale has a fast path.
+
+  A 256² icon at `--width 200` renders in 7.7 ms (was 16.7). Large PNGs do not
+  move, because their time is chitra's inflate (`docs/benchmarks.md` § v1.6.4).
+- **The decode diagnostics are testable.** They moved out of `main` into
+  `kii_decode_error_text` and `kii_incomplete_warning_text` (`src/png.cyr`).
+  The `--width` checks moved into `kii_width_error_line` (`src/cli.cyr`).
+  `KII_MAX_RAW_BYTES` is now chitra's `CHITRA_MAX_RAW_BYTES`; both are 256 MB.
+- **Binary sizes.** `build/kii` is 999,328 → 999,656 bytes and `--agnos`
+  1,013,568 → 1,013,904. `--aarch64` is 1,171,128 → 1,236,984, but 64 KiB of
+  that is segment-alignment padding: the text grew 2,280 bytes and crossed a
+  64 KiB boundary.
+
+### Verified
+- **The three zlib CVE classes hold** against sankoch 2.8.7: CVE-2004-0797,
+  -2005-1849 and -2005-2096. They were recorded in 2026-05 as "to file
+  upstream" and never were.
+  - The streams tried: 95 hand-built streams, 73,806 truncations, 300,000
+    mutants and 100,000 random dynamic headers.
+  - They ran under poison redzones against zlib as the reference.
+  - The result: 0 crashes, 0 overruns, 0 verdict disagreements.
+
+### Tests
+- **67 assertions** (642 → 709):
+  - cli 141 → 163: the width line, the frame cap, `-m`.
+  - decode 171 → 208: every decode line per format, a directory → IS_DIR, pstruct
+    zeroing, the 256 MB pin, chitra's code space pinned at 35.
+  - render 188 → 198: alpha compositing on both paths.
+  - quant 125 → 123: the dead `_color_dist2` group became a 4,096-colour grid
+    check against the old quantizer body, at both tiers.
+- Labels fixed: a false "JPEG seen_iend forced 1", a stale comment, and a
+  duplicated assertion.
+
+### Documentation
+- **Corrected against the tree:** README, SECURITY, CONTRIBUTING, the
+  getting-started guide, the architecture map, ADRs 0002–0009 (as amendments),
+  the examples, and the doc-health ledger.
+  - The getting-started guide's error table now lists every message, including
+    the exit-2 usage lines.
+  - The architecture map no longer draws the pre-v1.2.0 decoder.
+- **Roadmap:** the 1.6.4 section is gone. The deferred findings joined their
+  pinned versions:
+  - 1.7.0: dead decoder branches, the shared emit loop, cmdit range/enum.
+  - 1.8.0: true 16-colour SGR codes, SGR elision, real transparency.
+  - 1.9.0: pixel-centre sampling.
+  - 1.10.0: the missing glyph-table generator.
+
 ## [1.6.3] - 2026-10-15
 
 **Toolchain `6.7.9` → `6.7.12` and `[deps.chitra]` `1.1.3` → `1.2.0`. Renders about 3.5×

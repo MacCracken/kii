@@ -19,18 +19,6 @@
 include "src/palette.cyr"
 include "src/png.cyr"
 
-# Squared Euclidean distance in RGB space between two color
-# triples. Skips the sqrt — for minimum-finding we only need
-# the ordering, which sqrt preserves. Max value at full RGB
-# spread: 3 × 255² = 195,075 — fits comfortably in i64 with
-# no overflow concern.
-fn _color_dist2(r1, g1, b1, r2, g2, b2): i64 {
-    var dr = r1 - r2;
-    var dg = g1 - g2;
-    var db = b1 - b2;
-    return dr * dr + dg * dg + db * db;
-}
-
 # ---- active colour tier -------------------------------------------
 # How many palette entries quantize_nearest_rgb is allowed to choose
 # from: 16 (default) or 8. P-1 (v1.5.1) — `--color 8` was parsed and
@@ -66,25 +54,38 @@ fn quant_tier(): i64 { return _quant_tier; }
 # [0, quant_tier()). Ties resolved by lowest index because
 # the loop's `<` (not `<=`) rejects equal-distance challengers.
 # Caller passes raw byte channel values (0..255).
+#
+# P(-1) O-1 (v1.6.4): the palette bytes are read straight off the packed
+# table and the distance is computed inline. The old body made 65 calls per
+# pixel (palette_init, 48 palette_r/g/b accessors that each re-checked
+# initialisation, 16 _color_dist2), about 300 ns per pixel; this is ~4x
+# faster. Same arithmetic, same strict-< tie-break: all 2^24 RGB values map
+# to the same index at both tiers (checked exhaustively at the change).
 fn quantize_nearest_rgb(r, g, b): i64 {
-    palette_init();
+    if (_palette_inited == 0) { palette_init(); }
     # Seed best with entry 0 so the loop body has no sentinel.
-    # The palette has ≥ 1 entry by ANSI_PALETTE_SIZE constraint.
+    var q = &_ANSI_PALETTE_RGB;
+    var dr = r - load8(q);
+    var dg = g - load8(q + 1);
+    var db = b - load8(q + 2);
     var best_idx = 0;
-    var best_d2  = _color_dist2(r, g, b,
-      palette_r(0), palette_g(0), palette_b(0));
-    var i = 1;
+    var best_d2  = dr * dr + dg * dg + db * db;
     # Bounded by the active tier, never past the table itself.
     var ceiling = _quant_tier;
     if (ceiling > ANSI_PALETTE_SIZE) { ceiling = ANSI_PALETTE_SIZE; }
+    var i = 1;
+    q = q + 3;
     while (i < ceiling) {
-        var d2 = _color_dist2(r, g, b,
-          palette_r(i), palette_g(i), palette_b(i));
+        dr = r - load8(q);
+        dg = g - load8(q + 1);
+        db = b - load8(q + 2);
+        var d2 = dr * dr + dg * dg + db * db;
         if (d2 < best_d2) {
             best_d2  = d2;
             best_idx = i;
         }
         i = i + 1;
+        q = q + 3;
     }
     return best_idx;
 }
@@ -122,14 +123,10 @@ fn quantize_rgb_buf(rgb_buf, n_pixels, out_buf): i64 {
 # + DOWNSCALED_H, alloc a (w × h)-byte index buffer, quantize, and
 # store ptr + size into the QUANTIZED slots. Returns 0 on success,
 # -1 on:
-#   - downscale_to_rgb not yet run (DOWNSCALED_BUF == 0)
+#   - downscale_to_rgb not yet run (DOWNSCALED_BUF == 0; kii_decode_png
+#     zeroes the pstruct, so this check means what it says)
 #   - bad dimensions (w or h <= 0)
 #   - alloc failure
-#
-# This is the M5+ replacement for quantize_nearest_image in the
-# main pipeline. The older fn stays for M4-test backward-compat;
-# it carries the source-color_type pixel-extraction code path,
-# which downscale.cyr now owns for the M5+ flow.
 fn quantize_downscaled(pstruct): i64 {
     palette_init();
     var dbuf = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);

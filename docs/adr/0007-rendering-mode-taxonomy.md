@@ -97,3 +97,30 @@ without them; they sharpen edges / speed the hot path.
 - **Monochrome ASCII by default** — rejected: kii is a color tool; colored
   glyphs compose with the color tier and are the richer default. A future
   `--mode ascii` + a "no color" axis can offer monochrome.
+
+## Amendment — v1.6.4 (P(-1) sweep)
+
+This ADR remains **Accepted**: two co-equal lanes, selected by `--mode`. The v1.6.4 sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)) found that the `ascii`
+bullet in § Decision still describes the v1.3.0 floor, which v1.3.1 replaced:
+
+**1. The entry point is `emit_ascii_shape`.** `emit_ascii` and its luminance ramp were
+removed at v1.3.1. The lane is `emit_ascii_shape` / `emit_ascii_shape_row_buf` with
+`_ascii_match` (`src/ascii.cyr`).
+
+**2. The lane does not take "half the source rows".** That was v1.3.0's geometry. Since
+v1.3.1 `main.cyr` downscales to `cols·2 × rows·3`, a 2×3 sub-grid per character cell, where
+`rows` is the half-block lane's character-row count.
+
+**3. The lane does not share quantize.** § Decision and § Consequences say both lanes share
+decode → geometry → downscale → quantize. Since v1.3.1 the ASCII lane skips
+`quantize_downscaled`: it averages each cell's six samples and quantizes that mean colour
+with `quantize_nearest_rgb`, under the same `--color` tier. The lanes share decode,
+geometry, the frame-size cap (v1.6.4) and downscale.
+
+**4. Shape-vector matching shipped.** § Consequences (Negative) calls the shape-vector
+matcher "deferred"; it shipped at v1.3.1, as the paragraph after § Decision's bullets says.
+The follow-ups that remain open, directional contrast enhancement and a k-d-tree lookup,
+are pinned to roadmap 1.10.0, together with checking in the coverage-table generator: the
+offline script that produced the 27-glyph table is not in the repo, so the table cannot be
+regenerated today.
