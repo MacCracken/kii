@@ -256,7 +256,7 @@ fn main() {
     store8(&rgb_4 + 6, 0);   store8(&rgb_4 + 7, 0);   store8(&rgb_4 + 8, 0);    # black
     store8(&rgb_4 + 9, 255); store8(&rgb_4 + 10, 255); store8(&rgb_4 + 11, 255); # white
     var idx_4[16];        # 4 codes × 4 bytes (v1.8.0: 32-bit colour codes)
-    assert_eq(quantize_rgb_buf(&rgb_4, 0, 4, &idx_4), 0,  "quantize_rgb_buf → 0");
+    assert_eq(quantize_rgb_buf(&rgb_4, 0, 4, 1, &idx_4), 0,  "quantize_rgb_buf → 0");
     assert_eq(load32(&idx_4 + 0),  1,  "rgb_buf[0] red → idx 1");
     assert_eq(load32(&idx_4 + 4),  4,  "rgb_buf[1] blue → idx 4");
     assert_eq(load32(&idx_4 + 8),  0,  "rgb_buf[2] black → idx 0");
@@ -264,7 +264,7 @@ fn main() {
     # v1.8.0: a mask byte of 1 makes that pixel KII_COLOR_DEFAULT.
     var mask_4[4];
     store8(&mask_4 + 0, 0); store8(&mask_4 + 1, 1); store8(&mask_4 + 2, 0); store8(&mask_4 + 3, 1);
-    quantize_rgb_buf(&rgb_4, &mask_4, 4, &idx_4);
+    quantize_rgb_buf(&rgb_4, &mask_4, 4, 1, &idx_4);
     assert_eq(load32(&idx_4 + 0),  1, "unmasked red stays idx 1");
     assert_eq(load32(&idx_4 + 4),  KII_COLOR_DEFAULT, "masked blue → KII_COLOR_DEFAULT");
     assert_eq(load32(&idx_4 + 12), KII_COLOR_DEFAULT, "masked white → KII_COLOR_DEFAULT");
@@ -399,6 +399,209 @@ fn main() {
     assert_eq(kii_color_code(0, 0, 0), 0, "tc: black → 0");
     assert(KII_COLOR_DEFAULT > 16777215, "the transparent sentinel is outside every tier's codes");
     quant_set_tier(16);
+
+    test_group("v1.9.0 — quant_set_dither accepts only none / ordered / fs");
+    assert_eq(quant_dither(), KII_DITHER_NONE, "the default is none");
+    assert_eq(quant_set_dither(KII_DITHER_ORDERED), KII_DITHER_ORDERED, "ordered is accepted");
+    assert_eq(quant_set_dither(3), KII_DITHER_ORDERED, "3 is ignored; ordered stays");
+    assert_eq(quant_set_dither(0 - 1), KII_DITHER_ORDERED, "-1 is ignored");
+    assert_eq(quant_set_dither(KII_DITHER_FS), KII_DITHER_FS, "fs is accepted");
+    assert_eq(quant_set_dither(KII_DITHER_NONE), KII_DITHER_NONE, "none is accepted");
+
+    test_group("v1.9.0 — the Bayer matrix and its offsets");
+    # The packed constant holds each of 0..15 exactly once.
+    var d_seen = 0;
+    var d_k = 0;
+    while (d_k < 16) {
+        d_seen = d_seen | (1 << ((_QUANT_BAYER4 >> (4 * d_k)) & 15));
+        d_k = d_k + 1;
+    }
+    assert_eq(d_seen, 65535, "the 16 nibbles are a permutation of 0..15");
+    # Every offset stays strictly inside ±step/2 at each tier's step, so an
+    # ordered pixel can move at most one palette level.
+    var d_bad = 0;
+    var d_si = 0;
+    while (d_si < 3) {
+        var d_step = 85;
+        if (d_si == 1) { d_step = 170; }
+        if (d_si == 2) { d_step = 40; }
+        var d_sum = 0;
+        d_k = 0;
+        while (d_k < 16) {
+            var d_o = _quant_bayer_offset(d_k & 3, d_k >> 2, d_step);
+            if (2 * d_o >= d_step || 0 - 2 * d_o >= d_step) { d_bad = d_bad + 1; }
+            d_sum = d_sum + d_o;
+            d_k = d_k + 1;
+        }
+        if (d_sum > 16 || d_sum < 0 - 16) { d_bad = d_bad + 1; }
+        d_si = d_si + 1;
+    }
+    assert_eq(d_bad, 0, "steps 85, 170, 40: every |offset| < step/2, and the 16 sum to about 0");
+    assert_eq(_quant_bayer_offset(0, 0, 85), 0 - 40, "(0,0) is entry 0 → -40 at step 85");
+    assert_eq(_quant_bayer_offset(0, 3, 85), 40, "(0,3) is entry 15 → +40 at step 85");
+    assert_eq(_quant_bayer_offset(4, 4, 85), _quant_bayer_offset(0, 0, 85), "the matrix tiles every 4 pixels");
+    quant_set_tier(8);
+    assert_eq(_quant_dither_step(), 170, "tier 8 step 170");
+    quant_set_tier(256);
+    assert_eq(_quant_dither_step(), 40, "tier 256 step 40");
+    quant_set_tier(KII_TIER_TC);
+    assert_eq(_quant_dither_step(), 0, "truecolour step 0");
+    quant_set_tier(16);
+    assert_eq(_quant_dither_step(), 85, "tier 16 step 85");
+
+    test_group("v1.9.0 — _quant_code_channel inverts each tier's code");
+    assert_eq(_quant_code_channel(9, 0), 255, "tier 16: code 9 (bright red) R = 255");
+    assert_eq(_quant_code_channel(9, 1), 85, "tier 16: code 9 G = 85");
+    quant_set_tier(256);
+    assert_eq(_quant_code_channel(196, 0), 255, "tier 256: 196 R = 255");
+    assert_eq(_quant_code_channel(196, 2), 0, "tier 256: 196 B = 0");
+    assert_eq(_quant_code_channel(67, 0), 95, "tier 256: 67 = cube (1,2,3) R = 95");
+    assert_eq(_quant_code_channel(67, 1), 135, "tier 256: 67 G = 135");
+    assert_eq(_quant_code_channel(67, 2), 175, "tier 256: 67 B = 175");
+    assert_eq(_quant_code_channel(244, 1), 128, "tier 256: grey 244 = 128");
+    quant_set_tier(KII_TIER_TC);
+    assert_eq(_quant_code_channel(16744449, 1), 128, "tc: 0xFF8001 G = 128");
+    quant_set_tier(16);
+
+    # A 16x16 field of one colour, quantized under each mode.
+    var d_rgb[768];
+    var d_codes[1024];
+    var d_mask[256];
+
+    test_group("v1.9.0 — a palette colour is left alone by every mode");
+    var d_pal[12];
+    store8(&d_pal, 0);     store8(&d_pal + 1, 0);     store8(&d_pal + 2, 0);       # black → 0
+    store8(&d_pal + 3, 170); store8(&d_pal + 4, 0);   store8(&d_pal + 5, 0);       # red → 1
+    store8(&d_pal + 6, 85);  store8(&d_pal + 7, 85);  store8(&d_pal + 8, 85);      # bright black → 8
+    store8(&d_pal + 9, 255); store8(&d_pal + 10, 255); store8(&d_pal + 11, 255);   # white → 15
+    var d_want[4];
+    store8(&d_want, 0); store8(&d_want + 1, 1); store8(&d_want + 2, 8); store8(&d_want + 3, 15);
+    var d_moved = 0;
+    var d_mode = 0;
+    while (d_mode < 3) {
+        quant_set_dither(d_mode);
+        var d_pc = 0;
+        while (d_pc < 4) {
+            d_k = 0;
+            while (d_k < 256) {
+                store8(&d_rgb + d_k * 3, load8(&d_pal + d_pc * 3));
+                store8(&d_rgb + d_k * 3 + 1, load8(&d_pal + d_pc * 3 + 1));
+                store8(&d_rgb + d_k * 3 + 2, load8(&d_pal + d_pc * 3 + 2));
+                d_k = d_k + 1;
+            }
+            quantize_rgb_buf(&d_rgb, 0, 16, 16, &d_codes);
+            d_k = 0;
+            while (d_k < 256) {
+                if (load32(&d_codes + d_k * 4) != load8(&d_want + d_pc)) { d_moved = d_moved + 1; }
+                d_k = d_k + 1;
+            }
+            d_pc = d_pc + 1;
+        }
+        d_mode = d_mode + 1;
+    }
+    assert_eq(d_moved, 0, "black, red, bright black, white: no pixel moves under none, ordered or fs");
+
+    test_group("v1.9.0 — a grey between two palette greys becomes a mix");
+    # 128 sits between bright black (85) and light grey (170). Without
+    # dithering every pixel snaps to 170; ordered and fs mix 85 and 170 so
+    # the field's mean stays near 128.
+    d_k = 0;
+    while (d_k < 768) { store8(&d_rgb + d_k, 128); d_k = d_k + 1; }
+    d_mode = 0;
+    while (d_mode < 3) {
+        quant_set_dither(d_mode);
+        quantize_rgb_buf(&d_rgb, 0, 16, 16, &d_codes);
+        var d_n7 = 0;
+        var d_n8 = 0;
+        var d_other = 0;
+        var d_tot = 0;
+        d_k = 0;
+        while (d_k < 256) {
+            var d_c = load32(&d_codes + d_k * 4);
+            if (d_c == 7) { d_n7 = d_n7 + 1; }
+            else { if (d_c == 8) { d_n8 = d_n8 + 1; } else { d_other = d_other + 1; } }
+            d_tot = d_tot + _quant_code_channel(d_c, 0);
+            d_k = d_k + 1;
+        }
+        assert_eq(d_other, 0, "only light grey (7) and bright black (8) are used");
+        if (d_mode == KII_DITHER_NONE) {
+            assert_eq(d_n7, 256, "none: every pixel is light grey");
+        }
+        if (d_mode == KII_DITHER_ORDERED) {
+            assert_eq(d_n7, 128, "ordered: exactly half light grey (Bayer entries 8..15)");
+            assert_eq(d_n8, 128, "ordered: and half bright black");
+        }
+        if (d_mode == KII_DITHER_FS) {
+            assert(d_n7 > 64 && d_n8 > 64, "fs: both greys are used");
+            # Mean of the chosen R over 256 pixels, against 128 (±4).
+            assert(d_tot >= 124 * 256 && d_tot <= 132 * 256, "fs: the field's mean stays within 4 of 128");
+        }
+        d_mode = d_mode + 1;
+    }
+
+    test_group("v1.9.0 — Floyd-Steinberg carries the error right");
+    # Two greys of 128 at tier 16: the first snaps to 170 (error -42); 7/16 of
+    # that, -18, makes the second 110, which snaps to 85.
+    quant_set_dither(KII_DITHER_FS);
+    quantize_rgb_buf(&d_rgb, 0, 2, 1, &d_codes);
+    assert_eq(load32(&d_codes), 7, "pixel 0 → light grey");
+    assert_eq(load32(&d_codes + 4), 8, "pixel 1 → bright black, from the carried error");
+    quant_set_dither(KII_DITHER_NONE);
+    quantize_rgb_buf(&d_rgb, 0, 2, 1, &d_codes);
+    assert_eq(load32(&d_codes + 4), 7, "without fs pixel 1 is light grey too");
+
+    test_group("v1.9.0 — transparent pixels stay default under every mode");
+    d_k = 0;
+    while (d_k < 256) { store8(&d_mask + d_k, d_k & 1); d_k = d_k + 1; }
+    var d_tbad = 0;
+    var d_tier_i = 0;
+    while (d_tier_i < 3) {
+        if (d_tier_i == 0) { quant_set_tier(8); }
+        if (d_tier_i == 1) { quant_set_tier(16); }
+        if (d_tier_i == 2) { quant_set_tier(256); }
+        d_mode = 0;
+        while (d_mode < 3) {
+            quant_set_dither(d_mode);
+            quantize_rgb_buf(&d_rgb, &d_mask, 16, 16, &d_codes);
+            d_k = 0;
+            while (d_k < 256) {
+                var d_tc = load32(&d_codes + d_k * 4);
+                if ((d_k & 1) == 1 && d_tc != KII_COLOR_DEFAULT) { d_tbad = d_tbad + 1; }
+                if ((d_k & 1) == 0 && d_tc == KII_COLOR_DEFAULT) { d_tbad = d_tbad + 1; }
+                d_k = d_k + 1;
+            }
+            d_mode = d_mode + 1;
+        }
+        d_tier_i = d_tier_i + 1;
+    }
+    assert_eq(d_tbad, 0, "tiers 8/16/256 × none/ordered/fs: masked pixels → default, the rest opaque");
+
+    test_group("v1.9.0 — truecolour ignores the dither mode");
+    quant_set_tier(KII_TIER_TC);
+    d_k = 0;
+    while (d_k < 256) {
+        store8(&d_rgb + d_k * 3, d_k);
+        store8(&d_rgb + d_k * 3 + 1, 255 - d_k);
+        store8(&d_rgb + d_k * 3 + 2, (d_k * 7) & 255);
+        d_k = d_k + 1;
+    }
+    var d_tcbad = 0;
+    d_mode = 0;
+    while (d_mode < 3) {
+        quant_set_dither(d_mode);
+        quantize_rgb_buf(&d_rgb, 0, 16, 16, &d_codes);
+        d_k = 0;
+        while (d_k < 256) {
+            if (load32(&d_codes + d_k * 4) != ((d_k << 16) | ((255 - d_k) << 8) | ((d_k * 7) & 255))) {
+                d_tcbad = d_tcbad + 1;
+            }
+            d_k = d_k + 1;
+        }
+        d_mode = d_mode + 1;
+    }
+    assert_eq(d_tcbad, 0, "none, ordered and fs give each pixel its own RGB");
+    quant_set_tier(16);
+    quant_set_dither(KII_DITHER_NONE);
 
     return assert_summary();
 }

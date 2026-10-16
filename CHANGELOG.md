@@ -4,6 +4,134 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-16
+
+**Dithering, and pixel-centre sampling.** `--dither ordered` (a 4×4 Bayer matrix) and
+`--dither fs` (Floyd-Steinberg) turn the flat bands of a gradient into a mix of two
+neighbouring colours, at tiers 8, 16 and 256 and in both lanes. The default stays `none`.
+The decision is [ADR 0011](docs/adr/0011-dithering.md).
+
+The same release fixes C-7, which the v1.6.4 sweep pinned here: the downscale sampled each
+span's start, so frames sat half a span up and to the left of the image, and a downscale
+never read the last source row or column. It now samples the span's centre
+([ADR 0005](docs/adr/0005-nearest-neighbor-downscale.md) amendment).
+
+⚠ **Every downscaled frame's bytes change, with or without `--dither`:**
+- **Corpus:** 2,504 of the 2,504 frames the 466-image corpus renders change (six flag
+  sets per image). The 292 that do not are decode rejections.
+- **Identity scales and integer upscales** are byte-identical, since both formulas pick the
+  same pixel there.
+- **Sampling is the only cause.** A build of v1.8.0 with only the new formula gives the same
+  bytes as v1.9.0 on all 2,796 frames, so the quantize and ASCII changes around it alter
+  nothing at `--dither none`.
+
+**813 assertions** pass on x86_64 and under `cyrius test --aarch64`. aarch64 frames match
+x86_64 in every tier × dither × lane combination tested (648 of 648). **8,011,000 fuzz
+iterations** are all clean.
+
+### Added
+- **`--dither none|ordered|fs`** (`-d`), a cmdit enum, default `none`. It is independent of
+  `--mode` and `--color`, and changes nothing at `--color tc`, where nothing is quantized.
+  - **ordered** adds a 4×4 Bayer offset, `((2m + 1)·step)/32 − step/2`, to R, G and B alike.
+    `step` is the tier's level spacing: 170 at tier 8, 85 at 16, 40 at 256.
+    - The offset stays inside ±step/2, so a palette colour never moves.
+    - A colour between two levels becomes a mix of the two.
+  - **fs** carries each pixel's error 7/16 right, 3/16 down-left, 5/16 down and 1/16
+    down-right.
+    - The arithmetic is exact integers (errors ×16 in two i64 rows), so every target gives
+      the same bytes.
+    - Error is measured against the RGB the chosen code stands for at the tier.
+    - A transparent pixel neither takes error nor passes it on.
+  - **The ASCII lane dithers cell colours.** Ordered applies per cell. Under `fs` every
+    cell's mean colour is quantized first, as one field. Glyph choice is unchanged.
+  - **The effect, on a 64×256 grey ramp** (mean error of each column's brightness):
+
+    | tier | none | ordered | fs |
+    |---|---:|---:|---:|
+    | 8 | 34.7 | 27.2 | 16.2 |
+    | 16 | 21.2 | 11.8 | 5.0 |
+    | 256 | 2.6 | 1.9 | 2.1 |
+
+  - **The cost:** dithered frames are larger, because a pattern breaks the runs that escape
+    elision skips. Over the corpus, the factor is 1.4–1.6 at tier 8, 1.8–2.0 at tier 16 and
+    3.3–4.2 at tier 256. `fs` adds ~1.8–2.2 ms per render of a 256² icon at `--width 200`.
+    `docs/benchmarks.md` § v1.9.0 has the detail.
+- **`--dither` errors and help.**
+  - Any other value prints `kii: --dither must be none, ordered or fs` and exits 2.
+  - `--help` gains `-d, --dither <none|ordered|fs>	dithering (default: none)` and a
+    `--dither fs` example.
+- **`--verbose` names an active dither mode:** `→ 16-color, fs dither`. At `none`, and at
+  truecolour, the line is unchanged.
+
+### Changed
+- ⚠ **Pixel-centre sampling (C-7).** `sx = ((2·dx + 1)·W) / (2·dst_w)`, and the same for
+  `sy`; it was `dx·W / dst_w`.
+  - At 10:1 the frame moves five source pixels toward the image's real centre, and a 1-px
+    border now shows on all four sides.
+  - The formula stays in bounds: `sx ≤ W − W/(2·dst_w) < W`.
+  - Example 01's first bytes and size changed (14,609 → 14,553 bytes), and example 02's size
+    (6,085 → 6,150); both `expected.txt` files say so.
+- **The quantize API takes the frame's shape.** It is now `quantize_rgb_buf(rgb, mask, w,
+  h, out)`, because ordered needs each pixel's position and Floyd-Steinberg its
+  neighbours. With `--dither none` it runs the v1.8.0 loop exactly.
+  - `kii_color_code_at(r, g, b, x, y)` is the one-pixel form, with the ordered offset.
+  - `emit_ascii_shape_row_buf` takes an optional cell-code buffer.
+  - `_ascii_cell_codes` builds that buffer, and runs only under `fs`.
+- **No speed change at `--dither none`.** An early draft ran the ASCII field pass for every
+  mode and made the default ASCII lane ~19 % slower on a small icon (7.1 → 8.5 ms). The
+  pass now runs only under `fs`, and both lanes match v1.8.0 within noise.
+- **Sizes.**
+  - `build/kii`: 1,003,824 → 1,012,280 bytes.
+  - `--agnos`: 1,018,072 → 1,026,520.
+  - `--aarch64`: 1,237,064 → 1,237,312.
+- **The manifest's `description`** said kii renders "16-color" frames, which has been
+  short since v1.8.0's tiers. It now names the tiers.
+
+### Tests
+- **813 assertions** (was 738).
+  - **cli 184 → 203:** each `--dither` value and its mode, `-d`, the default, refusals
+    naming `--dither`, and the BAD_ENUM line.
+  - **quant 133 → 171:**
+    - the `quant_set_dither` contract;
+    - the Bayer constant is a permutation of 0–15, and every offset is inside ±step/2 at
+      each tier's step;
+    - `_quant_code_channel` inverts each tier's code;
+    - black, red, bright black and white stay put under every mode;
+    - mid-grey 128 at tier 16: all light grey under `none`, exactly half and half under
+      ordered, and under fs both greys with a mean within 4 of 128;
+    - fs's carried error on two pixels;
+    - masked pixels at tiers 8, 16 and 256 under every mode;
+    - truecolour identical under every mode.
+  - **ascii 23 → 37:** the cell-code field, given codes winning over the cell's mean, a
+    transparent cell, Floyd-Steinberg across cells, and a per-cell ordered row matching the
+    field-coded one byte for byte.
+  - **render 190 → 194:** the 2×2 → 1×1 shrink now picks src (1,1), and a 10-pixel row
+    downscaled to 1, 2, 5 and 10 picks pixel 5; 2 and 7; 1 3 5 7 9; and the identity.
+- **Fuzz:** the emit surface rotates the dither mode every four calls, as it does the tier,
+  so twelve calls cover every pair. It takes no extra random draw, and the counts match
+  v1.8.0's.
+
+### Documentation
+- New ADR 0011 (dithering). ADR 0005 gains a v1.9.0 amendment covering the sampling
+  change, the byte-stability cost, and dithering arriving without `--filter`. ADR 0002 gains
+  one: dithering adds no emit surface, and its allocations are bounded.
+- Updated for the new flag:
+  - **README:** the flag table, an example, the arc, and the tier roadmap. The dithering line
+    under "Not yet supported" is gone, and the assertion count is corrected (it still read
+    709).
+  - **getting-started:** `--help` matches the binary byte for byte; there is a `--dither`
+    section, a pipeline, and its error line.
+  - **architecture:** module map v1.9.0, and new item 007, on Floyd-Steinberg being the one
+    quantize step that reads its neighbours.
+  - **SECURITY.md:** the new allocations and the fuzz rotation.
+  - **The examples.**
+- **Stale text fixed in passing:**
+  - the architecture map's `kii_validate_color`, gone since v1.8.0;
+  - example 01's notes still described `38;5;N` emit;
+  - example 02's `expected.txt` stopped at v1.6.4.
+- The roadmap's 1.9.0 section is deleted. Next is 1.10.0: the ASCII shape-vector
+  refinements.
+
 ## [1.8.0] - 2026-10-15
 
 **Tier 2 colour, and the emit rework.** `--color 256` and `--color tc` (24-bit truecolour)

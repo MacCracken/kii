@@ -201,3 +201,41 @@ chitra has handed kii RGBA8 for every format since v1.2.0, so `downscale_to_rgb`
 RGBA8 directly and refuses any other pixel format. The resampling rule this ADR chose —
 nearest-neighbour, `sx = dx·W / dst_w` — is unchanged; pixel-centre sampling is still
 pinned to 1.9.0.
+
+## Amendment — v1.9.0 (pixel-centre sampling, dithering)
+
+This ADR remains **Accepted**: the downscale is still nearest-neighbour, one source pixel
+per destination pixel. v1.9.0 changes which pixel that is, and lands the dithering that
+§ Neutral and § Trigger for revisit expected with tier 2.
+
+**1. Pixel-centre sampling (C-7, fixed).** Each destination pixel covers the source span
+`[dx·W / dst_w, (dx+1)·W / dst_w)`. kii now samples the pixel at the span's centre:
+
+```
+sx = ((2·dx + 1) × W) / (2 × dst_w)
+sy = ((2·dy + 1) × H) / (2 × dst_h)
+```
+
+- **Through v1.8.0 it sampled the span's start.** That shifted every downscaled frame up and
+  to the left by half a span (five source pixels at 10:1). A downscale never read the last
+  source column or row, so a 1-px border showed on the top and left only.
+- **Now the offset is at most half a source pixel.** A centre that falls exactly between two
+  pixels takes the right / lower one.
+- **The identity case and integer upscales sample exactly as before.** Both formulas give
+  `⌊dx / k⌋` for a k× upscale.
+- **The formula stays in bounds.** `dx ≤ dst_w − 1` gives `sx ≤ W − W / (2·dst_w) < W`.
+
+**2. The byte-stability cost.** Every downscaled frame changes at 1.9.0, the second
+deliberate break after v1.8.0's ([0010](0010-tier-2-colour-and-emit-encoding.md)):
+
+- Over the 466-image corpus, 2,504 of 2,504 rendered frames changed. The 292 unchanged ones
+  were all decode rejections.
+- A build of v1.8.0 with only this formula changed gives the same bytes as v1.9.0 on all
+  2,796 frames, so sampling is the only source of the change.
+- Identity scales and integer upscales of the 16×16 and 8×8 fixtures are byte-identical.
+
+**3. Dithering landed without `--filter`.** `--dither none|ordered|fs` arrived at 1.9.0 as
+its own decision ([0011](0011-dithering.md)), applied after this downscale. The
+`--filter {nearest,bilinear,box}` this ADR paired it with is not on the roadmap.
+Nearest-neighbour stays the only resampler. A box filter with `--dither fs` (§ Alternatives)
+remains the obvious next step if a consumer asks for photographic output at tier 1.

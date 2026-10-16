@@ -462,6 +462,8 @@ fn fuzz_geom_iter(): i64 {
 # produces codes of the active tier, so emit refusing one is a contract
 # violation. The caller's line buffer holds 200 truecolour cells (41 bytes
 # each) plus the row tail.
+# v1.9.0: the dither mode rotates none → ordered → fs every four calls, the
+# same way, so twelve calls cover every tier × dither pair.
 var _fz_emit_calls = 0;
 
 fn fuzz_emit_iter(pstruct, line_buf): i64 {
@@ -471,6 +473,7 @@ fn fuzz_emit_iter(pstruct, line_buf): i64 {
     if (t4 == 2) { tier = KII_TIER_256; }
     if (t4 == 3) { tier = KII_TIER_TC; }
     quant_set_tier(tier);
+    quant_set_dither((_fz_emit_calls / 4) % 3);
     _fz_emit_calls = _fz_emit_calls + 1;
     # Random target dims in [1, 200]. Cap at source-w / source-h
     # constraint inside downscale_to_rgb if it has one — but
@@ -492,6 +495,7 @@ fn fuzz_emit_iter(pstruct, line_buf): i64 {
     var dw   = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
     var epos = emit_halfblock_row_buf(qbuf, dw, row, line_buf, 0);
     quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
     if (epos <= 0) { return 0 - 1; }
     if (epos > dw * (EMIT_CELL_MAX + 1) + 16) { return 0 - 1; }
     return 0;

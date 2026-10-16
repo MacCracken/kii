@@ -6,9 +6,14 @@ distinction is internal (the PLTE lookup happens inside chitra's
 decode, before kii sees any pixels), so the emitted byte stream is the
 same shape.
 
-The frame's bytes changed at v1.6.4 (67,405 → 67,400 bytes, 72 of 3,200
-cells): the logo's transparent pixels are now composited over black.
-This file pins no frame bytes, so the shape above still holds.
+The frame's bytes have changed three times. v1.6.4 composited the logo's
+transparent pixels over black (67,405 → 67,400 bytes, 72 of 3,200 cells).
+v1.8.0 elided repeated escapes, moved tier 16 to the plain SGR codes, and
+drew transparent pixels in the terminal's default colours (67,400 → 6,085).
+v1.9.0's pixel-centre sampling moved every cell half a cell toward the
+image's true centre (6,085 → 6,150). The first row is fully transparent,
+so it is `\x1b[49m`, 80 spaces, and the reset. This file pins no frame
+bytes, so the shape above still holds.
 
 Run produces exit code 0.
 

@@ -186,23 +186,182 @@ fn kii_color_code(r, g, b): i64 {
     return quantize_nearest_rgb(r, g, b);
 }
 
-# Quantize a packed RGB-triple source buffer into colour codes: one 32-bit
-# code per pixel into out_buf (caller-owned, 4 × n_pixels bytes). `mask` is
-# downscale's transparency mask (one byte per pixel, 1 = transparent → code
-# KII_COLOR_DEFAULT), or 0 when no pixel is transparent. Returns 0; never
-# fails (no allocation). Used by quantize_downscaled below — exposes the
-# inner loop with no pstruct knowledge.
-fn quantize_rgb_buf(rgb_buf, mask, n_pixels, out_buf): i64 {
+# ---- dithering (v1.9.0, ADR 0011) ------------------------------------
+# `--dither none | ordered | fs`. none (the default) maps each pixel to its
+# nearest colour on its own, as every release before 1.9.0 did. ordered adds
+# a position-dependent offset from a 4x4 Bayer matrix before that mapping;
+# fs (Floyd-Steinberg) carries each pixel's quantization error on to the
+# pixels right of and below it. Both work at tiers 8, 16 and 256; at
+# truecolour nothing is quantized, so there is nothing to dither and the
+# setting changes no byte.
+var KII_DITHER_NONE    = 0;
+var KII_DITHER_ORDERED = 1;
+var KII_DITHER_FS      = 2;
+var _quant_dither = 0;
+
+# Set the dither mode. Accepts only the three KII_DITHER_* values; anything
+# else is ignored. Returns the mode in force.
+fn quant_set_dither(d): i64 {
+    if (d == KII_DITHER_NONE || d == KII_DITHER_ORDERED || d == KII_DITHER_FS) { _quant_dither = d; }
+    return _quant_dither;
+}
+
+fn quant_dither(): i64 { return _quant_dither; }
+
+# The 4x4 Bayer matrix, row-major, one nibble per entry from the low end:
+#    0  8  2 10
+#   12  4 14  6
+#    3 11  1  9
+#   15  7 13  5
+var _QUANT_BAYER4 = 0x5D7F91B36E4CA280;
+
+# The ordered-dither amplitude at the active tier: the spacing of its
+# palette's levels. Tier 8's channels are 0 or 170; tier 16 adds 85 and 255;
+# the 256 cube steps by 40 (95 at its first step, but 40 above). An offset is
+# kept strictly inside ±step/2, so a pixel can only move to a colour one
+# level away.
+fn _quant_dither_step(): i64 {
+    if (_quant_tier == KII_TIER_8)   { return 170; }
+    if (_quant_tier == KII_TIER_256) { return 40; }
+    if (_quant_tier == KII_TIER_TC)  { return 0; }
+    return 85;
+}
+
+# The ordered-dither offset for pixel (x, y): the Bayer entry m in [0, 15]
+# mapped to ((2m + 1)·step)/32 − step/2, a value in (−step/2, +step/2).
+fn _quant_bayer_offset(x, y, step): i64 {
+    var m = (_QUANT_BAYER4 >> (4 * ((y & 3) * 4 + (x & 3)))) & 15;
+    return ((2 * m + 1) * step) / 32 - step / 2;
+}
+
+fn _quant_clamp8(v): i64 {
+    if (v < 0) { return 0; }
+    if (v > 255) { return 255; }
+    return v;
+}
+
+# The RGB a colour code stands for at the active tier: what Floyd-Steinberg
+# measures its error against. `which` is 0 / 1 / 2 for R / G / B.
+fn _quant_code_channel(code, which): i64 {
+    if (_quant_tier == KII_TIER_TC) { return (code >> (16 - 8 * which)) & 255; }
+    if (_quant_tier == KII_TIER_256) {
+        if (code >= 232) { return 8 + 10 * (code - 232); }
+        var c = code - 16;
+        var lv = c % 6;
+        if (which == 0) { lv = c / 36; }
+        if (which == 1) { lv = (c / 6) % 6; }
+        return _quant_cube_value(lv);
+    }
+    if (_palette_inited == 0) { palette_init(); }
+    return load8(&_ANSI_PALETTE_RGB + code * 3 + which);
+}
+
+# The colour code for pixel (x, y) under the active mode, for callers that
+# quantize one pixel at a time: ordered adds the pixel's Bayer offset first;
+# none (and fs, which needs the whole field — see quantize_rgb_buf) is
+# kii_color_code itself. At truecolour the offset is never applied.
+fn kii_color_code_at(r, g, b, x, y): i64 {
+    if (_quant_dither == KII_DITHER_ORDERED && _quant_tier != KII_TIER_TC) {
+        var o = _quant_bayer_offset(x, y, _quant_dither_step());
+        return kii_color_code(_quant_clamp8(r + o), _quant_clamp8(g + o), _quant_clamp8(b + o));
+    }
+    return kii_color_code(r, g, b);
+}
+
+# Quantize a packed RGB-triple w × h buffer into colour codes: one 32-bit
+# code per pixel into out_buf (caller-owned, 4 × w × h bytes), dithered by
+# the active mode. `mask` is downscale's transparency mask (one byte per
+# pixel, 1 = transparent → code KII_COLOR_DEFAULT), or 0 when no pixel is
+# transparent. A transparent pixel neither takes nor passes on
+# Floyd-Steinberg error. Returns 0, or -1 if the error rows cannot be
+# allocated (fs only). With dither none this is the v1.8.0 loop exactly.
+fn quantize_rgb_buf(rgb_buf, mask, w, h, out_buf): i64 {
     palette_init();
-    var i = 0;
-    while (i < n_pixels) {
-        if (mask != 0 && load8(mask + i) != 0) {
-            store32(out_buf + i * 4, KII_COLOR_DEFAULT);
-        } else {
-            var p = rgb_buf + i * 3;
-            store32(out_buf + i * 4, kii_color_code(load8(p), load8(p + 1), load8(p + 2)));
+    var mode = _quant_dither;
+    if (_quant_tier == KII_TIER_TC) { mode = KII_DITHER_NONE; }
+    if (mode == KII_DITHER_FS) { return _quant_fs(rgb_buf, mask, w, h, out_buf); }
+    if (mode == KII_DITHER_NONE) {
+        var n = w * h;
+        var i = 0;
+        while (i < n) {
+            if (mask != 0 && load8(mask + i) != 0) {
+                store32(out_buf + i * 4, KII_COLOR_DEFAULT);
+            } else {
+                var p = rgb_buf + i * 3;
+                store32(out_buf + i * 4, kii_color_code(load8(p), load8(p + 1), load8(p + 2)));
+            }
+            i = i + 1;
         }
-        i = i + 1;
+        return 0;
+    }
+    var y = 0;
+    while (y < h) {
+        var x = 0;
+        while (x < w) {
+            var j = y * w + x;
+            if (mask != 0 && load8(mask + j) != 0) {
+                store32(out_buf + j * 4, KII_COLOR_DEFAULT);
+            } else {
+                var q = rgb_buf + j * 3;
+                store32(out_buf + j * 4, kii_color_code_at(load8(q), load8(q + 1), load8(q + 2), x, y));
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+# Floyd-Steinberg: scan left to right, top to bottom; each pixel's error
+# (wanted minus chosen, per channel) goes 7/16 right, 3/16 down-left,
+# 5/16 down, 1/16 down-right. Errors are kept ×16 in two rows of
+# (w + 2) × 3 integers (one pad column each side), so the arithmetic is
+# exact integers and the output is the same on every target.
+fn _quant_fs(rgb_buf, mask, w, h, out_buf): i64 {
+    var row_bytes = (w + 2) * 3 * 8;
+    var cur = alloc(row_bytes);
+    var nxt = alloc(row_bytes);
+    if (cur == 0 || nxt == 0) { return 0 - 1; }
+    var k = 0;
+    while (k < (w + 2) * 3) { store64(cur + k * 8, 0); store64(nxt + k * 8, 0); k = k + 1; }
+    var y = 0;
+    while (y < h) {
+        var x = 0;
+        while (x < w) {
+            var i = y * w + x;
+            if (mask != 0 && load8(mask + i) != 0) {
+                store32(out_buf + i * 4, KII_COLOR_DEFAULT);
+            } else {
+                var p = rgb_buf + i * 3;
+                var e = cur + (x + 1) * 24;            # this pixel's carried error
+                var r = _quant_clamp8(load8(p)     + load64(e)      / 16);
+                var g = _quant_clamp8(load8(p + 1) + load64(e + 8)  / 16);
+                var b = _quant_clamp8(load8(p + 2) + load64(e + 16) / 16);
+                var code = kii_color_code(r, g, b);
+                store32(out_buf + i * 4, code);
+                var c = 0;
+                while (c < 3) {
+                    var want = r;
+                    if (c == 1) { want = g; }
+                    if (c == 2) { want = b; }
+                    var err = want - _quant_code_channel(code, c);
+                    var off = c * 8;
+                    store64(cur + (x + 2) * 24 + off, load64(cur + (x + 2) * 24 + off) + 7 * err);
+                    store64(nxt + x * 24 + off,       load64(nxt + x * 24 + off)       + 3 * err);
+                    store64(nxt + (x + 1) * 24 + off, load64(nxt + (x + 1) * 24 + off) + 5 * err);
+                    store64(nxt + (x + 2) * 24 + off, load64(nxt + (x + 2) * 24 + off) + err);
+                    c = c + 1;
+                }
+            }
+            x = x + 1;
+        }
+        # The next row's carried error becomes current; clear the other.
+        var t = cur;
+        cur = nxt;
+        nxt = t;
+        k = 0;
+        while (k < (w + 2) * 3) { store64(nxt + k * 8, 0); k = k + 1; }
+        y = y + 1;
     }
     return 0;
 }
@@ -227,7 +386,7 @@ fn quantize_downscaled(pstruct): i64 {
     var out_buf = alloc(n_pixels * 4);
     if (out_buf == 0) { return 0 - 1; }
 
-    quantize_rgb_buf(dbuf, load64(pstruct + STRUCT_ALPHA_MASK_OFFSET), n_pixels, out_buf);
+    if (quantize_rgb_buf(dbuf, load64(pstruct + STRUCT_ALPHA_MASK_OFFSET), dw, dh, out_buf) != 0) { return 0 - 1; }
     store64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET,  out_buf);
     store64(pstruct + STRUCT_QUANTIZED_SIZE_OFFSET, n_pixels);
     return 0;

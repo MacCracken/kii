@@ -4,13 +4,13 @@ Non-obvious constraints, quirks, and invariants that a reader cannot derive from
 
 Not decisions (those live in [`../adr/`](../adr/)) and not guides (those live in [`../guides/`](../guides/)). An item here describes *how the world is*, not *what we chose* or *how to do something*.
 
-## Module map (v1.8.0)
+## Module map (v1.9.0)
 
 The pipeline runs top to bottom; each module owns one stage. The shared `pstruct` (function-scope `var pstruct[160]` in `src/main.cyr`) carries data between stages via byte-offset slots declared in `src/image.cyr`. kii has no decoder of its own: since the v1.2.0 re-fold every format is parsed inside `chitra` ([ADR 0006](../adr/0006-adopt-chitra-decoder.md)), and `src/image.cyr` (`src/png.cyr` until v1.7.0) is the adapter that feeds it. Redrawn at v1.6.4; the v0.7.0 map showed the in-repo chunk walk, sankoch inflate and filter undo that the re-fold deleted.
 
 ```
-  argv ─► cli.cyr     flag table (cmdit checks --width's range and --mode's
-             │        choices; kii checks --color);
+  argv ─► cli.cyr     flag table (cmdit checks --width's range and the
+             │        --color / --mode / --dither choices);
              │        path sanitizer for every echoed filename
              ▼
           main.cyr    orchestrator; every diagnostic goes to stderr as
@@ -27,16 +27,18 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
           emit.cyr    geometry: --width N, or the terminal via _kii_term_envelope
           cli.cyr     kii_frame_cells_ok: at most KII_MAX_CELLS (1,048,576) cells
              ▼
-          downscale.cyr  downscale_to_rgb: nearest-neighbour; alpha < 128 → the
+          downscale.cyr  downscale_to_rgb: nearest-neighbour at each span's
+             │           centre (v1.9.0); alpha < 128 → the
              │           transparency mask, partial alpha over black
              │           (half-block: cols × rows·2;  ascii: cols·2 × rows·3)
      ┌───────┴──────────────────────┐
      ▼ --mode halfblock (default)   ▼ --mode ascii
   quant.cyr  quantize_downscaled   ascii.cyr  emit_ascii_shape
   (a 32-bit colour code per pixel   2×3 shape match picks the glyph;
-   for the --color tier)
-     ▼                               the cell's mean colour goes through
-  emit.cyr   emit_halfblock          kii_color_code for its fg
+   for the --color tier, dithered   the cell's mean colour goes through
+   per --dither)                     kii_color_code_at for its fg (under
+     ▼                               --dither fs, every cell's colour is
+  emit.cyr   emit_halfblock          quantized first, as one field)
   (tier SGR, elision, ▀ / ▄ / space for transparency)
      │                                    │
      └──────────────┬─────────────────────┘
@@ -50,13 +52,13 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
 | Module | Owns | Since |
 |---|---|---|
 | `src/main.cyr` | I/O + orchestration; dispatches each stage; prints every diagnostic via `_eprint_path_msg` / `_eprint_path_safe`; gates the `--verbose` summary | M0, restructured each milestone |
-| `src/cli.cyr` | Flag registration (`--width` through `cmdit_range`, `--mode` through `cmdit_enum` with `KII_MODE_*`, since v1.7.0) + `kii_validate_color`; `KII_F_*` indices; `KII_MAX_COLS`; `KII_MAX_CELLS` and `kii_frame_cells_ok` (the frame-size cap, v1.6.4); `kii_parse_error_line`; `kii_path_has_control_bytes` (a wrapper over darshana's `tty_has_ctl` since v1.6.0) | M1 + M7(c) |
+| `src/cli.cyr` | Flag registration (`--width` through `cmdit_range`; `--mode`, `--color` and `--dither` through `cmdit_enum`, since v1.7.0, v1.8.0 and v1.9.0) and the maps from an enum choice to kii's constant (`KII_MODE_*`, `kii_color_tier`, `kii_dither_mode`); `KII_F_*` indices; `KII_MAX_COLS`; `KII_MAX_CELLS` and `kii_frame_cells_ok` (the frame-size cap, v1.6.4); `kii_parse_error_line`; `kii_path_has_control_bytes` (a wrapper over darshana's `tty_has_ctl` since v1.6.0) | M1 + M7(c) |
 | `src/image.cyr` | The chitra adapter (`src/png.cyr` until v1.7.0): `kii_decode_image` (read, sniff, decode, adapt); the `IMG_ERR_*` code space; `_kii_map_read_err` (read errno → `IMG_ERR_*`, v1.6.4); `_kii_map_chitra_err` (`ChitraErr` → `IMG_ERR_*`); `kii_decode_error_text` and `kii_incomplete_warning_text` (the text of every decode diagnostic and warning, v1.6.4); `kii_source_type_name`; the `STRUCT_*_OFFSET` layout | M2, adapter since v1.2.0 |
 | `src/palette.cyr` | Linux-console 16-color ANSI palette + lazy init + accessors | M4(a) |
-| `src/quant.cyr` | RGB → colour codes: `quant_set_tier` (the `--color` tier: `KII_TIER_8` / `_16` / `_256` / `_TC`), tier-1 `quantize_nearest_rgb`, tier-256 `quantize_256` (v1.8.0), `kii_color_code` (a pixel's code at the active tier; `KII_COLOR_DEFAULT` = transparent), and `quantize_rgb_buf` + `quantize_downscaled` for the half-block lane | M4(b)(d) + M5(c) |
-| `src/downscale.cyr` | Nearest-neighbor RGB resampler: `downscale_to_rgb` over chitra's RGBA8 (the only pixel format since v1.7.0 removed the per-colour-type dispatch), with `_over_black` compositing alpha over black (v1.6.4) | M5(b) |
+| `src/quant.cyr` | RGB → colour codes: `quant_set_tier` (the `--color` tier: `KII_TIER_8` / `_16` / `_256` / `_TC`), tier-1 `quantize_nearest_rgb`, tier-256 `quantize_256` (v1.8.0), `kii_color_code` (a pixel's code at the active tier; `KII_COLOR_DEFAULT` = transparent), and `quantize_rgb_buf` + `quantize_downscaled` for the half-block lane; dithering (v1.9.0): `quant_set_dither`, the 4×4 Bayer offset, `kii_color_code_at` (one pixel, with its ordered offset), and the Floyd-Steinberg pass `_quant_fs` | M4(b)(d) + M5(c) + v1.9.0 |
+| `src/downscale.cyr` | Nearest-neighbor RGB resampler, sampling each span's centre since v1.9.0 (ADR 0005 amendment): `downscale_to_rgb` over chitra's RGBA8 (the only pixel format since v1.7.0 removed the per-colour-type dispatch), with `_over_black` compositing alpha over black (v1.6.4) | M5(b) |
 | `src/emit.cyr` | Half-block ANSI emit (darshana composers) + `_kii_compute_target_geometry` + `_kii_compute_fit_geometry` + `_kii_term_envelope` (v1.6.0) + `_kii_write_all`; the frame loop and row ending both lanes share, `_kii_emit_frame` and `_kii_row_end` (v1.7.0); the tier-aware SGR composers `_kii_sgr_fg` / `_kii_sgr_bg` and the row's elision and transparency glyph rules (v1.8.0) | M5(c) + M6(a)(b) |
-| `src/ascii.cyr` | The `--mode ascii` lane: the 27-glyph coverage table, `_ascii_match`, `emit_ascii_shape` | v1.3.0, shape-vector v1.3.1 |
+| `src/ascii.cyr` | The `--mode ascii` lane: the 27-glyph coverage table, `_ascii_match`, `emit_ascii_shape`; `_ascii_cell_codes`, the cell-colour field `--dither fs` needs (v1.9.0) | v1.3.0, shape-vector v1.3.1 |
 
 ## Items
 
@@ -133,8 +135,9 @@ at tiers 8 and 16 (`quantize_nearest_rgb`; 8 restricts the scan to the normal-in
 half, which *is* the 8-colour tier, so no second table exists), an xterm index 16–255 at
 tier 256 (`quantize_256`, exact without a scan), a packed 0xRRGGBB at truecolour, or
 `KII_COLOR_DEFAULT` (1 << 24, outside every tier) for a pixel downscale marked
-transparent. `kii_color_code` is the per-pixel entry point the `--mode ascii` lane uses for
-each cell; `quantize_downscaled` fills a 4-byte-per-pixel buffer for the half-block lane.
+transparent. `kii_color_code_at` is the per-pixel entry point the `--mode ascii` lane uses
+for each cell (it is `kii_color_code` plus the ordered-dither offset, v1.9.0);
+`quantize_downscaled` fills a 4-byte-per-pixel buffer for the half-block lane.
 The emit layer interprets a code by the same tier, so the two must never disagree:
 `_kii_sgr_fg` refuses a code that is not a colour of the active tier (an index ≥ 8 at
 tier 8, for instance) rather than sending something else.
@@ -154,3 +157,27 @@ load-bearing fact is the one above.
 When stdout is not a TTY (piped, redirected to a file, captured in a CI job), `tty_winsize(1, …)` returns -1 and `main.cyr` falls through to a hardcoded `(EMIT_DEFAULT_COLS=80) × (EMIT_DEFAULT_ROWS=24)` envelope.
 
 **Why this specific size**: it's the canonical VT100 / DOS / BBS frame. kii's project identity (per `CLAUDE.md` § Color-tier discipline) is the BBS revival aesthetic floor; an unrecognized-environment default that lands in a 80×24 envelope is on-brand. It also matches what `chafa` does without arguments in a non-TTY context.
+
+### 007 — Floyd-Steinberg is the one quantize step that reads its neighbours
+
+Everything else in the pipeline maps a pixel (or a cell) to its code on its own, in any
+order. `--dither fs` (v1.9.0, [ADR 0011](../adr/0011-dithering.md)) does not: a pixel's
+code depends on the error carried from the pixels before it in raster order. Three things
+follow.
+
+- **The whole field goes through `quantize_rgb_buf` at once.** The half-block lane already
+  quantized the downscaled buffer in one pass. The ASCII lane quantized each cell inside its
+  row builder, so under `fs` (and only then) `emit_ascii_shape` first computes every cell's
+  mean colour, quantizes that cols × rows field (`_ascii_cell_codes`), and parks the codes
+  in the pstruct's `QUANTIZED` slot for the row builder to read. Under `none` and
+  `ordered` the slot is 0, and the row quantizes each cell itself: the ordered offset
+  depends only on the cell's position, so the two paths give the same bytes (a test pins
+  it).
+- **The cell mean is computed in two places that must agree.** The row builder sums a
+  cell's opaque samples for its glyph and its colour; `_ascii_cell_codes` sums the same
+  samples for the field. Both use the same rule (opaque samples only, integer mean, a cell
+  with none is transparent). Changing one without the other makes `fs` frames disagree
+  with `none` frames about a cell's colour.
+- **A transparent pixel passes no error on.** It takes `KII_COLOR_DEFAULT`, and the error
+  carried into it is dropped. The pixels after it get only what their opaque neighbours
+  send.

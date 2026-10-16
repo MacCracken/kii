@@ -333,3 +333,22 @@ active tier (`_kii_sgr_fg` / `_kii_sgr_bg`), so no tier can send another tier's 
 A cell's worst case grows from 25 to 41 bytes, and the frame cap (`KII_MAX_CELLS`) still
 bounds a frame, at ~43 MB of truecolour output.
 
+
+## Amendment — v1.9.0 (dithering adds no emit surface)
+
+[ADR 0011](0011-dithering.md) adds `--dither none|ordered|fs`. It changes which colour code a
+pixel gets, never which escapes exist. Every code still comes from the active tier's
+quantizer, and the emit layer still refuses a code outside that tier, so the SGR set from
+the v1.8.0 amendment is unchanged.
+
+The new allocations are bounded by limits already in force:
+
+- **Floyd-Steinberg** keeps two error rows of `(w + 2) × 3` i64, so 48 · (w + 2) bytes. `w`
+  is the frame's width in pixels (half-block) or cells (ASCII), at most `KII_MAX_COLS`
+  (100,000).
+- **The ASCII lane's cell field** (under `fs` only) takes 8 bytes a cell. That is at most
+  8 MB under `KII_MAX_CELLS`.
+
+Every allocation is checked, and a failure is reported as an error (exit 1). The arithmetic
+is exact integers: the carried error stays within ±16·255 per channel, far inside an i64.
+The fuzz harness's emit surface now rotates through every tier × dither pair.

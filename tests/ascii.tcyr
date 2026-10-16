@@ -73,7 +73,7 @@ fn test_ascii_shape_row_buf() {
         sy = sy + 1;
     }
     var out[64];
-    var pos = emit_ascii_shape_row_buf(&rgb, 0, 4, 0, 2, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 4, 0, 2, &out, 0);
     assert(pos > 0, "row_buf returns positive pos");
     assert_eq(load8(&out + pos - 1), 10,   "row ends LF");
     assert_eq(load8(&out + pos - 2), 0x6D, "reset 'm'");
@@ -95,7 +95,7 @@ fn test_ascii_shape_row_buf() {
     # v1.8.0: the whole row, exactly. A space takes no fg escape; the white
     # cell's mean (255,255,255) is tier-16 index 15, SGR 97.
     quant_set_tier(16);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 4, 0, 2, &out, 0);
     assert_eq(_bytes_are(&out, pos, " \x1b[97m@\x1b[0m\n"), 1, "row = ' ' + 97 '@' + reset");
 
     # v1.8.0: transparency. Mask every sample of the white cell: it becomes
@@ -105,12 +105,12 @@ fn test_ascii_shape_row_buf() {
     while (z < 12) { store8(&mask + z, 0); z = z + 1; }
     sy = 0;
     while (sy < 3) { store8(&mask + sy * 4 + 2, 1); store8(&mask + sy * 4 + 3, 1); sy = sy + 1; }
-    pos = emit_ascii_shape_row_buf(&rgb, &mask, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, 0, 4, 0, 2, &out, 0);
     assert_eq(_bytes_are(&out, pos, "  \x1b[0m\n"), 1, "a fully transparent cell is a bare space");
     # Mask only the top two samples of the white cell: the rest still set the
     # colour (their mean is white), so it keeps SGR 97.
     store8(&mask + 6, 0); store8(&mask + 7, 0); store8(&mask + 10, 0); store8(&mask + 11, 0);
-    pos = emit_ascii_shape_row_buf(&rgb, &mask, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, 0, 4, 0, 2, &out, 0);
     assert_eq(_bytes_have(&out, pos, "\x1b[97m"), 1, "a partly transparent cell keeps its opaque samples' colour");
     return 0;
 }
@@ -123,15 +123,84 @@ fn test_ascii_shape_tiers() {
     while (z < 54) { store8(&rgb + z, 255); z = z + 1; }
     var out[128];
     quant_set_tier(16);
-    var pos = emit_ascii_shape_row_buf(&rgb, 0, 6, 0, 3, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 6, 0, 3, &out, 0);
     assert_eq(_bytes_are(&out, pos, "\x1b[97m@@@\x1b[0m\n"), 1, "three white cells: one fg escape");
     quant_set_tier(256);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, 6, 0, 3, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 6, 0, 3, &out, 0);
     assert_eq(_bytes_are(&out, pos, "\x1b[38;5;231m@@@\x1b[0m\n"), 1, "tier 256: 38;5;231");
     quant_set_tier(KII_TIER_TC);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, 6, 0, 3, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 6, 0, 3, &out, 0);
     assert_eq(_bytes_are(&out, pos, "\x1b[38;2;255;255;255m@@@\x1b[0m\n"), 1, "truecolour: 38;2;255;255;255");
     quant_set_tier(16);
+    return 0;
+}
+
+# v1.9.0: the cell colours are quantized as one cols × rows field
+# (_ascii_cell_codes) so --dither can work across cells; the row takes each
+# glyph's colour from that field instead of quantizing the cell itself.
+fn test_ascii_cell_codes() {
+    # Row 0 of a 2-cell row: cell0 black, cell1 white (sub_w 4, 3 rows).
+    var rgb[36];
+    var z = 0;
+    while (z < 36) { store8(&rgb + z, 0); z = z + 1; }
+    var sy = 0;
+    while (sy < 3) {
+        var o = (sy * 4 + 2) * 3;
+        z = 0;
+        while (z < 6) { store8(&rgb + o + z, 255); z = z + 1; }
+        sy = sy + 1;
+    }
+    quant_set_tier(16);
+    quant_set_dither(KII_DITHER_NONE);
+    var codes = _ascii_cell_codes(&rgb, 0, 4, 2, 1);
+    assert(codes != 0, "the cell-code pass allocates");
+    assert_eq(load32(codes), 0, "black cell → 0, as kii_color_code gives");
+    assert_eq(load32(codes + 4), 15, "white cell → 15");
+    var out[64];
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, codes, 4, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, " \x1b[97m@\x1b[0m\n"), 1, "with dither none the row is the v1.8.0 row");
+    # The row takes its colour from the codes, not from the cell's own mean.
+    store32(codes + 4, 1);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, codes, 4, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, " \x1b[31m@\x1b[0m\n"), 1, "a given code (1, red) wins over the mean (white)");
+    # A cell whose samples are all transparent gets the default code.
+    var mask[12];
+    z = 0;
+    while (z < 12) { store8(&mask + z, 0); z = z + 1; }
+    sy = 0;
+    while (sy < 3) { store8(&mask + sy * 4, 1); store8(&mask + sy * 4 + 1, 1); sy = sy + 1; }
+    codes = _ascii_cell_codes(&rgb, &mask, 4, 2, 1);
+    assert_eq(load32(codes), KII_COLOR_DEFAULT, "a fully transparent cell → the default code");
+    assert_eq(load32(codes + 4), 15, "its opaque neighbour is unaffected");
+    # Floyd-Steinberg runs across cells: four mid-grey cells mix two greys.
+    var grey[72];
+    z = 0;
+    while (z < 72) { store8(&grey + z, 128); z = z + 1; }
+    quant_set_dither(KII_DITHER_FS);
+    codes = _ascii_cell_codes(&grey, 0, 8, 4, 1);
+    assert_eq(load32(codes), 7, "fs: cell 0 → light grey");
+    assert_eq(load32(codes + 4), 8, "fs: cell 1 → bright black, from cell 0's error");
+    quant_set_dither(KII_DITHER_NONE);
+    codes = _ascii_cell_codes(&grey, 0, 8, 4, 1);
+    assert_eq(load32(codes + 4), 7, "none: cell 1 → light grey");
+    # Ordered needs no field pass: the row applies each cell's Bayer offset
+    # itself, and gets what the field pass would. Bayer row 0 is 0 8 2 10, so
+    # cells 1 and 3 (offset ≥ 0) are light grey, cells 0 and 2 bright black.
+    quant_set_dither(KII_DITHER_ORDERED);
+    codes = _ascii_cell_codes(&grey, 0, 8, 4, 1);
+    assert_eq(load32(codes) * 1000 + load32(codes + 4) * 100 + load32(codes + 8) * 10 + load32(codes + 12),
+              8787, "ordered field: 8 7 8 7");
+    var out4[128];
+    pos = emit_ascii_shape_row_buf(&grey, 0, 0, 8, 0, 4, &out4, 0);
+    var pos2 = emit_ascii_shape_row_buf(&grey, 0, codes, 8, 0, 4, &out, 0);
+    assert_eq(pos, pos2, "per-cell ordered row = field-coded row (length)");
+    var same = 1;
+    z = 0;
+    while (z < pos) { if (load8(&out4 + z) != load8(&out + z)) { same = 0; } z = z + 1; }
+    assert_eq(same, 1, "per-cell ordered row = field-coded row (bytes)");
+    assert_eq(_bytes_have(&out4, pos, "\x1b[90m") + _bytes_have(&out4, pos, "\x1b[37m"), 2,
+              "the ordered row draws both greys (90 and 37)");
+    quant_set_dither(KII_DITHER_NONE);
     return 0;
 }
 
@@ -149,6 +218,7 @@ fn main() {
     test_ascii_match();
     test_ascii_shape_row_buf();
     test_ascii_shape_tiers();
+    test_ascii_cell_codes();
     test_ascii_shape_guards();
     return assert_summary();
 }

@@ -23,10 +23,22 @@
 #
 # **Algorithm** (per scanline):
 #   For each dst pixel (dx, dy) in [0, dst_w) × [0, dst_h):
-#     sx = (dx × W_src) / dst_w       # integer truncation toward 0
-#     sy = (dy × H_src) / dst_h
+#     sx = ((2·dx + 1) × W_src) / (2 × dst_w)   # the centre of dx's span
+#     sy = ((2·dy + 1) × H_src) / (2 × dst_h)
 #     (r, g, b) = the RGBA8 pixel at (sx, sy), composited over black
 #     store at dst_buf + (dy × dst_w + dx) × 3
+#
+# **Pixel-centre sampling** (v1.9.0; finding C-7 of the v1.6.4 sweep).
+# Each destination pixel covers the source span [dx·W/dst_w,
+# (dx+1)·W/dst_w); kii samples the pixel at that span's centre. Through
+# v1.8.0 it sampled the span's START (`dx·W / dst_w`), which shifted the
+# whole frame up and to the left by half a span — five source pixels at a
+# 10:1 reduction — and meant a downscale never read the last source row or
+# column. Now the offset is at most half a SOURCE pixel (a centre that
+# lands exactly between two pixels takes the right / lower one). The
+# identity case and integer upscales sample exactly as before; every
+# downscaled frame shifts toward the image's real centre. The formula stays
+# in bounds: dx ≤ dst_w − 1 gives sx ≤ W − W/(2·dst_w) < W.
 #
 # Multi-source convergent port: shape drawn from chafa's
 # `chafa-canvas.c` resample (nearest variant), libcaca's color
@@ -126,11 +138,11 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     var op = out_buf;
     var mp = mask;
     while (dy < dst_h) {
-        var sy = (dy * src_h) / dst_h;
+        var sy = ((2 * dy + 1) * src_h) / (2 * dst_h);
         var rowp = pixels + sy * src_w * 4;
         var dx = 0;
         while (dx < dst_w) {
-            var sp = rowp + ((dx * src_w) / dst_w) * 4;
+            var sp = rowp + (((2 * dx + 1) * src_w) / (2 * dst_w)) * 4;
             var a = load8(sp + 3);
             if (a == 255) {
                 store8(op, load8(sp));

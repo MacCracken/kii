@@ -1,7 +1,7 @@
 [package]
 name = "kii"
 version = "${file:VERSION}"
-description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. Renders PNG, baseline JPEG, BMP and GIF (first frame) via the chitra substrate as 16-color half-block or ASCII-glyph frames sized to the terminal."
+description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. Renders PNG, baseline JPEG, BMP and GIF (first frame) via the chitra substrate as half-block or ASCII-glyph frames in 8, 16 or 256 colours or truecolour, optionally dithered, sized to the terminal."
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/kii"
 language = "cyrius"

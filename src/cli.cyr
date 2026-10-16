@@ -64,6 +64,7 @@ var KII_F_WIDTH   = 0 - 1;
 var KII_F_COLOR   = 0 - 1;
 var KII_F_VERBOSE = 0 - 1;
 var KII_F_MODE    = 0 - 1;
+var KII_F_DITHER  = 0 - 1;
 
 # Register kii's flag surface into a cmdit context `fs` (caller owns
 # cmdit_new + cmdit_parse). cmdit_new already registered --help/-h (h=104)
@@ -96,7 +97,21 @@ fn kii_register_flags(fs): i64 {
     # fails the parse with CMDIT_ERR_BAD_ENUM, and cmdit_get_enum gives the
     # choice's index (KII_MODE_*), in the order of the choices string.
     KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii", "render mode");
+    # --dither / -d (100): v1.9.0 (ADR 0011). none (the default) quantizes
+    # each pixel on its own; ordered adds a 4x4 Bayer offset; fs diffuses the
+    # error (Floyd-Steinberg). No effect at --color tc, where nothing is
+    # quantized. kii_dither_mode maps the choice to quant.cyr's mode.
+    KII_F_DITHER  = cmdit_enum(fs, 100, "dither", "none", "none|ordered|fs", "dithering");
     return 0;
+}
+
+# The dither mode the parsed --dither selects, in the order of its choices
+# string ("none|ordered|fs"): KII_DITHER_NONE, _ORDERED or _FS (quant.cyr).
+fn kii_dither_mode(fs): i64 {
+    var i = cmdit_get_enum(fs, KII_F_DITHER);
+    if (i == 1) { return KII_DITHER_ORDERED; }
+    if (i == 2) { return KII_DITHER_FS; }
+    return KII_DITHER_NONE;
 }
 
 # The tier the parsed --color selects, in the order of its choices string
@@ -135,7 +150,8 @@ fn kii_frame_cells_ok(cols, rows): i64 {
 #
 # v1.7.0: OUT_OF_RANGE and BAD_ENUM became reachable when --width and
 # --mode moved onto cmdit_range / cmdit_enum. --width is the one range flag,
-# so OUT_OF_RANGE names it. v1.8.0 made --color an enum too, so BAD_ENUM
+# so OUT_OF_RANGE names it. v1.8.0 made --color an enum too, and v1.9.0 added
+# --dither, so BAD_ENUM
 # names whichever flag `flag` (kii_err_flag_name's long name, or 0) says;
 # tests/cli.tcyr pins both pairings.
 #
@@ -160,6 +176,7 @@ fn kii_parse_error_line(err, flag): i64 {
     if (err == CMDIT_ERR_BAD_ENUM && flag != 0) {
         if (streq(flag, "color") == 1) { return "kii: --color must be 8, 16, 256 or tc\n"; }
         if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock or ascii\n"; }
+        if (streq(flag, "dither") == 1) { return "kii: --dither must be none, ordered or fs\n"; }
     }
     return "kii: argument parse error\n";
 }

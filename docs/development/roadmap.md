@@ -3,25 +3,13 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.8.0**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.9.0**.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
 are pinned**: a release takes the items listed under it, and an item moves to another
 version only by editing this file. Work that depends on another repo shipping first
 has no version until it does (§ Gated on upstream).
-
-## 1.9.0 — Tier 2 dithering, and pixel-centre sampling
-
-`--dither none|ordered|fs`: ordered (Bayer) and Floyd-Steinberg error diffusion, on every
-colour tier. Orthogonal to `--mode`. Self-contained in the quantize layer. Default stays
-`none`, so existing frames do not change.
-
-Same release, because it also changes every downscaled frame: **pixel-centre sampling.**
-Nearest-neighbour `sx = dx·W/dst_w` never samples the last source column or row on a
-downscale, so a 1-px border shows on the top and left only (C-7). Sample centres,
-`((2dx+1)·W) / (2·dst_w)`, which stays in bounds and keeps the identity case. Amends
-[ADR 0005](../adr/0005-nearest-neighbor-downscale.md).
 
 ## 1.10.0 — ASCII shape-vector refinements
 

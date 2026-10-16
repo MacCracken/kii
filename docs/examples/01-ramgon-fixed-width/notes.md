@@ -10,14 +10,17 @@ until v1.6.4: the count is terminal rows, the trap
 
 **Why this example**: covers the dominant production code path —
 RGBA color_type=6, bit_depth=8, real-world IDAT-fusing (121 IDAT
-chunks, fused inside `chitra`), 256-color SGR emit via 16-color
-palette quantization. Every pixel is opaque, so the v1.6.4 alpha
-compositing leaves this frame byte-identical.
+chunks, fused inside `chitra`), and the default tier-16 emit: plain
+SGR codes, each written only when it changes (ADR 0010). Every pixel is
+opaque, so neither v1.6.4's alpha compositing nor v1.8.0's transparency
+touches this frame. v1.9.0's pixel-centre sampling does: it moves every
+cell half a cell toward the image's true centre (ADR 0005).
 
 **What you should see**: a colorful half-block rendering of the
 RAMGON fixture. The image looks like a low-res palette-quantized
-version of the source; on a 256-color terminal the SGR escapes
-render as the closest of the 16-color ANSI palette entries.
+version of the source, drawn in the terminal's own 16 named colours.
+`--dither ordered` or `--dither fs` trades the flat bands for a
+pattern of two neighbouring colours (ADR 0011).
 
 **Cross-check**:
 

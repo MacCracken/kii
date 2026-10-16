@@ -285,3 +285,53 @@ CPU per render drops with the output (user time for 50 renders of a 256² icon a
 tier 16 0.39–0.50 s (0.58 s); truecolour 0.19 s and 256 0.22–0.23 s, cheaper than tier 16
 because they skip the 16-entry palette search. Large images are unchanged: their time is
 chitra's decode.
+
+## v1.9.0 — dithering: output size and CPU per mode
+
+Same host and toolchain, load average ~1; the v1.8.0 binary for comparison, interleaved, two
+rounds. `--dither none` is the default, and its frames differ from v1.8.0's only by
+pixel-centre sampling (ADR 0005 amendment), which moves sizes by under 2 %. Output bytes for
+RAMGON (1152×925):
+
+| frame | v1.8.0 | v1.9.0 none | ordered | fs |
+|---|---:|---:|---:|---:|
+| half-block, `--width 80`, tier 8 | 13,380 | 13,330 | 20,740 | 21,990 |
+| half-block, `--width 80`, tier 16 | 14,609 | **14,553** | 23,222 | 23,753 |
+| half-block, `--width 80`, tier 256 | 46,390 | 47,097 | 60,164 | 51,771 |
+| ascii, `--width 80`, tier 16 | 5,125 | 5,080 | 8,890 | 8,770 |
+| half-block, `--width 200`, tier 16 | 79,044 | 79,633 | 140,243 | 145,686 |
+| half-block, `--width 200`, tier 256 | 261,091 | 259,783 | 378,252 | 309,929 |
+| ascii, `--width 200`, tier 16 | 26,955 | 27,295 | 53,390 | 55,295 |
+
+Over the 466-image corpus at `--width 60`, against `none`:
+
+| lane / tier | none | ordered | fs |
+|---|---:|---:|---:|
+| half-block 8 | 6.25 MB | 9.20 MB (×1.47) | 8.49 MB (×1.36) |
+| half-block 16 | 6.48 MB | 11.86 MB (×1.83) | 12.12 MB (×1.87) |
+| half-block 256 | 8.34 MB | 35.23 MB (×4.22) | 27.80 MB (×3.33) |
+| ascii 8 | 2.61 MB | 4.11 MB (×1.57) | 3.71 MB (×1.42) |
+| ascii 16 | 2.73 MB | 5.32 MB (×1.95) | 5.38 MB (×1.97) |
+| ascii 256 | 4.00 MB | 16.97 MB (×4.24) | 13.50 MB (×3.38) |
+
+**Reading**: dithering costs bytes because escape elision works on runs of one colour, and
+a dither pattern is two colours alternating. Tier 256 pays most: its offset (±19) spans
+several grey-ramp levels, so a pattern there mixes more distinct codes, each a longer
+escape. Even so, a tier-16 `fs` frame stays well under v1.7.0's undithered 54,353 bytes.
+
+User CPU per 50 renders of a 256² icon (`/usr/share/pixmaps/kitty.png`) at `--width 200`,
+two rounds:
+
+| frame | v1.8.0 | none | ordered | fs |
+|---|---:|---:|---:|---:|
+| half-block, tier 16 | 0.238 / 0.247 s | 0.240 / 0.244 s | 0.273 / 0.274 s | 0.332 / 0.327 s |
+| half-block, tier 256 | 0.226 / 0.227 s | 0.214 / 0.217 s | 0.262 / 0.256 s | 0.310 / 0.324 s |
+| ascii, tier 16 | 0.358 / 0.357 s | 0.356 / 0.368 s | 0.375 / 0.370 s | 0.461 / 0.472 s |
+
+**Reading**: `none` costs what v1.8.0 did in both lanes. Ordered adds ~0.6 ms a render
+(one table lookup and three clamps a pixel). `fs` adds ~1.8 ms in half-block and ~2.2 ms in
+ASCII: the error rows, and in ASCII the extra pass that computes every cell's mean before
+the rows are built. An early draft ran that pass for every mode and made the default ASCII
+lane ~19 % slower (0.355 → 0.423 s). It now runs only under `fs`. On RAMGON at
+`--width 200` all four are within noise (0.98–1.04 s per 5 renders), because chitra's decode
+dominates.

@@ -6,9 +6,9 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.8.0** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v1.9.0** (2026-10-16). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
-`kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to the 8- or 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
+`kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
 ```
 $ kii tests/fixtures/RAMGON.png        # renders half-block ANSI to the terminal
@@ -68,6 +68,11 @@ shared substrate, which is the point:
   on the plain 8/16-colour SGR codes a strict terminal understands, repeated escapes elided
   (frames ~83 % smaller), and transparent pixels drawn in the terminal's own background
   ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)).
+- **v1.9.0** — dithering: `--dither ordered` (4×4 Bayer) or `--dither fs` (Floyd-Steinberg)
+  at tiers 8, 16 and 256, in both lanes; on a grey ramp at tier 16, `fs` cuts the brightness
+  error by three quarters ([ADR 0011](docs/adr/0011-dithering.md)). The default stays `none`.
+  The downscale now samples each span's centre rather than its start, which changes every
+  downscaled frame ([ADR 0005](docs/adr/0005-nearest-neighbor-downscale.md) amendment).
 
 ### Supported input formats
 
@@ -82,7 +87,6 @@ All four arrive from the [`chitra`](https://github.com/MacCracken/chitra) substr
 
 - **Animated GIF beyond frame 1** — kii is a still-frame renderer; chitra decodes the first frame by design (chitra ADR 0005)
 - **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra is baseline-only)
-- **Dithering** (ordered / Floyd-Steinberg) — pinned to 1.9.0 in the [roadmap](docs/development/roadmap.md)
 - **Sixel / Kitty / iTerm2 image protocols** — tier 3, open for 2.0
 
 ## Usage
@@ -96,6 +100,7 @@ kii [OPTIONS] <image>
 | `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000; negative values are refused. |
 | `-c, --color <8\|16\|256\|tc>` | `16` | Colour tier. `16` uses the 16 ANSI colours (SGR 30–37 / 90–97), `8` the normal-intensity half only (30–37, for the strictest terminals), `256` the xterm 6×6×6 cube and grey ramp, `tc` 24-bit truecolour. kii never reads `COLORTERM`: the tier is what you ask for. |
 | `-m, --mode <M>` | `halfblock` | `halfblock` emits `▀` cells at double vertical resolution; `ascii` emits text glyphs chosen by shape. |
+| `-d, --dither <none\|ordered\|fs>` | `none` | Dithering at tiers 8, 16 and 256. `ordered` adds a 4×4 Bayer pattern; `fs` diffuses each pixel's error (Floyd-Steinberg). Both turn bands into a mix of two neighbouring colours, and make the frame larger. No effect at `tc`. |
 | `-v, --verbose` | off | Print a dimensions/format summary to **stderr** after the frame. |
 | `-h, --help` | — | Show help and exit. |
 | `-V, --version` | — | Print version and exit. |
@@ -106,6 +111,7 @@ kii --width 120 image.png          # explicit width; height follows the aspect r
 kii --mode ascii image.png         # text-glyph art instead of half-blocks
 kii --color 8 image.png            # 8-colour tier for the strictest terminals
 kii --color tc photo.jpg           # 24-bit truecolour
+kii --dither fs photo.jpg          # smooth gradients in 16 colours (or --dither ordered)
 kii image.png > frame.ansi         # pure ANSI on stdout; diagnostics stay on stderr
 ```
 
@@ -127,7 +133,7 @@ and a truncated JPEG or GIF (the partial frame is what decoded).
 The world prior art (`chafa`) ships every tier from monochrome through 24-bit truecolor. kii chooses the order deliberately:
 
 - **Tier 1 — shipped**: 8/16-color ANSI palette + half-block (`▀`/`▄`) glyph quantization. Historically-correct rendering target for BBS / MUD clients of the early-90s era; maximum terminal compatibility; well-defined floor. Palette quantization landed at v0.5.0, glyph emit at v0.6.0, terminal-size detection at v0.7.0, and the tier was completed at **v1.5.1**, when `--color 8` stopped being a flag that parsed its argument and ignored it.
-- **Tier 2 — shipped at v1.8.0, dithering next**: `--color 256` (the xterm cube and grey ramp) and `--color tc` (24-bit, `\x1b[38;2;R;G;Bm`) landed at **v1.8.0** ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)); ordered / Floyd-Steinberg dithering is pinned to 1.9.0.
+- **Tier 2 — shipped**: `--color 256` (the xterm cube and grey ramp) and `--color tc` (24-bit, `\x1b[38;2;R;G;Bm`) landed at **v1.8.0** ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)); ordered and Floyd-Steinberg dithering (`--dither`, for tiers 8, 16 and 256) at **v1.9.0** ([ADR 0011](docs/adr/0011-dithering.md)).
 - **Tier 3 — future**: Sixel / Kitty / iTerm2 image-protocol direct rendering (skips ASCII art entirely on supporting terminals). Animated GIF / video frame-pipe support.
 
 ## Naming
@@ -142,7 +148,7 @@ The world prior art (`chafa`) ships every tier from monochrome through 24-bit tr
 - [`darshana`](https://github.com/MacCracken/darshana) — TTY/ANSI primitives (color escape sequences, cursor positioning, `tty_winsize`). External dep since v0.6.0 / M5 when ANSI emit went live; pinned at `1.3.0` since v1.6.0, when kii's own background-colour composer and its filename sanitizer moved onto darshana's `tty_bg_256_buf` and `tty_has_ctl` — both of which darshana built with kii as their first consumer.
 - [`cmdit`](https://github.com/MacCracken/cmdit) — getopt-long CLI parsing (the Cyrius stdlib `flags` parser productized and extended). **Adopted at v1.1.0** in the CLI re-fold: kii's own flag set seeded cmdit's design and kii is its first consumer, so the hand-rolled parser and the stdlib `flags` dep were both dropped. `src/cli.cyr` registers into a cmdit context. Pinned at `1.4.0` via `[deps.cmdit]`.
 - [`chitra`](https://github.com/MacCracken/chitra) — the image-decode substrate (pure-Cyrius PNG + JPEG + BMP + GIF → canonical RGBA8). **Forked from kii's own `src/png.cyr` and adopted back** at v1.2.0 (the PNG re-fold, [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)) when `mabda` became the second consumer; `src/png.cyr` is now a thin adapter calling `chitra_image_decode`. JPEG arrived on the `chitra 0.3.0` re-pin at v1.4.0 ([ADR 0008](docs/adr/0008-jpeg-via-chitra.md)); BMP + GIF on the `chitra 1.0.0` re-pin at v1.5.0, with **no decode change at all** ([ADR 0009](docs/adr/0009-bmp-gif-via-chitra.md)). Pinned at `1.2.0` via `[deps.chitra]`.
-- **In-repo palette + quantizer** (`src/palette.cyr` + `src/quant.cyr`) — Linux-console 16-color RGB table + nearest-neighbour Euclidean quantization, with the active tier (8 or 16) selected by `--color`. These two modules and the emit/downscale layer are the only image code kii still owns.
+- **In-repo palette + quantizer** (`src/palette.cyr` + `src/quant.cyr`) — Linux-console 16-color RGB table + nearest-colour Euclidean quantization at the tier `--color` selects (8, 16, 256 or truecolour), plus the ordered and Floyd-Steinberg dithering `--dither` selects. These two modules and the emit/downscale layer are the only image code kii still owns.
 
 ## Multi-source prior art
 
@@ -153,6 +159,7 @@ Per AGNOS `feedback_redesign_dont_reinvent` the convergent shape comes from mult
 | Image-to-terminal conversion (overall shape) | [`chafa`](https://hpjansson.org/chafa/) — canonical, sophisticated dithering, glyph quantization | `jp2a` (JPEG-focused monochrome-leaning), `viu` (256/truecolor biased), `libcaca` (substrate library most others rooted from) |
 | PNG decoder | [W3C PNG Specification](https://www.w3.org/TR/png/) (1.3) | Reference impl: `libpng`; minimal-port refs: `stb_image.h`, `lodepng` |
 | 16-color ANSI palette | Linux console color table (CGA-derived) | xterm 16-color set (identical for ANSI 0-7 + bright 0-7) |
+| Dithering (v1.9.0) | Floyd & Steinberg (1976); Bayer (1973) ordered matrix | `chafa` (`--dither ordered\|diffusion`), `libcaca` (`ordered2/4/8`, `fstein`) |
 | Half-block glyph quantization | `chafa` source `chafa-canvas.c` glyph-selection routines | Various ASCII-art-converter tutorials; Unicode Block Elements block (`U+2580`-`U+259F`) spec |
 
 ## Building
@@ -170,7 +177,7 @@ truth, so read it there.
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 709 assertions across 5 suites (cli/quant/render/ascii/decode)
+cyrius test                           # 813 assertions across 5 suites (cli/quant/render/ascii/decode)
 cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 10 fuzz surfaces, 8,011,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF)
 cyrius bench tests/kii.bcyr                                     # 7 benches (quantize, end-to-end, decode-latency)
 ```

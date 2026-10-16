@@ -20,7 +20,7 @@ The roadmap ([`docs/development/roadmap.md`](docs/development/roadmap.md)) pins 
 
 ## Adding a new color-tier mode
 
-Tier-2 is pinned in the roadmap: 256-color and truecolor at 1.8.0, dithering at 1.9.0. Tier-3 (Sixel, Kitty, iTerm2 image protocols) is open for 2.0. See [`CLAUDE.md` § Color-tier discipline](CLAUDE.md) and [ADR 0003](docs/adr/0003-color-tier-discipline.md) for why the tiers come in this order. A PR for either should target the release the roadmap pins it to.
+Tier-2 has shipped: 256-color and truecolor at 1.8.0 ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)), dithering at 1.9.0 ([ADR 0011](docs/adr/0011-dithering.md)). Tier-3 (Sixel, Kitty, iTerm2 image protocols) is open for 2.0. See [`CLAUDE.md` § Color-tier discipline](CLAUDE.md) and [ADR 0003](docs/adr/0003-color-tier-discipline.md) for why the tiers come in this order. A PR for either should target the release the roadmap pins it to.
 
 ## Adding a new image format
 
@@ -46,7 +46,7 @@ Every behavior change needs at least:
 - For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **ten** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF, the path-sanitizer differential, and the terminal envelope); add to whichever the change touches, and give a new surface a `bad` count — any non-zero count fails the run. If you add a surface that calls `alloc_reset()`, also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it once silently voided a million iterations. (sankoch's arena canary has covered this upstream since 2.7.10, re-verified at cyrius 6.7.9; the line stays as a second guard.)
 - For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`. A bench guarded on a system fixture must report a visible SKIP when the fixture is absent, never vanish from the output.
 
-PRs without test coverage will be asked to add it. Current state: **709 unit assertions + 8,011,000 fuzz iters/run + 7 benches** as of v1.6.4.
+PRs without test coverage will be asked to add it. Current state: **813 unit assertions + 8,011,000 fuzz iters/run + 7 benches** as of v1.9.0.
 
 ## Commits and PRs
 

@@ -1,7 +1,11 @@
 Frame is ~14.6 KB of ANSI escape sequences (32 rows; it was ~54 KB before
 v1.8.0's elision). First bytes:
 
-  \x1b[30m\x1b[40m▀\x1b[100m▀\x1b[90m▀\x1b[47m▀▀\x1b[37m...
+  \x1b[30m\x1b[100m▀\x1b[90m▀\x1b[47m▀▀\x1b[37m▀▀▀▀\x1b[107m▀...
+
+(v1.9.0's pixel-centre sampling moved every cell half a cell toward the
+image's true centre, so these bytes changed: 14,609 → 14,553. They read
+`\x1b[30m\x1b[40m▀\x1b[100m▀…` at v1.8.0.)
 
 Format: per cell, `SGR foreground; SGR background; ▀` (U+2580 half-block),
 where the foreground carries the top pixel's colour and the background the

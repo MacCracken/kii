@@ -128,17 +128,55 @@ fn main() {
     # dst (3,3) → src (1,1) = (113,114,115).
     assert_eq(load8(d_up_buf + (3 * 4 + 3) * 3 + 2), 115, "upscale (3,3) B = src (1,1).B = 115");
 
-    test_group("M5(b) — downscale shrink (2x2 → 1x1, top-left wins)");
-    # Nearest-neighbor downscale with integer truncation picks the
-    # top-left source pixel: sx = (0 * 2)/1 = 0, sy = 0. So 1x1
-    # output = src (0,0) = (100, 101, 102).
+    test_group("v1.9.0 — downscale shrink (2x2 → 1x1) samples the span's centre");
+    # Pixel-centre sampling: sx = ((2·0 + 1)·2) / (2·1) = 1, sy = 1, so the
+    # 1x1 output is src (1,1) = (113, 114, 115). Through v1.8.0 the formula
+    # took the span's start and this was src (0,0) = (100, 101, 102).
     var pstr_d_sh[160];
     _r_make_2x2(&pstr_d_sh);
     assert_eq(downscale_to_rgb(&pstr_d_sh, 1, 1), 0, "2x2 → 1x1 shrink → 0");
     var d_sh_buf = load64(&pstr_d_sh + STRUCT_DOWNSCALED_BUF_OFFSET);
-    assert_eq(load8(d_sh_buf + 0), 100, "shrink 1x1 R = src (0,0).R = 100");
-    assert_eq(load8(d_sh_buf + 1), 101, "shrink 1x1 G = src (0,0).G = 101");
-    assert_eq(load8(d_sh_buf + 2), 102, "shrink 1x1 B = src (0,0).B = 102");
+    assert_eq(load8(d_sh_buf + 0), 113, "shrink 1x1 R = src (1,1).R = 113");
+    assert_eq(load8(d_sh_buf + 1), 114, "shrink 1x1 G = src (1,1).G = 114");
+    assert_eq(load8(d_sh_buf + 2), 115, "shrink 1x1 B = src (1,1).B = 115");
+
+    test_group("v1.9.0 — pixel-centre sampling across a row (C-7)");
+    # A 10-pixel row whose pixel i has R = i, downscaled to widths 1, 2, 5 and
+    # 10: each output pixel takes the source pixel at its span's centre.
+    var pstr_c[160];
+    var cbuf[40];
+    var cx = 0;
+    while (cx < 10) {
+        store8(&cbuf + cx * 4, cx); store8(&cbuf + cx * 4 + 1, 0);
+        store8(&cbuf + cx * 4 + 2, 0); store8(&cbuf + cx * 4 + 3, 255);
+        cx = cx + 1;
+    }
+    var cz = 0;
+    while (cz < 160) { store64(&pstr_c + cz, 0); cz = cz + 8; }
+    store64(&pstr_c + STRUCT_WIDTH_OFFSET, 10);
+    store64(&pstr_c + STRUCT_HEIGHT_OFFSET, 1);
+    store64(&pstr_c + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(&pstr_c + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(&pstr_c + STRUCT_PIXELS_BUF_OFFSET, &cbuf);
+    store64(&pstr_c + STRUCT_PIXELS_SIZE_OFFSET, 40);
+    downscale_to_rgb(&pstr_c, 1, 1);
+    var cd = load64(&pstr_c + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(cd), 5, "10 → 1: the centre pixel 5 (was pixel 0)");
+    downscale_to_rgb(&pstr_c, 2, 1);
+    cd = load64(&pstr_c + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(cd) * 10 + load8(cd + 3), 27, "10 → 2: pixels 2 and 7 (was 0 and 5)");
+    downscale_to_rgb(&pstr_c, 5, 1);
+    cd = load64(&pstr_c + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var picks = 0;
+    cx = 0;
+    while (cx < 5) { picks = picks * 10 + load8(cd + cx * 3); cx = cx + 1; }
+    assert_eq(picks, 13579, "10 → 5: pixels 1 3 5 7 9 — the last column is reached (was 0 2 4 6 8)");
+    downscale_to_rgb(&pstr_c, 10, 1);
+    cd = load64(&pstr_c + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var ident = 1;
+    cx = 0;
+    while (cx < 10) { if (load8(cd + cx * 3) != cx) { ident = 0; } cx = cx + 1; }
+    assert_eq(ident, 1, "10 → 10: the identity is unchanged");
 
     test_group("M5(b) — downscale ct6 drops alpha (RGBA → RGB extraction)");
     # Post-flip the live decode path is always ct6; the per-color_type

@@ -69,6 +69,7 @@ Options:
   -c, --color <8|16|256|tc>	colour tier (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
   -m, --mode <halfblock|ascii>	render mode (default: halfblock)
+  -d, --dither <none|ordered|fs>	dithering (default: none)
 
 Examples:
   kii --version                              # version + etymology
@@ -79,6 +80,7 @@ Examples:
   kii --verbose image.png                    # frame + dimensions/format on stderr
   kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
+  kii --dither fs photo.jpg                  # error-diffused gradients (or ordered)
   kii image.png > frame.ansi                 # capture pure ANSI bytes
 ```
 
@@ -107,11 +109,25 @@ Examples:
 
   kii does not read `COLORTERM` or `TERM`: the tier is what you pass.
   Within a row, an escape is written only when the colour changes, so a
-  tier-16 frame is far smaller than it was before v1.8.0. Dithering is
-  pinned to 1.9.0.
+  tier-16 frame is far smaller than it was before v1.8.0.
+- **`--dither none|ordered|fs`** (`-d`) — Dithering, since v1.9.0
+  ([ADR 0011](../adr/0011-dithering.md)). The default `none` maps each
+  pixel to its nearest colour, so a gradient becomes flat bands.
+  - `ordered` adds a 4×4 Bayer pattern. A colour between two palette
+    colours becomes a fixed, even mix of them.
+  - `fs` (Floyd-Steinberg) carries each pixel's error on to its right
+    and lower neighbours, which gives an irregular mix that follows the
+    source more closely.
+
+  Both work at tiers 8, 16 and 256 and in both `--mode`s. At `tc` there
+  is nothing to dither, and the flag changes nothing. A dithered frame
+  is larger, because a pattern of two colours breaks the runs that
+  escape elision skips: about 1.4–1.6× at tier 8, 1.8–2× at tier 16,
+  and 3–4× at tier 256.
 - **`--verbose`** — Adds a stderr summary line after the frame:
   `<path>: <W>x<H> <N> pixels (<color_type_name>) → <T>-color`, where
   `<T>` is the active `--color` tier (8, 16 or 256), or `→ truecolor`.
+  An active `--dither` is appended (`→ 16-color, fs dither`).
   Stdout stays pipe-pure (only the ANSI frame); stderr is human
   diagnostic.
 
@@ -125,6 +141,13 @@ kii --width 80 motd.png > /etc/motd.ansi
 
 The 80-column constraint makes the output reproducible across login
 shells regardless of who's connecting from what terminal.
+
+**Photo in 16 colours** — dither instead of banding, at some cost in
+bytes:
+
+```sh
+kii --dither fs --width 80 sunset.jpg > motd.ansi
+```
 
 **Auto-fit terminal view** — drop into a running shell:
 
@@ -209,7 +232,7 @@ A bad command line prints one `kii: …` line on stderr, then the
 | Stderr line | Cause |
 |---|---|
 | `kii: unknown flag` | A flag kii does not define |
-| `kii: flag missing value` | `--width`, `--color` or `--mode` with nothing after it |
+| `kii: flag missing value` | `--width`, `--color`, `--mode` or `--dither` with nothing after it |
 | `kii: bad integer value` | `--width` given something that is not an integer |
 | `kii: short flags take no attached value and cannot be bundled (use -w 40 -v, not -w40 or -wv)` | `-w40`, `-wv`, `-v=1` and similar |
 | `kii: --verbose takes no value` | A switch given `=value`; the line names it (`--help`, `--version` likewise) |
@@ -217,6 +240,7 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: --color must be 8, 16, 256 or tc` | Any other `--color` value (`8 or 16` before v1.8.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
 | `kii: --mode must be halfblock or ascii` | Any other `--mode` value |
+| `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |
 | `kii: missing image path` | No path given |
 | `kii: too many arguments (expected one image path)` | More than one path |
 | `kii: out of memory` | The parser could not allocate |
@@ -260,8 +284,6 @@ By design, deferred, or refused upstream:
   its opaque half's colour with `▀` or `▄`), but alpha at 128 or above is
   composited over black, so a soft anti-aliased edge darkens slightly on a
   light background.
-- **Floyd-Steinberg / ordered dithering** — tier-2 work, pinned to 1.9.0
-  in the roadmap.
 - **Sixel / Kitty / iTerm2 image protocols** — tier-3 work, open for 2.0.
 - **Filesystem traversal** — kii takes ONE path. Loop in the shell
   (`for f in *.png; do kii "$f" > "${f%.png}.ansi"; done`).
