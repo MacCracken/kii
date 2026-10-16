@@ -293,39 +293,70 @@ fn _ascii_match(v): i64 {
 # emit_ascii_shape_row_buf — render ONE character row (cell row `cy`) into
 # `buf` at `pos`. `rgb` is the finer (sub_w x sub_h) downscaled RGB buffer
 # where sub_w = cols*2; each cell pulls its 2x3 sub-samples, builds the
-# 6-region luminance vector, matches a glyph, and colors it with the cell's
-# mean quantized color. Returns the new pos, or -1. (Buffer-targeting so
-# tests can assert the exact bytes — same split as emit_halfblock_row_buf.)
-fn emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, buf, pos): i64 {
+# 6-region luminance vector, matches a glyph, and colours it with the cell's
+# mean colour at the active tier (kii_color_code). Returns the new pos, or
+# -1. (Buffer-targeting so tests can assert the exact bytes — same split as
+# emit_halfblock_row_buf.)
+#
+# v1.8.0: `mask` is downscale's transparency mask (or 0 when nothing is
+# transparent). A transparent sample counts as no ink (luminance 0) and is
+# left out of the cell's mean colour, so a fully transparent cell is a space
+# on the terminal's default background. A space takes no fg escape at all,
+# and an fg that repeats the one this row last set is elided; the row state
+# starts unknown, so every row is self-contained.
+fn emit_ascii_shape_row_buf(rgb, mask, sub_w, cy, cols, buf, pos): i64 {
     # The three sub-sample rows of this character row are fixed for the whole
     # row, so their base is computed once (O-3). The 6 samples are visited in
     # region order r0c0 r0c1 r1c0 r1c1 r2c0 r2c1: step right after an even k,
     # down-and-left after an odd one.
     var stride = sub_w * 3;
     var r0 = rgb + (cy * 3) * stride;
+    var m0 = 0;
+    if (mask != 0) { m0 = mask + (cy * 3) * sub_w; }
     var vec[6];
+    var cur_fg = 0 - 1;
     var cx = 0;
     while (cx < cols) {
         var sumr = 0;
         var sumg = 0;
         var sumb = 0;
+        var opaque = 0;
         var rp = r0 + cx * 6;
+        var mp = 0;
+        if (m0 != 0) { mp = m0 + cx * 2; }
         var k = 0;
         while (k < 6) {
-            var pr = load8(rp + 0);
-            var pg = load8(rp + 1);
-            var pb = load8(rp + 2);
-            store8(&vec + k, _ascii_luma(pr, pg, pb));
-            sumr = sumr + pr;
-            sumg = sumg + pg;
-            sumb = sumb + pb;
-            if (k % 2 == 0) { rp = rp + 3; } else { rp = rp - 3 + stride; }
+            if (mp != 0 && load8(mp) != 0) {
+                store8(&vec + k, 0);
+            } else {
+                var pr = load8(rp + 0);
+                var pg = load8(rp + 1);
+                var pb = load8(rp + 2);
+                store8(&vec + k, _ascii_luma(pr, pg, pb));
+                sumr = sumr + pr;
+                sumg = sumg + pg;
+                sumb = sumb + pb;
+                opaque = opaque + 1;
+            }
+            if (k % 2 == 0) {
+                rp = rp + 3;
+                if (mp != 0) { mp = mp + 1; }
+            } else {
+                rp = rp - 3 + stride;
+                if (mp != 0) { mp = mp - 1 + sub_w; }
+            }
             k = k + 1;
         }
-        var glyph = _ascii_match(&vec);
-        var fg = quantize_nearest_rgb(sumr / 6, sumg / 6, sumb / 6);
-        pos = tty_fg_256_buf(buf, pos, fg);
-        if (pos < 0) { return 0 - 1; }
+        var glyph = 32;
+        if (opaque > 0) { glyph = _ascii_match(&vec); }
+        if (glyph != 32) {
+            var fg = kii_color_code(sumr / opaque, sumg / opaque, sumb / opaque);
+            if (fg != cur_fg) {
+                pos = _kii_sgr_fg(buf, pos, fg);
+                if (pos < 0) { return 0 - 1; }
+                cur_fg = fg;
+            }
+        }
         store8(buf + pos, glyph);
         pos = pos + 1;
         cx = cx + 1;
@@ -333,24 +364,27 @@ fn emit_ascii_shape_row_buf(rgb, sub_w, cy, cols, buf, pos): i64 {
     return _kii_row_end(buf, pos);
 }
 
-# The row builder _kii_emit_frame calls for this lane: its (src, w, row, buf,
-# pos) shape, with the cell count derived from the sub-sample width.
-fn _ascii_frame_row(rgb, sub_w, cy, buf, pos): i64 {
-    return emit_ascii_shape_row_buf(rgb, sub_w, cy, sub_w / 2, buf, pos);
+# The row builder _kii_emit_frame calls for this lane, in its (src, w, row,
+# buf, pos) shape: `src` is the pstruct, so the row can reach both the RGB
+# buffer and the transparency mask, and the cell count is derived from the
+# sub-sample width.
+fn _ascii_frame_row(pstruct, sub_w, cy, buf, pos): i64 {
+    return emit_ascii_shape_row_buf(load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET),
+        load64(pstruct + STRUCT_ALPHA_MASK_OFFSET), sub_w, cy, sub_w / 2, buf, pos);
 }
 
 # emit_ascii_shape — render the full frame to fd 1 (stdout). Reads
 # STRUCT_DOWNSCALED_* (the finer (cols*2 x rows*3) RGB buffer main.cyr
-# produces for ASCII mode). Returns 0, -1 if downscale wasn't run / dims
-# invalid, or -2 if a write to stdout failed. The loop is the shared
-# _kii_emit_frame (src/emit.cyr). Per-row heap buffer sized from cols (no
-# fixed-stack overflow — the v1.2.1 lesson): each cell is <=11 B fg + 1
-# glyph, + per-row reset/LF.
+# produces for ASCII mode) and the transparency mask. Returns 0, -1 if
+# downscale wasn't run / dims invalid, or -2 if a write to stdout failed.
+# The loop is the shared _kii_emit_frame (src/emit.cyr). Per-row heap buffer
+# sized from cols (no fixed-stack overflow — the v1.2.1 lesson): each cell
+# is at most a 19-byte truecolour fg + 1 glyph, + the per-row reset/LF.
 fn emit_ascii_shape(pstruct): i64 {
     var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
     var sub_w = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
     var sub_h = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
     if (rgb == 0) { return 0 - 1; }
     if (sub_w < 2 || sub_h < 3) { return 0 - 1; }
-    return _kii_emit_frame(&_ascii_frame_row, rgb, sub_w, sub_h / 3, (sub_w / 2) * 14 + 16);
+    return _kii_emit_frame(&_ascii_frame_row, pstruct, sub_w, sub_h / 3, (sub_w / 2) * 21 + 16);
 }

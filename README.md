@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.7.0** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v1.8.0** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to the 8- or 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
@@ -64,6 +64,10 @@ shared substrate, which is the point:
   is `kii_decode_image`, and the `PNG_ERR_*` codes are `IMG_ERR_*`, named for what they mean.
   The dead per-colour-type decoder paths are gone, both render lanes share one frame loop, and
   cmdit checks `--width` and `--mode`. Every frame is byte-identical.
+- **v1.8.0** — tier 2 colour and the emit rework: `--color 256` and `--color tc` (24-bit), tier 1
+  on the plain 8/16-colour SGR codes a strict terminal understands, repeated escapes elided
+  (frames ~83 % smaller), and transparent pixels drawn in the terminal's own background
+  ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)).
 
 ### Supported input formats
 
@@ -78,7 +82,7 @@ All four arrive from the [`chitra`](https://github.com/MacCracken/chitra) substr
 
 - **Animated GIF beyond frame 1** — kii is a still-frame renderer; chitra decodes the first frame by design (chitra ADR 0005)
 - **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra is baseline-only)
-- **256-color + truecolor, then dithering** — tier 2, pinned to 1.8.0 and 1.9.0 in the [roadmap](docs/development/roadmap.md)
+- **Dithering** (ordered / Floyd-Steinberg) — pinned to 1.9.0 in the [roadmap](docs/development/roadmap.md)
 - **Sixel / Kitty / iTerm2 image protocols** — tier 3, open for 2.0
 
 ## Usage
@@ -90,7 +94,7 @@ kii [OPTIONS] <image>
 | Flag | Default | What it does |
 |---|---|---|
 | `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000; negative values are refused. |
-| `-c, --color <N>` | `16` | Colour tier: `16` uses the full ANSI palette, `8` restricts to the normal-intensity half. |
+| `-c, --color <8\|16\|256\|tc>` | `16` | Colour tier. `16` uses the 16 ANSI colours (SGR 30–37 / 90–97), `8` the normal-intensity half only (30–37, for the strictest terminals), `256` the xterm 6×6×6 cube and grey ramp, `tc` 24-bit truecolour. kii never reads `COLORTERM`: the tier is what you ask for. |
 | `-m, --mode <M>` | `halfblock` | `halfblock` emits `▀` cells at double vertical resolution; `ascii` emits text glyphs chosen by shape. |
 | `-v, --verbose` | off | Print a dimensions/format summary to **stderr** after the frame. |
 | `-h, --help` | — | Show help and exit. |
@@ -101,11 +105,15 @@ kii photo.jpg                      # any of the four formats, detected by signat
 kii --width 120 image.png          # explicit width; height follows the aspect ratio
 kii --mode ascii image.png         # text-glyph art instead of half-blocks
 kii --color 8 image.png            # 8-colour tier for the strictest terminals
+kii --color tc photo.jpg           # 24-bit truecolour
 kii image.png > frame.ansi         # pure ANSI on stdout; diagnostics stay on stderr
 ```
 
 The frame goes to **stdout** and every diagnostic to **stderr**, so `kii img.png | …`
 pipes clean. Exit codes: `0` success, `1` runtime failure, `2` usage error.
+
+Transparent pixels (alpha below 128) are drawn in the terminal's own default colours, so a
+logo with a transparent background sits on whatever background your terminal has.
 
 To read an image from a pipe, name it as a path: `cat img.png | kii /dev/stdin` (or
 `kii <(…)`). A frame over 1,048,576 character cells is refused with
@@ -119,7 +127,7 @@ and a truncated JPEG or GIF (the partial frame is what decoded).
 The world prior art (`chafa`) ships every tier from monochrome through 24-bit truecolor. kii chooses the order deliberately:
 
 - **Tier 1 — shipped**: 8/16-color ANSI palette + half-block (`▀`/`▄`) glyph quantization. Historically-correct rendering target for BBS / MUD clients of the early-90s era; maximum terminal compatibility; well-defined floor. Palette quantization landed at v0.5.0, glyph emit at v0.6.0, terminal-size detection at v0.7.0, and the tier was completed at **v1.5.1**, when `--color 8` stopped being a flag that parsed its argument and ignored it.
-- **Tier 2 — post-v1**: 256-color ANSI palette + 24-bit truecolor escape sequences (`\x1b[38;2;R;G;Bm`) + dithering schemes (Floyd-Steinberg, ordered/Bayer) for higher fidelity.
+- **Tier 2 — shipped at v1.8.0, dithering next**: `--color 256` (the xterm cube and grey ramp) and `--color tc` (24-bit, `\x1b[38;2;R;G;Bm`) landed at **v1.8.0** ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)); ordered / Floyd-Steinberg dithering is pinned to 1.9.0.
 - **Tier 3 — future**: Sixel / Kitty / iTerm2 image-protocol direct rendering (skips ASCII art entirely on supporting terminals). Animated GIF / video frame-pipe support.
 
 ## Naming

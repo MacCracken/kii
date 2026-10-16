@@ -1,51 +1,57 @@
 # emit.cyr — half-block (▀) ANSI emit layer.
 #
 # v0.6.0 / M5 — the first user-visible terminal output for kii. The
-# pipeline up to M4 quantizes pixels to 16-color palette indices and
-# stashes them at STRUCT_QUANTIZED_BUF_OFFSET; this module reads that
-# buffer two source-rows at a time and emits half-block glyphs so each
-# terminal character carries TWO source pixels stacked vertically:
-#   - top half     → FG color via CSI 38;5;<idx>
-#   - bottom half  → BG color via CSI 48;5;<idx>
+# quantize stage leaves one colour code per pixel at
+# STRUCT_QUANTIZED_BUF_OFFSET; this module reads that buffer two
+# source-rows at a time and emits half-block glyphs so each terminal
+# character carries TWO source pixels stacked vertically:
+#   - top half     → FG colour
+#   - bottom half  → BG colour
 #   - glyph        → U+2580 UPPER HALF BLOCK (▀)
 #
 # Why half-block: doubles vertical resolution per character row with
 # no extra width cost. This is the chafa / jp2a / viu canonical floor
 # glyph and the BBS/MUD aesthetic kii was scoped to deliver.
 #
-# Why 256-color indexed escapes for a "16-color" output: the lower 16
-# entries of the xterm 256-color cube are the same ANSI 0–15 palette
-# kii's quant.cyr produces. `\x1b[38;5;Nm` with N ∈ [0, 15] is the
-# widest-compat way to address them (named SGR 30–37 / 90–97 +
-# 40–47 / 100–107 splits FG/BG asymmetrically; the indexed form is
-# uniform). A strict 16-colour terminal or BBS client may not parse the
-# indexed form, though, which is exactly the tier-1 floor's audience; the
-# v1.6.4 sweep confirmed the bytes, and roadmap 1.8.0 moves tier 1 to the
-# 30–37/90–97 + 40–47/100–107 codes when it reworks emit per tier.
+# The emit rework (v1.8.0, ADR 0010) changed three things:
+#   - Escapes per tier. Tier 8 uses SGR 30–37 / 40–47, tier 16 adds the
+#     bright 90–97 / 100–107, tier 256 `38;5;N` / `48;5;N`, truecolour
+#     `38;2;R;G;B` / `48;2;R;G;B`, and a transparent half SGR 39 / 49 (the
+#     terminal's default colour). Through v1.7.0 tiers 8 and 16 sent
+#     `38;5;N`, which a strict 16-colour terminal or BBS client — the tier-1
+#     floor's audience — may not parse.
+#   - Elision. Each row tracks the fg and bg it last set and skips an escape
+#     that would repeat it (61–87 % less output in the v1.6.4 sweep's
+#     measurement). The state starts unknown on every row, so each row is
+#     still self-contained.
+#   - Transparency. A transparent half takes the default colour, and the
+#     glyph is chosen so the opaque half keeps its colour: ▀ (fg = top) when
+#     the bottom is transparent, ▄ (fg = bottom) when the top is, a space
+#     when both are.
 #
 # Output sizing: the frame is sized by main.cyr's geometry resolver —
 # `--width N`, or the terminal's own size via `_kii_term_envelope` below,
 # falling back to 80×24 off a TTY. Each character row covers 2 source rows,
 # and downscale.cyr resamples to that size BEFORE quantization.
 #
-# darshana surface used:
-#   tty_fg_256_buf(buf, pos, n)   — appends CSI 38;5;Nm
-#   tty_bg_256_buf(buf, pos, n)   — appends CSI 48;5;Nm (darshana 1.2.0)
-#   tty_sgr_reset_buf(buf, pos)   — appends CSI 0m
-# Each returns the new pos, or -1 on a rejected input (a negative
-# incoming pos, or for the two colour composers an index outside
-# [0, 255]) and writes nothing when it rejects — which is what lets
-# emit_halfblock_row_buf chain them through one `pos`.
+# darshana surface used (each returns the new pos, or -1 on a rejected
+# input — a negative incoming pos or an out-of-range value — and writes
+# nothing when it rejects, which is what lets a row chain them through
+# one `pos`):
+#   tty_sgr_buf(buf, pos, code)      — CSI <code>m (30–37, 39, 40–47, 49, 90–97, 100–107)
+#   tty_fg_256_buf / tty_bg_256_buf  — CSI 38;5;Nm / 48;5;Nm
+#   tty_fg_rgb_buf / tty_bg_rgb_buf  — CSI 38;2;R;G;Bm / 48;2;R;G;Bm
+#   tty_sgr_reset_buf(buf, pos)      — CSI 0m
 #
-# v1.6.0: the background composer is darshana's. kii carried a local
+# v1.6.0: the 256-colour background composer is darshana's. kii carried a local
 # `_emit_bg_256_buf` from v0.6.0 because darshana had no BG twin; kii was
 # the first consumer of one, and darshana extracted it at 1.2.0 when a
 # second consumer (thoth) arrived — the extract-on-2nd-consumer move the
-# local helper's own comment named. The bytes are identical for every
-# index (tests/render.tcyr checks all 256 against the retired body).
+# local helper's own comment named.
 
 include "src/palette.cyr"
 include "src/image.cyr"
+include "src/quant.cyr"
 
 # Half-block output geometry defaults. These are the floor used when
 # both `--width` and tty detection fall through — chosen to match the
@@ -63,6 +69,44 @@ var EMIT_DEFAULT_ROWS = 24;
 var EMIT_HALFBLOCK_B0 = 0xE2;
 var EMIT_HALFBLOCK_B1 = 0x96;
 var EMIT_HALFBLOCK_B2 = 0x80;
+# U+2584 LOWER HALF BLOCK (▄) shares the first two bytes (v1.8.0: drawn when
+# a cell's top half is transparent, so the opaque bottom keeps its colour).
+var EMIT_LOWERHALF_B2 = 0x84;
+
+# The most bytes one half-block cell can take: a 19-byte truecolour fg and
+# bg escape plus the 3-byte glyph. Rows are sized from it (sw * 42 + 16).
+var EMIT_CELL_MAX = 41;
+
+# ---- tier-aware SGR (v1.8.0) ----------------------------------------
+# Append the escape that sets the foreground to colour code `code` (see
+# quant.cyr: a palette index, a packed truecolour 0xRRGGBB, or
+# KII_COLOR_DEFAULT) at the active tier. Returns the new pos, or -1 if the
+# code is not a colour of that tier (darshana's composers refuse it too).
+fn _kii_sgr_fg(buf, pos, code): i64 {
+    if (code == KII_COLOR_DEFAULT) { return tty_sgr_buf(buf, pos, 39); }
+    var tier = quant_tier();
+    if (tier == KII_TIER_TC) {
+        return tty_fg_rgb_buf(buf, pos, (code >> 16) & 255, (code >> 8) & 255, code & 255);
+    }
+    if (tier == KII_TIER_256) { return tty_fg_256_buf(buf, pos, code); }
+    if (code >= 0 && code < 8)  { return tty_sgr_buf(buf, pos, 30 + code); }
+    # Bright 90–97 is tier 16 only: tier 8 promises SGR 30–37 and nothing else.
+    if (tier == KII_TIER_16 && code >= 8 && code < 16) { return tty_sgr_buf(buf, pos, 82 + code); }
+    return 0 - 1;
+}
+
+# The background twin of _kii_sgr_fg: SGR 49, 48;2, 48;5, 40–47 or 100–107.
+fn _kii_sgr_bg(buf, pos, code): i64 {
+    if (code == KII_COLOR_DEFAULT) { return tty_sgr_buf(buf, pos, 49); }
+    var tier = quant_tier();
+    if (tier == KII_TIER_TC) {
+        return tty_bg_rgb_buf(buf, pos, (code >> 16) & 255, (code >> 8) & 255, code & 255);
+    }
+    if (tier == KII_TIER_256) { return tty_bg_256_buf(buf, pos, code); }
+    if (code >= 0 && code < 8)  { return tty_sgr_buf(buf, pos, 40 + code); }
+    if (tier == KII_TIER_16 && code >= 8 && code < 16) { return tty_sgr_buf(buf, pos, 92 + code); }   # 100–107
+    return 0 - 1;
+}
 
 # Compute target output dimensions from source W/H + an optional
 # --width flag. Writes the dst column count + dst source-row count
@@ -207,27 +251,61 @@ fn _kii_term_envelope(detect_rc, term_rows, term_cols, out_fit_cols, out_fit_row
 
 # emit_halfblock_row_buf — render ONE terminal row of half-block
 # glyphs into a caller-owned byte buffer. Returns the new pos (byte
-# count appended), or -1 on bad index.
+# count appended), or -1 if a code is not a colour of the active tier.
 #
 # `row` is the terminal row (0 ≤ row < src_h / 2), so we read source
-# rows (2*row) and (2*row+1). `qbuf` is the source-resolution
-# palette-index buffer (qbuf[sy*sw + sx] = palette index in [0,15]).
+# rows (2*row) and (2*row+1). `qbuf` is the source-resolution colour-code
+# buffer, 4 bytes per pixel (qbuf + (sy*sw + sx)*4; see quant.cyr).
+#
+# Per cell: a transparent half (KII_COLOR_DEFAULT) takes the terminal's
+# default colour, and the glyph keeps the opaque half's colour — ▀ with
+# fg = top when only the bottom is transparent, ▄ with fg = bottom when
+# only the top is, a space (no fg) when both are. An fg or bg escape is
+# written only when it differs from the one this row last set; both start
+# unknown, so the first cell of every row sets what it uses.
 #
 # Buffer-targeting (not a fd-1 write) so tests can assert on the
 # exact byte sequence without subprocessing. emit_halfblock below
 # wraps this for the production fd-1 case.
 fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
+    var cur_fg = 0 - 1;
+    var cur_bg = 0 - 1;
+    var top_p = qbuf + (2 * row) * sw * 4;
+    var bot_p = top_p + sw * 4;
     var col = 0;
     while (col < sw) {
-        var top_idx = load8(qbuf + (2 * row) * sw + col);
-        var bot_idx = load8(qbuf + (2 * row + 1) * sw + col);
-        pos = tty_fg_256_buf(buf, pos, top_idx);
-        if (pos < 0) { return 0 - 1; }
-        pos = tty_bg_256_buf(buf, pos, bot_idx);
-        if (pos < 0) { return 0 - 1; }
-        store8(buf + pos, EMIT_HALFBLOCK_B0); pos = pos + 1;
-        store8(buf + pos, EMIT_HALFBLOCK_B1); pos = pos + 1;
-        store8(buf + pos, EMIT_HALFBLOCK_B2); pos = pos + 1;
+        var top = load32(top_p + col * 4);
+        var bot = load32(bot_p + col * 4);
+        var fg = top;
+        var bg = bot;
+        var glyph_b2 = EMIT_HALFBLOCK_B2;                 # ▀
+        if (top == KII_COLOR_DEFAULT) {
+            if (bot == KII_COLOR_DEFAULT) {
+                glyph_b2 = 0;                             # both transparent: a space
+            } else {
+                fg = bot;                                 # ▄ keeps the bottom's colour
+                bg = KII_COLOR_DEFAULT;
+                glyph_b2 = EMIT_LOWERHALF_B2;
+            }
+        }
+        if (glyph_b2 != 0 && fg != cur_fg) {
+            pos = _kii_sgr_fg(buf, pos, fg);
+            if (pos < 0) { return 0 - 1; }
+            cur_fg = fg;
+        }
+        if (bg != cur_bg) {
+            pos = _kii_sgr_bg(buf, pos, bg);
+            if (pos < 0) { return 0 - 1; }
+            cur_bg = bg;
+        }
+        if (glyph_b2 == 0) {
+            store8(buf + pos, 32); pos = pos + 1;
+        } else {
+            store8(buf + pos, EMIT_HALFBLOCK_B0);
+            store8(buf + pos + 1, EMIT_HALFBLOCK_B1);
+            store8(buf + pos + 2, glyph_b2);
+            pos = pos + 3;
+        }
         col = col + 1;
     }
     return _kii_row_end(buf, pos);
@@ -296,15 +374,15 @@ fn emit_halfblock(pstruct): i64 {
     if (sh % 2 != 0)      { return 0 - 1; }
 
     # Per-row scratch, sized from the ACTUAL width. Each cell is at most
-    # tty_fg_256_buf (≤11) + tty_bg_256_buf (≤11) + glyph (3) = 25 bytes
-    # (256-color escapes, 3-digit indices); per-row tail is
-    # tty_sgr_reset_buf (exactly 4) + LF (1). `sw * 26 + 16` bounds it
+    # EMIT_CELL_MAX = 41 bytes (a 19-byte truecolour fg and bg + the 3-byte
+    # glyph; tier 1 needs at most 13, tier 256 25); the per-row tail is
+    # tty_sgr_reset_buf (exactly 4) + LF (1). `sw * 42 + 16` bounds it
     # with margin. Heap-alloc (was a fixed `line_buf[2048]` stack buffer
     # — 2048 BYTES at function scope, sized for sw=80 — which
     # `emit_halfblock_row_buf` overflowed for sw ≳ 89, e.g.
     # `kii --width 200`). An absurd width fails the alloc and returns -1
     # cleanly rather than smashing the stack.
-    return _kii_emit_frame(&emit_halfblock_row_buf, qbuf, sw, sh / 2, sw * 26 + 16);
+    return _kii_emit_frame(&emit_halfblock_row_buf, qbuf, sw, sh / 2, sw * (EMIT_CELL_MAX + 1) + 16);
 }
 
 # The frame loop both render lanes share (v1.7.0; R-8 of the v1.6.4 sweep —

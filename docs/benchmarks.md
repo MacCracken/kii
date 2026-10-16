@@ -259,3 +259,29 @@ user CPU per 100 runs, against 2.25 / 2.37 / 2.39 s for v1.6.4; at `--width 200`
 half-block lane ran 7.72 / 7.81 ms per run against 7.76 / 7.76 ms. The first interleaved
 `kii-bench` round matched v1.6.4 within noise (quantize 69 vs 70 ns; RAMGON 80×24 204 vs
 200 ms); a second round was disturbed by load and is not recorded. The v1.6.4 figures stand.
+
+## v1.8.0 — the emit rework: output size per tier
+
+Same host and toolchain; the v1.7.0 binary for comparison. v1.8.0 changes every frame's
+bytes (ADR 0010): tier 1 moved to the plain SGR codes, repeated escapes are elided, and
+the 256 and truecolour tiers arrived. Output bytes for RAMGON (1152×925):
+
+| frame | v1.7.0 (tier 16) | v1.8.0 tier 8 | tier 16 | tier 256 | truecolour |
+|---|---:|---:|---:|---:|---:|
+| half-block, `--width 80` | 54,353 | 13,380 | **14,609** | 46,390 | 94,307 |
+| ascii, `--width 80` | 25,908 | 5,190 | **5,125** | 19,797 | 40,126 |
+| half-block, `--width 200` | 339,051 | 74,350 | **79,044** | 261,091 | 585,568 |
+| ascii, `--width 200` | 161,488 | 27,305 | **26,955** | 106,423 | 244,982 |
+
+**Reading**: the default tier's frames are 73–83 % smaller than v1.7.0's; across the
+test fixtures and 466 system images (996 tier-8 / tier-16 frames) the total went from
+71.99 MB to 10.87 MB (−85 %), with every frame replaying to the same cells (glyph, fg, bg).
+The higher tiers cost more because their colours vary more from cell to cell: 256 is ~3×
+and truecolour ~6× tier 16. On a 9600-baud line an 80×24 tier-16 frame now takes ~15 s
+instead of ~57 s.
+
+CPU per render drops with the output (user time for 50 renders of a 256² icon at
+`--width 200`, load average 5–10): half-block tier 16 0.25 s (v1.7.0 0.35–0.42 s), ascii
+tier 16 0.39–0.50 s (0.58 s); truecolour 0.19 s and 256 0.22–0.23 s, cheaper than tier 16
+because they skip the 16-entry palette search. Large images are unchanged: their time is
+chitra's decode.

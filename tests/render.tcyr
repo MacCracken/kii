@@ -20,6 +20,20 @@ include "src/quant.cyr"
 include "src/emit.cyr"
 include "lib/assert.cyr"
 
+# 1 if the `n` bytes at `buf` are exactly the cstring `expect` — a whole
+# emitted row checked in one assertion (v1.8.0).
+fn _row_is(buf, n, expect): i64 {
+    if (n != strlen(expect)) { return 0; }
+    return memeq(buf, expect, n);
+}
+
+# Store `n` 32-bit colour codes from the i64 array `codes` into `q`.
+fn _put_codes(q, codes, n): i64 {
+    var i = 0;
+    while (i < n) { store32(q + i * 4, load64(codes + i * 8)); i = i + 1; }
+    return 0;
+}
+
 # Build a 2x2 depth-8 color_type=6 (RGBA8) image into `pstruct`,
 # matching the RGB pixels of the old /tmp/kii-test-decode-2x2.png
 # fixture (alpha = 255). downscale's ct6 drop-alpha branch yields the
@@ -175,6 +189,25 @@ fn main() {
     assert_eq(load8(d_t + 7), 100, "opaque G untouched");
     assert_eq(load8(d_t + 8),   7, "opaque B untouched");
     assert_eq(load8(d_t + 9), 128, "white at alpha 128 → 128 (rounded)");
+    # v1.8.0: alpha below KII_ALPHA_THRESHOLD (128) is transparent, and the
+    # mask says which pixels; alpha 128 and up is opaque (partial alpha is
+    # still composited over black, as above).
+    var d_m = load64(&pstr_d_t + STRUCT_ALPHA_MASK_OFFSET);
+    assert(d_m != 0, "a transparent pixel sets the mask slot");
+    assert_eq(load8(d_m + 0), 1, "alpha 0 → mask 1");
+    assert_eq(load8(d_m + 1), 1, "alpha 0 → mask 1 (second)");
+    assert_eq(load8(d_m + 2), 0, "alpha 255 → mask 0");
+    assert_eq(load8(d_m + 3), 0, "alpha 128 → mask 0 (at the threshold is opaque)");
+    store8(&tbuf + 15, 127);
+    assert_eq(downscale_to_rgb(&pstr_d_t, 4, 1), 0, "re-downscale with alpha 127 → 0");
+    d_m = load64(&pstr_d_t + STRUCT_ALPHA_MASK_OFFSET);
+    assert_eq(load8(d_m + 3), 1, "alpha 127 → mask 1 (below the threshold)");
+    store8(&tbuf + 15, 128);
+    var pstr_d_o[160];
+    _r_make_2x2(&pstr_d_o);
+    store64(&pstr_d_o + STRUCT_ALPHA_MASK_OFFSET, 0 - 1);
+    assert_eq(downscale_to_rgb(&pstr_d_o, 2, 2), 0, "opaque 2x2 downscale → 0");
+    assert_eq(load64(&pstr_d_o + STRUCT_ALPHA_MASK_OFFSET), 0, "an opaque image leaves the mask slot 0");
 
     # v1.7.0 (R-2): downscale accepts only chitra's RGBA8. The colour-type
     # dispatch it used to carry handled formats nothing has produced since
@@ -311,8 +344,8 @@ fn main() {
     # ones: nearest-RGB puts pure (255,0,0) at distance 85² from entry 1 but
     # 85²+85² from entry 9 (255,85,85), because the bright entries lift the
     # two OTHER channels off zero. Same arithmetic for lime.
-    assert_eq(load8(gr_qbuf + 0),  1, "GIF (0,0) quantizes to red (idx 1)");
-    assert_eq(load8(gr_qbuf + 15), 2, "GIF (15,0) quantizes to green (idx 2)");
+    assert_eq(load32(gr_qbuf + 0),      1, "GIF (0,0) quantizes to red (idx 1)");
+    assert_eq(load32(gr_qbuf + 15 * 4), 2, "GIF (15,0) quantizes to green (idx 2)");
     var gr_line[1024];
     var gr_pos = emit_halfblock_row_buf(gr_qbuf, 16, 0, &gr_line, 0);
     assert(gr_pos > 16, "GIF emit produced a real row (> 1 byte/cell)");
@@ -435,86 +468,99 @@ fn main() {
     assert_eq(tty_bg_256_buf(&bx_new, 0, 0 - 9223372036854775807), 0 - 1, "n = -(2^63-1) → -1");
     assert_eq(load8(&bx_new + 0), 0xAA, "a rejected index writes nothing");
 
-    test_group("M5(c) — emit_halfblock_row_buf single-char shape");
-    # 1-col × 2-row quantized buf: top idx 1 (red), bot idx 4 (blue).
-    # Layout (1-digit indices):
-    #   FG escape: \x1b[38;5;1m       (9 bytes, offsets 0..8)
-    #   BG escape: \x1b[48;5;4m       (9 bytes, offsets 9..17)
-    #   ▀ glyph (E2 96 80)            (3 bytes, offsets 18..20)
-    #   reset \x1b[0m                 (4 bytes, offsets 21..24)
-    #   LF                            (1 byte,  offset 25)
-    # Total: 26 bytes.
-    var q1[2];
-    store8(&q1 + 0, 1);  # top = red
-    store8(&q1 + 1, 4);  # bot = blue
-    var line[64];
-    var lpos = emit_halfblock_row_buf(&q1, 1, 0, &line, 0);
-    assert_eq(lpos, 26, "single-char row = 26 bytes");
-    # FG escape \x1b[38;5;1m
-    assert_eq(load8(&line + 0), 27,  "row[0] = ESC");
-    assert_eq(load8(&line + 1), 91,  "row[1] = [");
-    assert_eq(load8(&line + 2), 51,  "row[2] = '3'");
-    assert_eq(load8(&line + 3), 56,  "row[3] = '8'");
-    assert_eq(load8(&line + 7), 49,  "row[7] = '1' (idx 1)");
-    assert_eq(load8(&line + 8), 109, "row[8] = 'm'");
-    # BG escape \x1b[48;5;4m at bytes 9..17
-    assert_eq(load8(&line + 9),  27,  "row[9]  = ESC");
-    assert_eq(load8(&line + 10), 91,  "row[10] = [");
-    assert_eq(load8(&line + 11), 52,  "row[11] = '4'");
-    assert_eq(load8(&line + 12), 56,  "row[12] = '8'");
-    assert_eq(load8(&line + 16), 52,  "row[16] = '4' (idx 4)");
-    assert_eq(load8(&line + 17), 109, "row[17] = 'm'");
-    # ▀ glyph at bytes 18..20
-    assert_eq(load8(&line + 18), 0xE2, "row[18] = ▀ byte 0");
-    assert_eq(load8(&line + 19), 0x96, "row[19] = ▀ byte 1");
-    assert_eq(load8(&line + 20), 0x80, "row[20] = ▀ byte 2");
-    # Reset + LF at bytes 21..25
-    assert_eq(load8(&line + 21), 27,  "row[21] = ESC (reset)");
-    assert_eq(load8(&line + 22), 91,  "row[22] = [");
-    assert_eq(load8(&line + 23), 48,  "row[23] = '0'");
-    assert_eq(load8(&line + 24), 109, "row[24] = 'm'");
-    assert_eq(load8(&line + 25), 10,  "row[25] = LF");
+    # ---- v1.8.0 — the emit rework (ADR 0010) --------------------------
+    # Each row is checked whole. Codes are what quantize leaves: a palette
+    # index (tiers 8 / 16 / 256), a packed 0xRRGGBB (tc), or KII_COLOR_DEFAULT.
+    var q[64];
+    var codes[64];        # bytes: room for 8 i64 codes (CLAUDE.md: function-scope arrays are in bytes)
+    var line[256];
+    var lp = 0;
 
-    test_group("M5(c) — emit_halfblock_row_buf 2-col checkerboard");
-    # 2-col × 2-row quantized buf:
-    #   (0,0) idx 0 (black) | (1,0) idx 15 (white)
-    #   (0,1) idx 15        | (1,1) idx 0
-    # Layout:
-    #   Col 0: FG (idx 0, 9B) + BG (idx 15, 10B) + ▀ (3B) = 22 bytes
-    #   Col 1: FG (idx 15, 10B) + BG (idx 0, 9B) + ▀ (3B) = 22 bytes
-    #   reset (4) + LF (1) = 5 bytes
-    # Total: 49 bytes.
-    var qcb[4];
-    store8(&qcb + 0, 0);   # top-left  = black
-    store8(&qcb + 1, 15);  # top-right = white
-    store8(&qcb + 2, 15);  # bot-left  = white
-    store8(&qcb + 3, 0);   # bot-right = black
-    var lcb[64];
-    var cb_pos = emit_halfblock_row_buf(&qcb, 2, 0, &lcb, 0);
-    assert_eq(cb_pos, 49, "checkerboard row = 49 bytes");
-    # Col 0 FG idx 0 → byte 7 = '0'
-    assert_eq(load8(&lcb + 7),  48, "col 0 FG idx 0");
-    assert_eq(load8(&lcb + 8),  109, "col 0 FG 'm'");
-    # Col 0 BG idx 15 starts at byte 9 (ESC)
-    assert_eq(load8(&lcb + 9),  27, "col 0 BG ESC");
-    assert_eq(load8(&lcb + 16), 49, "col 0 BG idx 15 first digit '1'");
-    assert_eq(load8(&lcb + 17), 53, "col 0 BG idx 15 second digit '5'");
-    assert_eq(load8(&lcb + 18), 109, "col 0 BG idx 15 'm'");
+    test_group("v1.8.0 — tier 16: SGR 30–37 / 40–47, and 90–97 / 100–107 for brights");
+    quant_set_tier(16);
+    store64(&codes + 0, 1); store64(&codes + 8, 4);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[44m\xe2\x96\x80\x1b[0m\n"), 1, "red over blue → 31 / 44 ▀");
+    store64(&codes + 0, 9); store64(&codes + 8, 15);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[91m\x1b[107m\xe2\x96\x80\x1b[0m\n"), 1, "bright red over bright white → 91 / 107");
 
-    test_group("M5(c) — emit_halfblock_row_buf solid color uniformity");
-    # 4-col × 2-row, all idx 4 (blue). Each col = 9 (FG) + 9 (BG) +
-    # 3 (glyph) = 21 bytes. 4 × 21 + 5 (reset + LF) = 89 bytes.
-    var qs[8];
-    var s_i = 0;
-    while (s_i < 8) { store8(&qs + s_i, 4); s_i = s_i + 1; }
-    var ls[128];
-    var s_pos = emit_halfblock_row_buf(&qs, 4, 0, &ls, 0);
-    assert_eq(s_pos, 89, "solid 4-col row = 89 bytes");
-    # Per-col FG '4' lives at byte (col * 21) + 7.
-    assert_eq(load8(&ls + 0  + 7), 52, "col 0 FG = '4'");
-    assert_eq(load8(&ls + 21 + 7), 52, "col 1 FG = '4'");
-    assert_eq(load8(&ls + 42 + 7), 52, "col 2 FG = '4'");
-    assert_eq(load8(&ls + 63 + 7), 52, "col 3 FG = '4'");
+    test_group("v1.8.0 — tier 8: only SGR 30–37 / 40–47");
+    quant_set_tier(8);
+    store64(&codes + 0, 1); store64(&codes + 8, 4);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[44m\xe2\x96\x80\x1b[0m\n"), 1, "red over blue → 31 / 44");
+    store64(&codes + 0, 9);
+    _put_codes(&q, &codes, 2);
+    assert_eq(emit_halfblock_row_buf(&q, 1, 0, &line, 0), 0 - 1, "a bright index at tier 8 is refused, not sent as 91");
+
+    test_group("v1.8.0 — tier 256: 38;5;N / 48;5;N");
+    quant_set_tier(256);
+    store64(&codes + 0, 196); store64(&codes + 8, 21);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[38;5;196m\x1b[48;5;21m\xe2\x96\x80\x1b[0m\n"), 1, "196 over 21");
+
+    test_group("v1.8.0 — truecolour: 38;2;R;G;B / 48;2;R;G;B");
+    quant_set_tier(KII_TIER_TC);
+    store64(&codes + 0, 16744448); store64(&codes + 8, 255);      # 0xFF8000, 0x0000FF
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[38;2;255;128;0m\x1b[48;2;0;0;255m\xe2\x96\x80\x1b[0m\n"), 1,
+      "orange over blue → 38;2;255;128;0 / 48;2;0;0;255");
+
+    test_group("v1.8.0 — elision: an escape is written only when it changes");
+    quant_set_tier(16);
+    var ci = 0;
+    while (ci < 8) { store64(&codes + ci * 8, 4); ci = ci + 1; }
+    _put_codes(&q, &codes, 8);
+    lp = emit_halfblock_row_buf(&q, 4, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[34m\x1b[44m\xe2\x96\x80\xe2\x96\x80\xe2\x96\x80\xe2\x96\x80\x1b[0m\n"), 1,
+      "four blue cells → one fg and one bg escape (was 4 of each: 89 → 31 bytes)");
+    # Top row 1 1, bottom row 2 3: only the bg changes in the second cell.
+    store64(&codes + 0, 1); store64(&codes + 8, 1); store64(&codes + 16, 2); store64(&codes + 24, 3);
+    _put_codes(&q, &codes, 4);
+    lp = emit_halfblock_row_buf(&q, 2, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[43m\xe2\x96\x80\x1b[0m\n"), 1, "only the bg changes → only a bg escape");
+    # A checkerboard changes both every cell.
+    store64(&codes + 0, 0); store64(&codes + 8, 15); store64(&codes + 16, 15); store64(&codes + 24, 0);
+    _put_codes(&q, &codes, 4);
+    lp = emit_halfblock_row_buf(&q, 2, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[30m\x1b[107m\xe2\x96\x80\x1b[97m\x1b[40m\xe2\x96\x80\x1b[0m\n"), 1, "checkerboard → both every cell");
+    # Every row starts with no state: row 1 of a 1x4 solid buffer repeats row 0's escapes.
+    ci = 0;
+    while (ci < 4) { store64(&codes + ci * 8, 4); ci = ci + 1; }
+    _put_codes(&q, &codes, 4);
+    var lp0 = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    var lp1 = emit_halfblock_row_buf(&q, 1, 1, &line, lp0);
+    assert_eq(lp1 - lp0, lp0, "row 1 is self-contained: same bytes as row 0");
+    assert_eq(memeq(&line, &line + lp0, lp0), 1, "row 1 sets its own colours again");
+
+    test_group("v1.8.0 — transparency: default colours, and ▀ / ▄ keep the opaque half");
+    store64(&codes + 0, KII_COLOR_DEFAULT); store64(&codes + 8, 2);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[32m\x1b[49m\xe2\x96\x84\x1b[0m\n"), 1, "transparent top → ▄ in the bottom's colour on 49");
+    store64(&codes + 0, 2); store64(&codes + 8, KII_COLOR_DEFAULT);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[32m\x1b[49m\xe2\x96\x80\x1b[0m\n"), 1, "transparent bottom → ▀ on 49");
+    # Three cells: both transparent, both transparent, both green.
+    store64(&codes + 0, KII_COLOR_DEFAULT); store64(&codes + 8, KII_COLOR_DEFAULT); store64(&codes + 16, 2);
+    store64(&codes + 24, KII_COLOR_DEFAULT); store64(&codes + 32, KII_COLOR_DEFAULT); store64(&codes + 40, 2);
+    _put_codes(&q, &codes, 6);
+    lp = emit_halfblock_row_buf(&q, 3, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[49m  \x1b[32m\x1b[42m\xe2\x96\x80\x1b[0m\n"), 1,
+      "fully transparent cells are spaces with no fg; one 49 covers both");
+    quant_set_tier(KII_TIER_TC);
+    store64(&codes + 0, KII_COLOR_DEFAULT); store64(&codes + 8, 255);
+    _put_codes(&q, &codes, 2);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[38;2;0;0;255m\x1b[49m\xe2\x96\x84\x1b[0m\n"), 1, "transparency works the same at truecolour");
+    quant_set_tier(16);
 
     test_group("M5(c) — emit_halfblock rejects ungated calls");
     # qbuf == 0 → -1 (no quantize_downscaled run yet).

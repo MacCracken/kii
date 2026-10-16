@@ -17,7 +17,8 @@
 #   - Half-block (▀ / ▄) is the FLOOR glyph; alternates opt-in
 #   - CRC + signature validation on every input image
 #   - No file writes (stdin/args → stdout only)
-#   - Tier 1 = 8/16-color ANSI + half-block; tier 2 (256/truecolor) is post-v1
+#   - Tier 1 = 8/16-color ANSI + half-block (the default); tier 2 (256 /
+#     truecolour) is opt-in via --color since v1.8.0 (ADR 0010)
 
 include "src/cli.cyr"
 include "src/image.cyr"
@@ -63,7 +64,8 @@ fn _eprint_path_msg(path, msg): i64 {
 }
 
 # Print "<path>: <W>x<H> <N> pixels (<color_type_name>) → <T>-color\n"
-# to STDERR, where T is the active --color tier (8 or 16). M5 routes this
+# to STDERR, where T is the active --color tier (8, 16 or 256), or
+# "→ truecolor" at the 24-bit tier. M5 routes this
 # to fd 2 since the ANSI frame now owns stdout (pipe-purity for
 # `kii img.png > frame.ansi`). P(-1) (v1.6.4): the tier was the literal
 # "16" until now, so `--color 8 --verbose` reported a 16-color render.
@@ -85,6 +87,10 @@ fn _eprint_quant_summary(path, pstruct): i64 {
     sys_write(2, &pbuf, pblen);
     _eprint(" pixels (");
     _eprint(kii_source_type_name(load64(pstruct + STRUCT_SRC_COLOR_TYPE_OFFSET)));
+    if (quant_tier() == KII_TIER_TC) {
+        _eprint(") → truecolor\n");
+        return 0;
+    }
     _eprint(") → ");
     var tbuf[24]; var tlen = fmt_int_buf(quant_tier(), &tbuf);
     sys_write(2, &tbuf, tlen);
@@ -97,7 +103,7 @@ fn _eprint_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 1.7.0");
+    println("kii 1.8.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -113,6 +119,7 @@ fn print_usage(fs): i64 {
     _eprint("  kii art.bmp                                # ...as do BMP and GIF (first frame)\n");
     _eprint("  kii --verbose image.png                    # frame + dimensions/format on stderr\n");
     _eprint("  kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)\n");
+    _eprint("  kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)\n");
     _eprint("  kii image.png > frame.ansi                 # capture pure ANSI bytes\n");
     return 0;
 }
@@ -138,7 +145,7 @@ fn main(): i64 {
             _eprint(flag);
             _eprint(" takes no value\n");
         } else {
-            _eprint(kii_parse_error_line(err));
+            _eprint(kii_parse_error_line(err, flag));
         }
         print_usage(fs);
         return KII_EXIT_USAGE;
@@ -152,20 +159,10 @@ fn main(): i64 {
         return print_version();
     }
 
-    # --color validation. Run BEFORE the positional check so
-    # `kii --color 7` fails fast on the flag without first nagging
-    # about the missing path.
-    var color = cmdit_get_int(fs, KII_F_COLOR);
-    if (kii_validate_color(color) == 0) {
-        _eprint("kii: --color must be 8 or 16\n");
-        print_usage(fs);
-        return KII_EXIT_USAGE;
-    }
-    # P-1 (v1.5.1): actually CONSUME the validated value. Until now --color
-    # was parsed and range-checked and then dropped on the floor, so
-    # `--color 8` rendered byte-identically to `--color 16` — a flag that
-    # accepted an argument and silently did nothing.
-    quant_set_tier(color);
+    # --color is a cmdit enum since v1.8.0 (8|16|256|tc), so an unknown tier
+    # already failed the parse. P-1 (v1.5.1): CONSUME the value — until then
+    # --color was parsed and range-checked and then dropped on the floor.
+    quant_set_tier(kii_color_tier(fs));
 
     # --width is already within [0, KII_MAX_COLS]: since v1.7.0 cmdit enforces
     # the bound during the parse (cmdit_range in kii_register_flags) and the

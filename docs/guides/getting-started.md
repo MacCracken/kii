@@ -51,7 +51,8 @@ Non-TTY (piped or redirected):
 
 Terminal-size detection falls back to 80×24 (the historically-correct
 BBS default). The resulting `frame.ansi` is byte-pure ANSI — `cat
-frame.ansi` reproduces the render in any 256-color-capable terminal.
+frame.ansi` reproduces the render in any terminal that understands the
+tier you chose (any ANSI terminal for the default 16 colours).
 
 ## CLI surface
 
@@ -65,7 +66,7 @@ Options:
   -h, --help	show this help and exit
   -V, --version	print version and exit
   -w, --width <int>	output width in columns (0 = match terminal)
-  -c, --color <int>	color tier: 8 or 16 (tier-2 modes post-v1)
+  -c, --color <8|16|256|tc>	colour tier (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
   -m, --mode <halfblock|ascii>	render mode (default: halfblock)
 
@@ -77,6 +78,7 @@ Examples:
   kii art.bmp                                # ...as do BMP and GIF (first frame)
   kii --verbose image.png                    # frame + dimensions/format on stderr
   kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
+  kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
   kii image.png > frame.ansi                 # capture pure ANSI bytes
 ```
 
@@ -92,16 +94,24 @@ Examples:
   1,048,576 character cells (since v1.6.4), which a very narrow
   image can reach at an ordinary width; kii then says
   `frame too large (…)` and exits 1.
-- **`--color N`** — Color tier: `8` or `16`. `16` uses the whole
-  ANSI palette, `8` the normal-intensity half. Both currently emit
-  the 256-color SGR escapes (`\x1b[38;5;Nm` / `\x1b[48;5;Nm`) with
-  the index bound to that palette. Tier-2 is pinned in the roadmap:
-  256-color and truecolor at 1.8.0 (which also moves tier 1 to the
-  plain 8/16-color SGR codes), dithering at 1.9.0 — see
-  [ADR 0003](../adr/0003-color-tier-discipline.md).
+- **`--color 8|16|256|tc`** — Colour tier (default `16`). Since v1.8.0
+  ([ADR 0010](../adr/0010-tier-2-colour-and-emit-encoding.md)):
+  - `16` — the 16 ANSI colours: SGR 30–37 / 90–97 foreground,
+    40–47 / 100–107 background.
+  - `8` — the normal-intensity eight only (30–37 / 40–47), for the
+    strictest terminals and BBS clients.
+  - `256` — the xterm 6×6×6 cube and grey ramp (`\x1b[38;5;Nm`,
+    indices 16–255; the 16 system colours are left to tiers 8 / 16,
+    since each terminal's theme sets them).
+  - `tc` — 24-bit truecolour (`\x1b[38;2;R;G;Bm`).
+
+  kii does not read `COLORTERM` or `TERM`: the tier is what you pass.
+  Within a row, an escape is written only when the colour changes, so a
+  tier-16 frame is far smaller than it was before v1.8.0. Dithering is
+  pinned to 1.9.0.
 - **`--verbose`** — Adds a stderr summary line after the frame:
   `<path>: <W>x<H> <N> pixels (<color_type_name>) → <T>-color`, where
-  `<T>` is the active `--color` tier (8 or 16).
+  `<T>` is the active `--color` tier (8, 16 or 256), or `→ truecolor`.
   Stdout stays pipe-pure (only the ANSI frame); stderr is human
   diagnostic.
 
@@ -200,11 +210,11 @@ A bad command line prints one `kii: …` line on stderr, then the
 |---|---|
 | `kii: unknown flag` | A flag kii does not define |
 | `kii: flag missing value` | `--width`, `--color` or `--mode` with nothing after it |
-| `kii: bad integer value` | `--width` or `--color` given something that is not an integer |
+| `kii: bad integer value` | `--width` given something that is not an integer |
 | `kii: short flags take no attached value and cannot be bundled (use -w 40 -v, not -w40 or -wv)` | `-w40`, `-wv`, `-v=1` and similar |
 | `kii: --verbose takes no value` | A switch given `=value`; the line names it (`--help`, `--version` likewise) |
 | `kii: flag takes no value` | The same, when no flag can be named |
-| `kii: --color must be 8 or 16` | Any other `--color` value |
+| `kii: --color must be 8, 16, 256 or tc` | Any other `--color` value (`8 or 16` before v1.8.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
 | `kii: --mode must be halfblock or ascii` | Any other `--mode` value |
 | `kii: missing image path` | No path given |
@@ -245,12 +255,13 @@ By design, deferred, or refused upstream:
   mask** — rejected as `unsupported BMP feature …`.
 - **Ancillary PNG chunks** (`tEXt` / `iTXt` / `zTXt` / `iCCP` / `eXIf` / `sCAL`)
   and **APNG** — not decoded; skipped or refused per chunk criticality.
-- **Transparency** — since v1.6.4 alpha is composited over black, so a
-  fully transparent pixel renders black. Drawing it in the terminal's
-  own background colour is pinned to 1.8.0 in the roadmap.
-- **256-color or truecolor SGR**, and **Floyd-Steinberg / ordered dithering** —
-  tier-2 work, pinned to 1.8.0 and 1.9.0 in the roadmap (see
-  [ADR 0003](../adr/0003-color-tier-discipline.md)).
+- **Partial transparency** — since v1.8.0 a pixel with alpha below 128
+  is drawn in the terminal's own default colours (a half-block cell keeps
+  its opaque half's colour with `▀` or `▄`), but alpha at 128 or above is
+  composited over black, so a soft anti-aliased edge darkens slightly on a
+  light background.
+- **Floyd-Steinberg / ordered dithering** — tier-2 work, pinned to 1.9.0
+  in the roadmap.
 - **Sixel / Kitty / iTerm2 image protocols** — tier-3 work, open for 2.0.
 - **Filesystem traversal** — kii takes ONE path. Loop in the shell
   (`for f in *.png; do kii "$f" > "${f%.png}.ansi"; done`).

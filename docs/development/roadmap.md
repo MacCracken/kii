@@ -3,37 +3,13 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.7.0**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.8.0**.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
 are pinned**: a release takes the items listed under it, and an item moves to another
 version only by editing this file. Work that depends on another repo shipping first
 has no version until it does (§ Gated on upstream).
-
-## 1.8.0 — Tier 2 colour, and the emit rework
-
-`--color 256` and `--color tc` (24-bit SGR) emit, on both render lanes. It extends an
-existing seam: since v1.5.1 `--color` drives a real tier mechanism (`quant_set_tier` in
-`src/quant.cyr`). The escape side needs no kii-local code, because darshana (pinned 1.3.0)
-carries all four composers: `tty_fg_256_buf` / `tty_bg_256_buf` for 256-colour and
-`tty_fg_rgb_buf` / `tty_bg_rgb_buf` for 24-bit. Each has the same reject-and-write-nothing
-contract the half-block row already chains. Amends
-[ADR 0003](../adr/0003-color-tier-discipline.md)'s tier-1-only stance.
-
-The emit rework changes every frame's bytes, so the other emit changes the v1.6.4 sweep
-found ride the same release (one golden-output change, not three):
-
-- **Tier 1 on real 8/16-colour codes.** `--color 8` and `--color 16` emit the 256-colour
-  `38;5;N` / `48;5;N` today, which a strict 16-colour terminal or BBS client — the tier-1
-  floor's audience — may not parse. Move them to SGR 30–37 / 90–97 and 40–47 / 100–107
-  (C-11; ADR 0003's own Consequences promise this).
-- **SGR elision.** Skip an fg/bg escape that repeats the previous cell's in the same row
-  (per-row state, so each row stays self-contained). Measured 61–87 % smaller output and
-  ~2.6× faster over a 9600-baud line, with no visual difference in 128 runs (O-5).
-- **Real transparency.** v1.6.4 composites alpha over black; draw a transparent cell in
-  the terminal's default colours (SGR 39 / 49) instead, choosing `▀` or `▄` so an opaque
-  half keeps its colour.
 
 ## 1.9.0 — Tier 2 dithering, and pixel-centre sampling
 

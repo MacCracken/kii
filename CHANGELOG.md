@@ -4,6 +4,124 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-15
+
+**Tier 2 colour, and the emit rework.** `--color 256` and `--color tc` (24-bit truecolour)
+join 8 and 16. Three other changes ride the same release because each alters every frame's
+bytes, so captured frames change once rather than three times:
+- tier 1 moves to the plain 8/16-colour SGR codes a strict terminal understands;
+- repeated escapes are elided;
+- transparent pixels are drawn in the terminal's own default colours.
+
+The decisions are recorded in
+[ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md), which supersedes ADR 0003's
+tier-1-only limit and its `38;5;N` encoding.
+
+⚠ **Every frame's bytes change.** What a terminal shows does not, for opaque images at the
+default tiers:
+- **Opaque images:** a replay of every escape into (glyph, fg, bg) per cell gives the same
+  grid as v1.7.0 for every opaque image tested. That is 996 frames: the test fixtures and
+  the opaque system images, both lanes, tiers 8 and 16, two widths.
+- **Transparent images:** every half drawn opaque matches too (1,344 frames).
+- **Size:** output is ~85 % smaller over those frames (71.99 MB → 10.87 MB).
+
+**738 assertions** pass on x86_64 and under `cyrius test --aarch64`, and aarch64 frames
+match x86_64 at every tier on both lanes. **8,011,000 fuzz iterations** are all clean.
+
+### Added
+- **`--color 256`.** Uses the xterm 6×6×6 cube and grey ramp, indices 16–255.
+  - Indices 0–15 are skipped: each terminal's theme sets their RGB, so they cannot be
+    matched.
+  - The nearest entry is exact without a scan. For the cube, the nearest level is chosen per
+    channel; for the grey ramp, the level nearest the channel mean. The two candidates are
+    compared, and ties go to the lower index.
+  - `quantize_256` is checked against a full scan of all 240 entries on a 5,832-colour grid
+    and every grey.
+- **`--color tc`.** 24-bit truecolour: each pixel's own RGB as `38;2;R;G;B` / `48;2;R;G;B`.
+- **`--color` is a cmdit enum, `8|16|256|tc`.** 16 is still the default. kii still does not
+  read `COLORTERM` or `TERM`, so the same command gives the same bytes everywhere.
+- **`--verbose` names the tier:** `→ 256-color` or `→ truecolor`.
+
+### Changed
+- ⚠ **Tiers 8 and 16 now send the plain SGR codes.**
+
+  | tier | through v1.7.0 | since v1.8.0 |
+  |---|---|---|
+  | 8 | `38;5;N` / `48;5;N` | 30–37 / 40–47 |
+  | 16 | `38;5;N` / `48;5;N` | 30–37 and 90–97 / 40–47 and 100–107 |
+
+  This resolves the v1.6.4 sweep's C-11: the tier for strict 16-colour terminals and BBS
+  clients was sending an escape some of them cannot parse. Tier 8 also refuses a bright
+  index rather than send 90–97.
+- ⚠ **Repeated escapes are elided** (O-5).
+  - A row writes an fg or bg escape only when it changes from the previous cell. The state
+    starts unknown on every row, so each row is still self-contained.
+  - A cell drawn as a space takes no fg escape.
+  - RAMGON at `--width 80` is 14,609 bytes (was 54,353). An 80×24 frame over a 9600-baud
+    line takes ~15 s instead of ~57 s.
+  - Small images also render faster: a 256² icon at `--width 200` takes 0.25 s of CPU per
+    50 renders, down from 0.35–0.42 s (`docs/benchmarks.md` § v1.8.0).
+- ⚠ **Transparent pixels are drawn in the terminal's default colours** (SGR 39 / 49). Through
+  v1.7.0 they were composited over black.
+  - A pixel with alpha below 128 (chafa's default threshold) is transparent. Downscale marks
+    it in a mask, kept in the pstruct slot at offset 32, which v1.7.0 had freed.
+  - In the half-block lane, the glyph keeps the opaque half's colour:
+    - bottom transparent: `▀`;
+    - top transparent: `▄`;
+    - both: a space.
+  - In the ASCII lane, a transparent sample counts as no ink and is left out of the cell's
+    colour.
+  - Alpha at 128 or above is still composited over black.
+- ⚠ **`--color` error and help text.** Any value other than 8, 16, 256 or tc now fails the
+  parse:
+  - `--color 7` prints `kii: --color must be 8, 16, 256 or tc`; it was `… must be 8 or 16`.
+  - `--help` reads `-c, --color <8|16|256|tc>	colour tier (default: 16)` and gains a
+    `--color 256` example.
+  - `kii_validate_color` is gone. `kii_parse_error_line` takes the flag name, so BAD_ENUM
+    names `--color` or `--mode`.
+- **The quantize stage now passes colour codes to emit.**
+  - Each pixel gets a 32-bit code: a palette index (tiers 8 / 16 / 256), a packed `0xRRGGBB`
+    (tc), or `KII_COLOR_DEFAULT` for a transparent pixel.
+  - The quantized buffer is 4 bytes a pixel (was 1).
+  - `quantize_rgb_buf` takes the transparency mask.
+  - `emit_ascii_shape_row_buf` takes the mask too, and the ASCII frame loop reaches it
+    through the pstruct.
+- **Sizes.**
+  - `build/kii`: 999,568 → 1,003,824 bytes.
+  - `--agnos`: 1,013,816 → 1,018,072.
+  - `--aarch64`: 1,171,360 → 1,237,064. This is 64 KiB of segment-alignment padding again;
+    the text crossed the boundary.
+  - The worst-case cell grows from 25 to 41 bytes (two 19-byte truecolour escapes and a
+    glyph). The frame cap still bounds a frame, at ~43 MB of truecolour output.
+
+### Tests
+- **738 assertions** (was 710).
+  - **cli 171 → 184:** every `--color` value and its tier, refusals naming `--color`, and
+    both BAD_ENUM lines.
+  - **quant 115 → 133:** `quantize_256` against a full scan (5,832 grid colours and all 256
+    greys), colour codes at each tier, and the mask → `KII_COLOR_DEFAULT`.
+  - **render 199 → 190:** the 33 single-byte offset pins of the old `38;5;N` rows are
+    replaced by 24 new checks:
+    - every tier;
+    - tier 8 refusing a bright index;
+    - elision: only the changed escape, and self-contained rows;
+    - each transparency case (`▄`, `▀`, a space, and truecolour);
+    - the transparency mask at the 127 / 128 threshold.
+  - **ascii 17 → 23:** exact rows, a fully and a partly transparent cell, and elision at
+    three tiers.
+- **Fuzz:** the emit surface rotates through all four tiers and now fails if a row is
+  refused. Its line buffer grew to fit 200 truecolour cells.
+
+### Documentation
+- New ADR 0010. ADR 0003 is marked partly superseded. ADR 0002 gains a v1.8.0 amendment:
+  the emit surface is still SGR only, and its set is listed.
+- Updated for the new tiers: README (the `--color` flag, a transparency note, the tier
+  roadmap), the getting-started guide (its `--help` block matches the binary byte for
+  byte), the architecture notes (colour codes, the tier composers, the 41-byte cell
+  budget), SECURITY.md (the frame cap at truecolour), and example 01's expected bytes.
+- The roadmap's 1.8.0 section is deleted. Next is 1.9.0: dithering and pixel-centre
+  sampling.
+
 ## [1.7.0] - 2026-10-15
 
 **The format-neutral rename, and the three code-health items the v1.6.4 sweep pinned to

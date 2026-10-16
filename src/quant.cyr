@@ -20,8 +20,13 @@ include "src/palette.cyr"
 include "src/image.cyr"
 
 # ---- active colour tier -------------------------------------------
-# How many palette entries quantize_nearest_rgb is allowed to choose
-# from: 16 (default) or 8. P-1 (v1.5.1) — `--color 8` was parsed and
+# The `--color` tier: 8, 16 (the default), 256, or KII_TIER_TC (24-bit
+# truecolour, v1.8.0). Tiers 8 and 16 choose from the Linux-console palette
+# in palette.cyr; 256 from the xterm 6x6x6 cube and grey ramp; truecolour
+# keeps the pixel's own RGB. See ADR 0010.
+#
+# Tier 8 / 16 history: quantize_nearest_rgb is allowed to choose
+# from 16 (default) or 8 entries. P-1 (v1.5.1) — `--color 8` was parsed and
 # validated by kii_validate_color since M1 and then never consumed, so
 # `kii --color 8 img.png` emitted output BYTE-IDENTICAL to `--color 16`.
 # The flag's own help text promised "color tier: 8 or 16", and CLAUDE.md
@@ -37,14 +42,20 @@ include "src/image.cyr"
 # The low 8 entries ARE the normal-intensity ANSI colours and the high 8
 # the bright ones, so restricting the ceiling to 8 selects exactly the
 # 8-colour tier — no separate table needed.
+var KII_TIER_8   = 8;
+var KII_TIER_16  = 16;
+var KII_TIER_256 = 256;
+var KII_TIER_TC  = 24;     # truecolour: 24 bits per pixel
 var _quant_tier = 16;
 
-# Set the active tier. Accepts only 8 or 16; anything else is ignored so
-# a bad value can never widen the loop past the palette. Returns the tier
-# actually in force.
+# Set the active tier. Accepts only 8, 16, 256 or KII_TIER_TC; anything
+# else is ignored so a bad value can never widen the loop past the palette.
+# Returns the tier actually in force.
 fn quant_set_tier(n): i64 {
-    if (n == 8)  { _quant_tier = 8; }
-    if (n == 16) { _quant_tier = 16; }
+    if (n == KII_TIER_8)   { _quant_tier = n; }
+    if (n == KII_TIER_16)  { _quant_tier = n; }
+    if (n == KII_TIER_256) { _quant_tier = n; }
+    if (n == KII_TIER_TC)  { _quant_tier = n; }
     return _quant_tier;
 }
 
@@ -70,7 +81,9 @@ fn quantize_nearest_rgb(r, g, b): i64 {
     var db = b - load8(q + 2);
     var best_idx = 0;
     var best_d2  = dr * dr + dg * dg + db * db;
-    # Bounded by the active tier, never past the table itself.
+    # Bounded by the active tier, never past the table itself (tier 8 → 8
+    # entries; every other tier → the 16, since this function is the tier-1
+    # quantizer and kii_color_code routes the higher tiers elsewhere).
     var ceiling = _quant_tier;
     if (ceiling > ANSI_PALETTE_SIZE) { ceiling = ANSI_PALETTE_SIZE; }
     var i = 1;
@@ -95,29 +108,108 @@ fn quantize_nearest_rgb(r, g, b): i64 {
 # RGBA8, so its per-colour-type extraction had no live inputs. The flow is
 # downscale_to_rgb → quantize_downscaled. See ADR 0006.
 
-# Quantize a packed RGB-triple source buffer into palette indices.
-# Writes n_pixels bytes into out_buf (caller-owned). Returns 0 on
-# success; never fails (palette_init is idempotent, the loop has
-# no allocation, indices are in [0, 15]). Used by quantize_downscaled
-# below — exposes the inner loop with no PNG / pstruct knowledge so
-# future consumers (animation frames, multi-format decoders) can
-# reuse it.
-fn quantize_rgb_buf(rgb_buf, n_pixels, out_buf): i64 {
+# ---- tier 256: the xterm cube and grey ramp (v1.8.0) ---------------
+# Indices 16-231 are a 6x6x6 cube over the levels 0, 95, 135, 175, 215,
+# 255, and 232-255 a grey ramp 8, 18, ..., 238. Entries 0-15 are skipped:
+# their RGB is whatever each terminal's theme says, so they cannot be matched
+# reliably (tiers 8 and 16 use them by name instead).
+#
+# The nearest entry is exact without scanning all 240. Squared distance is a
+# sum over channels, so the nearest cube point is the nearest level per
+# channel; over the grey ramp it is 3·(v - mean)² + const, so the nearest grey
+# is the level nearest the channel mean. The two candidates are then
+# compared. Ties go to the lower index everywhere (lower level per channel,
+# lower grey, the cube before the ramp) — the strict-< rule of a full scan in
+# index order, which tests/quant.tcyr checks against one.
+
+# The cube level index (0-5) nearest channel value `c`. The thresholds are
+# the midpoints between levels; a value exactly on one (115, 155, 195, 235)
+# is equidistant and takes the lower level.
+fn _quant_cube_level(c): i64 {
+    if (c <= 47)  { return 0; }
+    if (c <= 115) { return 1; }
+    if (c <= 155) { return 2; }
+    if (c <= 195) { return 3; }
+    if (c <= 235) { return 4; }
+    return 5;
+}
+
+# The channel value of cube level `i`: 0, 95, 135, 175, 215, 255.
+fn _quant_cube_value(i): i64 {
+    if (i == 0) { return 0; }
+    return 55 + 40 * i;
+}
+
+# Nearest xterm-256 index (16-255) to (r, g, b).
+fn quantize_256(r, g, b): i64 {
+    var ri = _quant_cube_level(r);
+    var gi = _quant_cube_level(g);
+    var bi = _quant_cube_level(b);
+    var e = r - _quant_cube_value(ri);
+    var cube_d = e * e;
+    e = g - _quant_cube_value(gi);
+    cube_d = cube_d + e * e;
+    e = b - _quant_cube_value(bi);
+    cube_d = cube_d + e * e;
+    # Grey: the level nearest the mean, (r+g+b)/3 ≈ 8 + 10k. Rounding the
+    # integer estimate can miss by one either way, so score k-1, k, k+1.
+    var kc = ((r + g + b) - 24 + 15) / 30;
+    if (kc < 0)  { kc = 0; }
+    if (kc > 23) { kc = 23; }     # white's estimate is 25: clamp, or no k is scored
+    var best_k = 0 - 1;
+    var grey_d = 0;
+    var k = kc - 1;
+    while (k <= kc + 1) {
+        if (k >= 0 && k <= 23) {
+            var v = 8 + 10 * k;
+            var d = (r - v) * (r - v) + (g - v) * (g - v) + (b - v) * (b - v);
+            if (best_k < 0 || d < grey_d) { grey_d = d; best_k = k; }
+        }
+        k = k + 1;
+    }
+    if (grey_d < cube_d) { return 232 + best_k; }
+    return 16 + 36 * ri + 6 * gi + bi;
+}
+
+# ---- colour codes (v1.8.0) ----------------------------------------
+# What the quantize stage hands the emit layer, one 32-bit code per pixel:
+# a palette index (tiers 8 / 16 / 256), a packed 0xRRGGBB (truecolour), or
+# KII_COLOR_DEFAULT for a transparent pixel, which emit draws in the
+# terminal's own default colour. 1 << 24 is outside every tier's range, so
+# the sentinel never collides with a real colour.
+var KII_COLOR_DEFAULT = 16777216;
+
+# The code for one opaque pixel at the active tier.
+fn kii_color_code(r, g, b): i64 {
+    if (_quant_tier == KII_TIER_TC)  { return (r << 16) | (g << 8) | b; }
+    if (_quant_tier == KII_TIER_256) { return quantize_256(r, g, b); }
+    return quantize_nearest_rgb(r, g, b);
+}
+
+# Quantize a packed RGB-triple source buffer into colour codes: one 32-bit
+# code per pixel into out_buf (caller-owned, 4 × n_pixels bytes). `mask` is
+# downscale's transparency mask (one byte per pixel, 1 = transparent → code
+# KII_COLOR_DEFAULT), or 0 when no pixel is transparent. Returns 0; never
+# fails (no allocation). Used by quantize_downscaled below — exposes the
+# inner loop with no pstruct knowledge.
+fn quantize_rgb_buf(rgb_buf, mask, n_pixels, out_buf): i64 {
     palette_init();
     var i = 0;
     while (i < n_pixels) {
-        var r = load8(rgb_buf + i * 3 + 0);
-        var g = load8(rgb_buf + i * 3 + 1);
-        var b = load8(rgb_buf + i * 3 + 2);
-        store8(out_buf + i, quantize_nearest_rgb(r, g, b));
+        if (mask != 0 && load8(mask + i) != 0) {
+            store32(out_buf + i * 4, KII_COLOR_DEFAULT);
+        } else {
+            var p = rgb_buf + i * 3;
+            store32(out_buf + i * 4, kii_color_code(load8(p), load8(p + 1), load8(p + 2)));
+        }
         i = i + 1;
     }
     return 0;
 }
 
-# Struct-aware wrapper: read pstruct's DOWNSCALED_BUF + DOWNSCALED_W
-# + DOWNSCALED_H, alloc a (w × h)-byte index buffer, quantize, and
-# store ptr + size into the QUANTIZED slots. Returns 0 on success,
+# Struct-aware wrapper: read pstruct's DOWNSCALED_BUF / W / H and its
+# transparency mask, alloc a (w × h × 4)-byte code buffer, quantize, and
+# store ptr + pixel count into the QUANTIZED slots. Returns 0 on success,
 # -1 on:
 #   - downscale_to_rgb not yet run (DOWNSCALED_BUF == 0; kii_decode_image
 #     zeroes the pstruct, so this check means what it says)
@@ -132,10 +224,10 @@ fn quantize_downscaled(pstruct): i64 {
     if (dw <= 0 || dh <= 0) { return 0 - 1; }
 
     var n_pixels = dw * dh;
-    var out_buf = alloc(n_pixels);
+    var out_buf = alloc(n_pixels * 4);
     if (out_buf == 0) { return 0 - 1; }
 
-    quantize_rgb_buf(dbuf, n_pixels, out_buf);
+    quantize_rgb_buf(dbuf, load64(pstruct + STRUCT_ALPHA_MASK_OFFSET), n_pixels, out_buf);
     store64(pstruct + STRUCT_QUANTIZED_BUF_OFFSET,  out_buf);
     store64(pstruct + STRUCT_QUANTIZED_SIZE_OFFSET, n_pixels);
     return 0;

@@ -34,6 +34,34 @@ fn _ref_nearest(r, g, b, tier): i64 {
     return best_idx;
 }
 
+# A full scan of xterm-256 indices 16-255 in index order, strict-<: the
+# reference quantize_256 must match.
+fn _ref_256_rgb(i, which): i64 {
+    if (i >= 232) { return 8 + 10 * (i - 232); }
+    var c = i - 16;
+    var lv = 0;
+    if (which == 0) { lv = c / 36; }
+    if (which == 1) { lv = (c / 6) % 6; }
+    if (which == 2) { lv = c % 6; }
+    if (lv == 0) { return 0; }
+    return 55 + 40 * lv;
+}
+
+fn _ref_256(r, g, b): i64 {
+    var best = 16;
+    var best_d = 0 - 1;
+    var i = 16;
+    while (i <= 255) {
+        var dr = r - _ref_256_rgb(i, 0);
+        var dg = g - _ref_256_rgb(i, 1);
+        var db = b - _ref_256_rgb(i, 2);
+        var d = dr * dr + dg * dg + db * db;
+        if (best_d < 0 || d < best_d) { best_d = d; best = i; }
+        i = i + 1;
+    }
+    return best;
+}
+
 fn main() {
     alloc_init();
 
@@ -227,12 +255,19 @@ fn main() {
     store8(&rgb_4 + 3, 0);   store8(&rgb_4 + 4, 0);   store8(&rgb_4 + 5, 255);  # blue
     store8(&rgb_4 + 6, 0);   store8(&rgb_4 + 7, 0);   store8(&rgb_4 + 8, 0);    # black
     store8(&rgb_4 + 9, 255); store8(&rgb_4 + 10, 255); store8(&rgb_4 + 11, 255); # white
-    var idx_4[4];
-    assert_eq(quantize_rgb_buf(&rgb_4, 4, &idx_4), 0,  "quantize_rgb_buf → 0");
-    assert_eq(load8(&idx_4 + 0), 1,  "rgb_buf[0] red → idx 1");
-    assert_eq(load8(&idx_4 + 1), 4,  "rgb_buf[1] blue → idx 4");
-    assert_eq(load8(&idx_4 + 2), 0,  "rgb_buf[2] black → idx 0");
-    assert_eq(load8(&idx_4 + 3), 15, "rgb_buf[3] white → idx 15");
+    var idx_4[16];        # 4 codes × 4 bytes (v1.8.0: 32-bit colour codes)
+    assert_eq(quantize_rgb_buf(&rgb_4, 0, 4, &idx_4), 0,  "quantize_rgb_buf → 0");
+    assert_eq(load32(&idx_4 + 0),  1,  "rgb_buf[0] red → idx 1");
+    assert_eq(load32(&idx_4 + 4),  4,  "rgb_buf[1] blue → idx 4");
+    assert_eq(load32(&idx_4 + 8),  0,  "rgb_buf[2] black → idx 0");
+    assert_eq(load32(&idx_4 + 12), 15, "rgb_buf[3] white → idx 15");
+    # v1.8.0: a mask byte of 1 makes that pixel KII_COLOR_DEFAULT.
+    var mask_4[4];
+    store8(&mask_4 + 0, 0); store8(&mask_4 + 1, 1); store8(&mask_4 + 2, 0); store8(&mask_4 + 3, 1);
+    quantize_rgb_buf(&rgb_4, &mask_4, 4, &idx_4);
+    assert_eq(load32(&idx_4 + 0),  1, "unmasked red stays idx 1");
+    assert_eq(load32(&idx_4 + 4),  KII_COLOR_DEFAULT, "masked blue → KII_COLOR_DEFAULT");
+    assert_eq(load32(&idx_4 + 12), KII_COLOR_DEFAULT, "masked white → KII_COLOR_DEFAULT");
 
     # ---- M5(c) — quantize_downscaled wraps quantize_rgb_buf --------
     # Post-re-fold rewire: the original drove this through a decoded
@@ -255,10 +290,10 @@ fn main() {
     assert_eq(load64(&pstr_qd + STRUCT_QUANTIZED_SIZE_OFFSET), 4, "quantized size = 4 (2 × 2)");
     var qd_out = load64(&pstr_qd + STRUCT_QUANTIZED_BUF_OFFSET);
     assert(qd_out != 0, "quantized buffer non-null");
-    assert_eq(load8(qd_out + 0), 1,  "qd[0] red → 1");
-    assert_eq(load8(qd_out + 1), 4,  "qd[1] blue → 4");
-    assert_eq(load8(qd_out + 2), 0,  "qd[2] black → 0");
-    assert_eq(load8(qd_out + 3), 15, "qd[3] white → 15");
+    assert_eq(load32(qd_out + 0),  1,  "qd[0] red → 1");
+    assert_eq(load32(qd_out + 4),  4,  "qd[1] blue → 4");
+    assert_eq(load32(qd_out + 8),  0,  "qd[2] black → 0");
+    assert_eq(load32(qd_out + 12), 15, "qd[3] white → 15");
     # Reject ungated calls (downscale not yet run).
     var pstr_qun[160];
     store64(&pstr_qun + STRUCT_DOWNSCALED_BUF_OFFSET, 0);
@@ -274,7 +309,11 @@ fn main() {
     assert_eq(quant_tier(),       8,  "tier now 8");
     assert_eq(quant_set_tier(16), 16, "set 16 → 16");
     assert_eq(quant_tier(),       16, "tier back to 16");
-    # A value outside {8,16} must be IGNORED, never widen the loop past the
+    # v1.8.0: 256 and KII_TIER_TC (24) are tiers too.
+    assert_eq(quant_set_tier(256), 256, "set 256 → 256");
+    assert_eq(quant_set_tier(KII_TIER_TC), 24, "set truecolour → 24");
+    assert_eq(quant_set_tier(16), 16, "back to 16");
+    # Any other value must be IGNORED, never widen the loop past the
     # palette table — the guard that keeps a bad tier from reading OOB.
     assert_eq(quant_set_tier(0),    16, "0 ignored → stays 16");
     assert_eq(quant_set_tier(9999), 16, "9999 ignored → stays 16");
@@ -314,6 +353,52 @@ fn main() {
     # Restore the default so later groups (and any future additions) see 16.
     quant_set_tier(16);
     assert_eq(quantize_nearest_rgb(255, 255, 255), 15, "tier restored: white → 15 again");
+
+    # ---- v1.8.0 — tier 256: the xterm cube and grey ramp ----------
+    # quantize_256 finds the nearest of indices 16-255 without scanning them.
+    # The reference below scans all 240 in index order with strict-<, the
+    # rule the fast form claims to match, on a grid that steps 15 per channel
+    # (18^3 = 5,832 colours, covering 0, 255 and every cube level's
+    # neighbourhood) plus every grey 0-255.
+    test_group("v1.8.0 — quantize_256 matches a full scan of indices 16-255");
+    var m256 = 0;
+    var tr = 0;
+    while (tr <= 255) {
+        var tg = 0;
+        while (tg <= 255) {
+            var tb = 0;
+            while (tb <= 255) {
+                if (quantize_256(tr, tg, tb) != _ref_256(tr, tg, tb)) { m256 = m256 + 1; }
+                tb = tb + 15;
+            }
+            tg = tg + 15;
+        }
+        tr = tr + 15;
+    }
+    assert_eq(m256, 0, "5,832 grid colours: no mismatch against the full scan");
+    var mg = 0;
+    var gv = 0;
+    while (gv <= 255) {
+        if (quantize_256(gv, gv, gv) != _ref_256(gv, gv, gv)) { mg = mg + 1; }
+        gv = gv + 1;
+    }
+    assert_eq(mg, 0, "all 256 greys: no mismatch against the full scan");
+    assert_eq(quantize_256(255, 0, 0), 196, "pure red → 196");
+    assert_eq(quantize_256(0, 0, 0), 16, "black → 16 (the cube's 0,0,0 before grey 232)");
+    assert_eq(quantize_256(255, 255, 255), 231, "white → 231 (cube 255,255,255)");
+    assert_eq(quantize_256(128, 128, 128), 244, "mid grey → 244 (grey 128)");
+    assert_eq(quantize_256(115, 115, 115), 243, "115 grey → 243 (grey 118, nearer than cube 95 or 135)");
+
+    test_group("v1.8.0 — kii_color_code at each tier");
+    quant_set_tier(16);
+    assert_eq(kii_color_code(255, 0, 0), 1, "tier 16: red → 1");
+    quant_set_tier(256);
+    assert_eq(kii_color_code(255, 0, 0), 196, "tier 256: red → 196");
+    quant_set_tier(KII_TIER_TC);
+    assert_eq(kii_color_code(255, 128, 1), 16744449, "tc: (255,128,1) → 0xFF8001");
+    assert_eq(kii_color_code(0, 0, 0), 0, "tc: black → 0");
+    assert(KII_COLOR_DEFAULT > 16777215, "the transparent sentinel is outside every tier's codes");
+    quant_set_tier(16);
 
     return assert_summary();
 }

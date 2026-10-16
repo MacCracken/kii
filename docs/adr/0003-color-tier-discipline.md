@@ -1,6 +1,6 @@
 # 0003 — Color-tier discipline: tier-1 (8/16-color) only at v1.0
 
-**Status**: Accepted
+**Status**: Accepted — the tier-1-only limit and the `38;5;N` encoding for tier 1 are superseded by [0010](0010-tier-2-colour-and-emit-encoding.md) (v1.8.0)
 **Date**: 2026-05-23
 
 ## Context

@@ -38,6 +38,23 @@ fn test_ascii_match() {
     return 0;
 }
 
+# 1 if the `n` bytes at `buf` are exactly the cstring `expect`.
+fn _bytes_are(buf, n, expect): i64 {
+    if (n != strlen(expect)) { return 0; }
+    return memeq(buf, expect, n);
+}
+
+# 1 if the cstring `needle` occurs in the `n` bytes at `buf`.
+fn _bytes_have(buf, n, needle): i64 {
+    var m = strlen(needle);
+    var i = 0;
+    while (i + m <= n) {
+        if (memeq(buf + i, needle, m) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
 # emit_ascii_shape_row_buf: a 2-cell row (cell0 black, cell1 white) over a
 # 4×3 sub-sample buffer (sub_w=4). cell0 -> ' ', cell1 -> '@'.
 fn test_ascii_shape_row_buf() {
@@ -56,7 +73,7 @@ fn test_ascii_shape_row_buf() {
         sy = sy + 1;
     }
     var out[64];
-    var pos = emit_ascii_shape_row_buf(&rgb, 4, 0, 2, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, 4, 0, 2, &out, 0);
     assert(pos > 0, "row_buf returns positive pos");
     assert_eq(load8(&out + pos - 1), 10,   "row ends LF");
     assert_eq(load8(&out + pos - 2), 0x6D, "reset 'm'");
@@ -74,6 +91,47 @@ fn test_ascii_shape_row_buf() {
     }
     assert_eq(saw_space, 1, "dark cell -> ' '");
     assert_eq(saw_at, 1, "white cell -> '@'");
+
+    # v1.8.0: the whole row, exactly. A space takes no fg escape; the white
+    # cell's mean (255,255,255) is tier-16 index 15, SGR 97.
+    quant_set_tier(16);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, 4, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, " \x1b[97m@\x1b[0m\n"), 1, "row = ' ' + 97 '@' + reset");
+
+    # v1.8.0: transparency. Mask every sample of the white cell: it becomes
+    # a space with no colour, like the black one.
+    var mask[12];
+    z = 0;
+    while (z < 12) { store8(&mask + z, 0); z = z + 1; }
+    sy = 0;
+    while (sy < 3) { store8(&mask + sy * 4 + 2, 1); store8(&mask + sy * 4 + 3, 1); sy = sy + 1; }
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, 4, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "  \x1b[0m\n"), 1, "a fully transparent cell is a bare space");
+    # Mask only the top two samples of the white cell: the rest still set the
+    # colour (their mean is white), so it keeps SGR 97.
+    store8(&mask + 6, 0); store8(&mask + 7, 0); store8(&mask + 10, 0); store8(&mask + 11, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, 4, 0, 2, &out, 0);
+    assert_eq(_bytes_have(&out, pos, "\x1b[97m"), 1, "a partly transparent cell keeps its opaque samples' colour");
+    return 0;
+}
+
+# v1.8.0: elision and the tiers on this lane. Three white cells set the
+# colour once; at 256 and truecolour the same cells use 38;5 / 38;2.
+fn test_ascii_shape_tiers() {
+    var rgb[54];          # 6 x 3 sub-samples x 3 bytes, all white
+    var z = 0;
+    while (z < 54) { store8(&rgb + z, 255); z = z + 1; }
+    var out[128];
+    quant_set_tier(16);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, 6, 0, 3, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "\x1b[97m@@@\x1b[0m\n"), 1, "three white cells: one fg escape");
+    quant_set_tier(256);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, 6, 0, 3, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "\x1b[38;5;231m@@@\x1b[0m\n"), 1, "tier 256: 38;5;231");
+    quant_set_tier(KII_TIER_TC);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, 6, 0, 3, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "\x1b[38;2;255;255;255m@@@\x1b[0m\n"), 1, "truecolour: 38;2;255;255;255");
+    quant_set_tier(16);
     return 0;
 }
 
@@ -90,6 +148,7 @@ fn main() {
     test_ascii_luma();
     test_ascii_match();
     test_ascii_shape_row_buf();
+    test_ascii_shape_tiers();
     test_ascii_shape_guards();
     return assert_summary();
 }

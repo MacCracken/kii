@@ -313,3 +313,23 @@ the same binary):
 | `PNG_ERR_IDAT_TOO_LARGE` (13) | `IMG_ERR_MEMORY` |
 
 Every other `PNG_ERR_X` is now `IMG_ERR_X`. The text above keeps the names it was written with.
+
+## Amendment — v1.8.0 (the emit surface widens, still SGR only)
+
+[ADR 0010](0010-tier-2-colour-and-emit-encoding.md) adds tier-2 colour and re-encodes
+tier 1. The restricted-emit posture holds: every byte kii writes to stdout is still a
+printable glyph (`▀`, `▄`, a space, or the ASCII lane's 27-glyph table), a newline, or an
+SGR escape (`ESC [ … m`). There is no OSC, DCS, APC or PM. The SGR set grows to:
+
+- 0 (the row-end reset);
+- 30–37, 40–47, 90–97 and 100–107 (tiers 8 and 16);
+- 39 / 49 (a transparent half: the terminal's default colour);
+- `38;5;N` / `48;5;N` with N in 16–255 (tier 256);
+- `38;2;R;G;B` / `48;2;R;G;B` with each channel in 0–255 (truecolour).
+
+Every value comes from darshana's composers, which reject anything outside its range and
+write nothing when they do. The emit layer also refuses a code that is not a colour of the
+active tier (`_kii_sgr_fg` / `_kii_sgr_bg`), so no tier can send another tier's escapes.
+A cell's worst case grows from 25 to 41 bytes, and the frame cap (`KII_MAX_CELLS`) still
+bounds a frame, at ~43 MB of truecolour output.
+

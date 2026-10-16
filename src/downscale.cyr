@@ -35,6 +35,13 @@
 
 include "src/image.cyr"
 
+# Transparency (v1.8.0). A pixel whose alpha is below KII_ALPHA_THRESHOLD is
+# transparent: downscale marks it in the mask, and emit draws it in the
+# terminal's default colours (ADR 0010). 128 is chafa's default threshold
+# (0.5). A pixel at or above it is opaque; partial alpha there is composited
+# over black, as all alpha was from v1.6.4 to v1.7.0.
+var KII_ALPHA_THRESHOLD = 128;
+
 # Composite one channel byte over black: c * a / 255, rounded. Exact at the
 # ends: a = 255 returns c unchanged (so opaque images render byte-identically)
 # and a = 0 returns 0.
@@ -43,16 +50,18 @@ include "src/image.cyr"
 # rendered whatever RGB it happened to store. chitra gives a GIF's
 # transparent index alpha 0 but keeps its palette colour, so a GIF whose
 # transparent entry is magenta drew magenta where the image is empty; a PNG
-# icon storing rgba(255,255,255,0) drew white. Black is the tier-1 BBS
-# background. Real transparency (the terminal's default background) needs
-# emit-side work and is on the roadmap.
+# icon storing rgba(255,255,255,0) drew white. v1.8.0 draws such pixels in
+# the terminal's default colours instead; this now covers only the partial
+# alpha of an opaque pixel.
 fn _over_black(c, a): i64 {
     return (c * a + 127) / 255;
 }
 
 # Downscale the decoded source pixel buffer to a packed RGB-triple
 # buffer of size dst_w × dst_h × 3 bytes. Stores ptr + dimensions
-# into pstruct's STRUCT_DOWNSCALED_*_OFFSET slots. Returns 0 on
+# into pstruct's STRUCT_DOWNSCALED_*_OFFSET slots, and the transparency
+# mask (one byte per pixel) into STRUCT_ALPHA_MASK_OFFSET — or 0 there when
+# no sampled pixel is transparent, so an opaque image skips it. Returns 0 on
 # success, -1 on:
 #   - no decoded pixels yet (STRUCT_PIXELS_BUF_OFFSET == 0)
 #   - a pixel format other than RGBA8 (bit_depth 8, color_type 6), or a
@@ -104,13 +113,18 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     var out_bytes = dst_w * dst_h * 3;
     var out_buf = alloc(out_bytes);
     if (out_buf == 0) { return 0 - 1; }
+    var mask = alloc(dst_w * dst_h);
+    if (mask == 0) { return 0 - 1; }
+    var any_transparent = 0;
 
     # Read R, G, B straight off the source row (the v1.6.4 O-4 fast path,
     # now the only path). sy is constant across a scanline; integer
     # truncation keeps both sy and sx strictly below the source size, so the
-    # read never passes the buffer's end. Alpha composites over black.
+    # read never passes the buffer's end. A transparent pixel is marked in
+    # the mask and stored as black; partial alpha composites over black.
     var dy = 0;
     var op = out_buf;
+    var mp = mask;
     while (dy < dst_h) {
         var sy = (dy * src_h) / dst_h;
         var rowp = pixels + sy * src_w * 4;
@@ -122,16 +136,29 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
                 store8(op, load8(sp));
                 store8(op + 1, load8(sp + 1));
                 store8(op + 2, load8(sp + 2));
+                store8(mp, 0);
             } else {
-                store8(op, _over_black(load8(sp), a));
-                store8(op + 1, _over_black(load8(sp + 1), a));
-                store8(op + 2, _over_black(load8(sp + 2), a));
+                if (a < KII_ALPHA_THRESHOLD) {
+                    store8(op, 0);
+                    store8(op + 1, 0);
+                    store8(op + 2, 0);
+                    store8(mp, 1);
+                    any_transparent = 1;
+                } else {
+                    store8(op, _over_black(load8(sp), a));
+                    store8(op + 1, _over_black(load8(sp + 1), a));
+                    store8(op + 2, _over_black(load8(sp + 2), a));
+                    store8(mp, 0);
+                }
             }
             op = op + 3;
+            mp = mp + 1;
             dx = dx + 1;
         }
         dy = dy + 1;
     }
+    if (any_transparent == 0) { mask = 0; }
+    store64(pstruct + STRUCT_ALPHA_MASK_OFFSET, mask);
 
     store64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET, out_buf);
     store64(pstruct + STRUCT_DOWNSCALED_W_OFFSET,   dst_w);

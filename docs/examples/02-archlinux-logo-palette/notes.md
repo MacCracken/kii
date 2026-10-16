@@ -23,10 +23,13 @@ substituted black on an out-of-range index. That branch was in
 reached; v1.7.0 removed it.)
 
 **Transparency**: this logo carries a `tRNS` chunk, so chitra gives some
-pixels alpha below 255. Since v1.6.4 kii composites alpha over black,
-so a transparent pixel renders black rather than the colour its palette
-entry stores, and a partly transparent one is darkened toward black. That changed 72 of this frame's 3,200 cells against
-v1.6.3; earlier releases dropped alpha.
+pixels alpha below 255. Since v1.8.0 a pixel with alpha below 128 is
+drawn in the terminal's own default colours (ADR 0010): the logo sits on
+whatever background the terminal has, and a half-block cell keeps its
+opaque half with `▀` or `▄`. Alpha at 128 or above is composited over
+black. (v1.6.4–v1.7.0 composited all alpha over black, which changed 72
+of this frame's 3,200 cells against v1.6.3; earlier releases dropped
+alpha.)
 
 **Cross-check** — verify color_type detected as 3:
 
