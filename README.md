@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.6.0** (2026-10-12). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v1.6.1** (2026-10-15). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to the 8- or 16-color ANSI palette, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
@@ -47,6 +47,9 @@ shared substrate, which is the point:
   the background colour escape and the filename sanitizer are now darshana's (the
   sanitizer gaining strict RFC 3629), every frame byte-identical. The manifest's dep tags
   now name what is actually compiled.
+- **v1.6.1** — dependencies moved to the newest tags that build on cyrius 6.7.9 (cmdit 1.4.0,
+  chitra 1.1.3), with every frame byte-identical. `cyrius.cyml` was cut back to a plain
+  manifest.
 
 ### Supported input formats
 
@@ -111,8 +114,8 @@ The world prior art (`chafa`) ships every tier from monochrome through 24-bit tr
 
 - [`sankoch`](https://github.com/MacCracken/sankoch) — DEFLATE/zlib decompression. **Wired at v0.4.0** for PNG IDAT decompression. (Now folded into Cyrius stdlib at v5.8.65, so it's a stdlib-list add, not an external git dep.)
 - [`darshana`](https://github.com/MacCracken/darshana) — TTY/ANSI primitives (color escape sequences, cursor positioning, `tty_winsize`). External dep since v0.6.0 / M5 when ANSI emit went live; pinned at `1.3.0` since v1.6.0, when kii's own background-colour composer and its filename sanitizer moved onto darshana's `tty_bg_256_buf` and `tty_has_ctl` — both of which darshana built with kii as their first consumer.
-- [`cmdit`](https://github.com/MacCracken/cmdit) — getopt-long CLI parsing (the Cyrius stdlib `flags` parser productized and extended). **Adopted at v1.1.0** in the CLI re-fold: kii's own flag set seeded cmdit's design and kii is its first consumer, so the hand-rolled parser and the stdlib `flags` dep were both dropped. `src/cli.cyr` registers into a cmdit context. Pinned via `[deps.cmdit]`.
-- [`chitra`](https://github.com/MacCracken/chitra) — the image-decode substrate (pure-Cyrius PNG + JPEG + BMP + GIF → canonical RGBA8). **Forked from kii's own `src/png.cyr` and adopted back** at v1.2.0 (the PNG re-fold, [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)) when `mabda` became the second consumer; `src/png.cyr` is now a thin adapter calling `chitra_image_decode`. JPEG arrived on the `chitra 0.3.0` re-pin at v1.4.0 ([ADR 0008](docs/adr/0008-jpeg-via-chitra.md)); BMP + GIF on the `chitra 1.0.0` re-pin at v1.5.0, with **no decode change at all** ([ADR 0009](docs/adr/0009-bmp-gif-via-chitra.md)). Pinned via `[deps.chitra]`.
+- [`cmdit`](https://github.com/MacCracken/cmdit) — getopt-long CLI parsing (the Cyrius stdlib `flags` parser productized and extended). **Adopted at v1.1.0** in the CLI re-fold: kii's own flag set seeded cmdit's design and kii is its first consumer, so the hand-rolled parser and the stdlib `flags` dep were both dropped. `src/cli.cyr` registers into a cmdit context. Pinned at `1.4.0` via `[deps.cmdit]`.
+- [`chitra`](https://github.com/MacCracken/chitra) — the image-decode substrate (pure-Cyrius PNG + JPEG + BMP + GIF → canonical RGBA8). **Forked from kii's own `src/png.cyr` and adopted back** at v1.2.0 (the PNG re-fold, [ADR 0006](docs/adr/0006-adopt-chitra-decoder.md)) when `mabda` became the second consumer; `src/png.cyr` is now a thin adapter calling `chitra_image_decode`. JPEG arrived on the `chitra 0.3.0` re-pin at v1.4.0 ([ADR 0008](docs/adr/0008-jpeg-via-chitra.md)); BMP + GIF on the `chitra 1.0.0` re-pin at v1.5.0, with **no decode change at all** ([ADR 0009](docs/adr/0009-bmp-gif-via-chitra.md)). Pinned at `1.1.3` via `[deps.chitra]`.
 - **In-repo palette + quantizer** (`src/palette.cyr` + `src/quant.cyr`) — Linux-console 16-color RGB table + nearest-neighbour Euclidean quantization, with the active tier (8 or 16) selected by `--color`. These two modules and the emit/downscale layer are the only image code kii still owns.
 
 ## Multi-source prior art

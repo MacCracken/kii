@@ -5,6 +5,17 @@
 
 ## Version
 
+**1.6.1** — cut 2026-10-15. **Dependencies to the newest tags that build on cyrius 6.7.9:**
+cmdit `1.2.5` → **`1.4.0`**, chitra `1.0.3` → **`1.1.3`**, darshana stays at **`1.3.0`**, its
+newest tag. chitra 1.1.4 and 1.2.0 pin cyrius 6.7.12, so they were not taken. `cyrius.cyml`
+went from 126 lines to 39: pin history and rationale moved out of the manifest, and the
+`repository` URL was corrected to `MacCracken/kii`. No kii source changed except
+`print_version` → `kii 1.6.1`. Frames are byte-identical to v1.6.0 (121 of 124 cases). The
+other 3 are cmdit 1.3.1 refusing a bool flag given a value: `--verbose=0` used to turn verbose
+on, and now exits 2 with the generic `argument parse error`. Several chitra 1.1.1 refusals now
+reach kii's mapping with more precise codes. CHANGELOG 1.6.1 lists each one. **599
+assertions** (x86_64 and aarch64); **8,011,000 fuzz iterations**, clean.
+
 **1.6.0** — cut 2026-10-12. **Toolchain `6.6.2` → `6.7.9` (the 6.7 language minor),
 darshana `1.0.0` → `1.3.0`, and the `path` overrides dropped.** No kii source needed a
 language repair (audited, not just built: no lone `!`, no unary `-`/`~` on a constant, no
@@ -210,7 +221,7 @@ Module map:
 
 ## Binary size
 
-Build: **877 KB** on host at v1.6.0 (`build/kii` = 898,344 bytes, unstripped, DCE off; the compiler reports 1,098 unreachable fns, ~525 KB, eliminable with `CYRIUS_DCE=1`). Up from 683,584 bytes for v1.5.2 rebuilt from its own tree at 6.6.2: the growth is the 6.7.9 toolchain and the larger darshana 1.3.0 bundle — kii's own source got smaller (the local BG composer and the hand-rolled UTF-8 walk are gone). `--agnos` 908,376 bytes; `--aarch64` 1,086,544 bytes. Earlier: **668 KB** at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DCE off). The `~145 KB` this section reported was measured at v0.8.0 and never refreshed across the cmdit fold, the chitra re-fold, or the JPEG/BMP/GIF folds — it was low by **4.6×**. Most of the size is the vendored `chitra` bundle carrying four decoders plus `sankoch`; the compiler reports ~942 unreachable fns (~390 KB) eliminable with `CYRIUS_DCE=1`. kii gained no module at v1.5.0 or v1.5.1. (Corrected at the v1.5.1 P-1 sweep.)
+Build: **902 KB** on host at v1.6.1 (`build/kii` = 923,976 bytes, unstripped, DCE off; the compiler reports 1,140 unreachable fns, ~523 KB, eliminable with `CYRIUS_DCE=1`). The +25,632 bytes over v1.6.0 come from the cmdit 1.4.0 and chitra 1.1.3 bundles. kii's source is unchanged. `--agnos` 938,088 bytes; `--aarch64` 1,087,600 bytes. At v1.6.0 it was **877 KB** (898,344 bytes), up from 683,584 bytes for v1.5.2 rebuilt from its own tree at 6.6.2: the growth is the 6.7.9 toolchain and the larger darshana 1.3.0 bundle — kii's own source got smaller (the local BG composer and the hand-rolled UTF-8 walk are gone). `--agnos` 908,376 bytes; `--aarch64` 1,086,544 bytes. Earlier: **668 KB** at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DCE off). The `~145 KB` this section reported was measured at v0.8.0 and never refreshed across the cmdit fold, the chitra re-fold, or the JPEG/BMP/GIF folds — it was low by **4.6×**. Most of the size is the vendored `chitra` bundle carrying four decoders plus `sankoch`; the compiler reports ~942 unreachable fns (~390 KB) eliminable with `CYRIUS_DCE=1`. kii gained no module at v1.5.0 or v1.5.1. (Corrected at the v1.5.1 P-1 sweep.)
 
 ## Tests + bench
 
@@ -231,7 +242,7 @@ Build: **877 KB** on host at v1.6.0 (`build/kii` = 898,344 bytes, unstripped, DC
 ## Dependencies
 
 - **stdlib**: `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`, `bench`, `args`, `sankoch`, `thread` (`flags` dropped at the v1.1.0 cmdit re-fold). `sankoch` + `thread` stay post-decoder-re-fold — chitra's dist resolves `zlib_decompress`/`crc32`/`mutex` from kii's stdlib list, and kii's tests call `zlib_decompress` directly.
-- **External** (git + tag, no `path` since v1.6.0): `darshana 1.3.0` + `cmdit 1.2.5` + **`chitra 1.0.3`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0 → 1.0.0 at v1.5.0 → 1.0.3 at v1.6.0). Through v1.5.2 the manifest said darshana 1.0.0 / cmdit 1.2.4 / chitra 1.0.0 but the `path` overrides compiled 1.1.2 / 1.2.5 / 1.0.3. darshana supplies every escape kii writes (`tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`), the terminal size (`tty_winsize`) and the path-echo rule (`tty_has_ctl`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
+- **External** (git + tag, no `path` since v1.6.0): `darshana 1.3.0` + **`cmdit 1.4.0`** + **`chitra 1.1.3`** (image decoder; added at the v1.2.0 re-fold, re-pinned 0.2.0 → 0.2.1 at v1.2.2 → 0.3.0 at v1.4.0 → 1.0.0 at v1.5.0 → 1.0.3 at v1.6.0 → 1.1.3 at v1.6.1). Each is the newest tag that builds on cyrius 6.7.9. chitra 1.1.4 and later pin 6.7.12. chitra ≥ 1.1.0 declares its own `[deps.sankoch]` (`zlib` profile 2.8.7). kii's stdlib `sankoch` leaf takes precedence, so the profile is never vendored, and `cyrius.lock` carries only its commit pin. ⚠ The stdlib sankoch at 6.7.9 is 2.8.3, below the 2.8.6 floor chitra documents for zlib-strict inflate. A pin at cyrius ≥ 6.7.11 lifts it. Through v1.5.2 the manifest said darshana 1.0.0 / cmdit 1.2.4 / chitra 1.0.0 but the `path` overrides compiled 1.1.2 / 1.2.5 / 1.0.3. darshana supplies every escape kii writes (`tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`), the terminal size (`tty_winsize`) and the path-echo rule (`tty_has_ctl`); cmdit owns CLI parsing; chitra owns image decode (`dist/chitra.cyr`) via `chitra_image_decode` — the **full PNG matrix** (all bit depths 1/2/4/8/16 + Adam7 interlace) **plus baseline JPEG** (grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, DRI/RST).
 
 ## Cycle context
 
@@ -244,7 +255,7 @@ not a plan, and keeping a second ordered list here is how the two drift apart. T
 roadmap is forward-facing only: anything shipped is deleted from it rather than checked
 off, so if an item appears there it is genuinely still open.
 
-In brief, what is open as of v1.6.0:
+In brief, what is open as of v1.6.1:
 
 - **Tier 2 colour** (256 / truecolour + dithering) — the likeliest next minor. The
   `--color` flag already carries a real tier mechanism as of v1.5.1, so this extends an

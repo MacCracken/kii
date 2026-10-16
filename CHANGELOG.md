@@ -4,6 +4,73 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-15
+
+**Dependencies to the newest tags that build on cyrius 6.7.9, and `cyrius.cyml` cut back to a
+manifest.** `[deps.cmdit]` `1.2.5` → `1.4.0` and `[deps.chitra]` `1.0.3` → `1.1.3`;
+`[deps.darshana]` stays at `1.3.0`, its newest tag. The toolchain stays at `6.7.9`. No kii source
+changed except the `--version` literal. Every rendered frame is **byte-identical** to v1.6.0: 124
+cases compared (6 images × both lanes × 8 width/flag combinations, plus the decode diagnostics,
+usage errors and `--help`). 121 are identical. The other 3 are the cmdit change below.
+**599 assertions** pass on x86_64 and under `cyrius test --aarch64`, and **8,011,000 fuzz
+iterations** are all clean.
+
+### Changed
+- **`[deps.cmdit]` `1.2.5` → `1.4.0`.** Append-only on the frozen 1.0 surface, and `--help` is
+  byte-identical. Two 1.3.x repairs change what kii accepts:
+  - ⚠ **A bool flag given a value is refused** (cmdit 1.3.1, `CMDIT_ERR_UNEXPECTED_VALUE`).
+    `kii --verbose=0 img.png` used to turn verbose **on**, the opposite of what was typed. Now it,
+    `--verbose=1` and `--help=x` exit 2 with `kii: argument parse error` and the usage text.
+    kii's `cmdit_error` switch has no arm for the new code, so it prints the generic line.
+  - A command line that the stdlib cannot read whole (over 2 MiB, or no `/proc`) now fails with
+    `CMDIT_ERR_ARGV` instead of parsing a prefix (cmdit 1.3.2). This also gets the generic line.
+- **`[deps.chitra]` `1.0.3` → `1.1.3`.** Nothing frozen moved: kii calls the same names, and the
+  `ChitraErrCode` values are unchanged. chitra 1.1.1's audit moved several refusals to more
+  precise codes, so kii's mapping now prints a better message for each:
+  - a second IHDR: `unsupported image feature …` → `malformed PNG (bad chunk, …)`;
+  - a sankoch OOM during inflate: `DEFLATE decompression failed` → `out of memory or image too
+    large …`;
+  - a truncated JPEG scan: `malformed JPEG …` → `truncated image (unexpected end of data)`;
+  - SOF1/2/9 with 16-bit quant tables (every `cjpeg -quality` ≤ 23 file): `malformed JPEG …` →
+    `unsupported JPEG feature …`;
+  - OS/2 2.x BMP with compression 3: `malformed BMP …` → `unsupported BMP feature …`.
+
+  Some files decode differently, always toward the reference decoders (`djpeg -nosmooth`,
+  ImageMagick):
+  - **now decode:** End-less GIFs whose padding fills a code, and truncated restart-interval
+    JPEGs (partial image, with the missing-end warning);
+  - **now refused:** JPEGs with JPG/DHP/EXP or `0xF0`–`0xFD` segments, and scans whose components
+    are out of frame order;
+  - **different pixels:** a short `JFIF` APP0 next to an Adobe transform, BMPs with
+    `bfOffBits = 0`, and BMP channels wider than 8 bits.
+
+  chitra 1.1.0 also stopped linking all of sankoch. It now declares its own `[deps.sankoch]`
+  (`zlib` profile, 2.8.7). kii's stdlib `sankoch` leaf takes precedence (closest-wins), so the
+  profile is not vendored and kii links the same sankoch as before. `cyrius.lock` records the
+  transitive sankoch 2.8.7 commit pin.
+- **`cyrius.cyml` is a manifest again**: 126 lines → 39. The pin history, release notes and
+  adoption rationale that had built up in its comments are gone. That record belongs in this
+  file, `docs/development/state.md` and the ADRs, which already hold it. Each dep keeps a one-line
+  comment saying what it is for.
+  - `repository` corrected from `MacCracken/cyrius-kii`, which does not exist, to
+    `MacCracken/kii`. The same wrong URL is fixed in the getting-started clone line.
+  - `description` now says what kii is, not which version planned what.
+- **`cyrius.lock`** regenerated from a clean `lib/`. It drops five stale commit pins for tags no
+  longer in the manifest (chitra 1.0.0 and 1.0.3, cmdit 1.2.4 and 1.2.5, darshana 1.0.0). `lib/`
+  is still 40 files. Only `chitra.cyr` and `cmdit.cyr` changed.
+- `build/kii` 898,344 → 923,976 bytes (unstripped, DCE off), all from the two larger bundles.
+  `--agnos` 908,376 → 938,088; `--aarch64` 1,086,544 → 1,087,600.
+
+### Not taken
+- **chitra 1.1.4 and 1.2.0 pin cyrius 6.7.12**, so they are out of reach on 6.7.9. 1.2.0 renames
+  46 internal `chitra_*` functions to `_chitra_*`. kii calls none of them in code; one comment in
+  `tests/kii.fcyr` cites `chitra_jpeg_scan_markers`.
+- ⚠ **The sankoch floor.** chitra 1.1.1 documents that inflate is only as strict as zlib from
+  sankoch **2.8.6**. cyrius 6.7.9's stdlib ships **2.8.3**, and kii links the stdlib leaf. So, as
+  in v1.6.0, kii's PNG path still accepts five deflate stream classes that zlib refuses (Kraft
+  over-subscription and incompleteness, `hdist` 31/32). Moving to cyrius ≥ 6.7.11, whose stdlib
+  sankoch is 2.8.7, closes this.
+
 ## [1.6.0] - 2026-10-12
 
 **The cyrius 6.7 language minor, darshana 1.3.0, and the end of the `path` overrides.**

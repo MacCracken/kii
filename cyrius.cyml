@@ -1,9 +1,9 @@
 [package]
 name = "kii"
 version = "${file:VERSION}"
-description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. Reads PNG, baseline JPEG, BMP and GIF (first frame) via the chitra substrate. 8/16-color tier-1 scope at v1.0; 256-color + truecolor 'high bands' post-v1. Substrate for BBS/MUD MOTD aesthetic + general image-in-terminal viewing."
+description = "kii (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter for terminal display. Renders PNG, baseline JPEG, BMP and GIF (first frame) via the chitra substrate as 16-color half-block or ASCII-glyph frames sized to the terminal."
 license = "GPL-3.0-only"
-repository = "https://github.com/MacCracken/cyrius-kii"
+repository = "https://github.com/MacCracken/kii"
 language = "cyrius"
 cyrius = "6.7.9"
 
@@ -13,114 +13,27 @@ test = "src/test.cyr"
 output = "kii"
 
 [deps]
-# Stdlib evolves per milestone gate:
-#   v0.1.0 (M0)  — baseline: string/fmt/alloc/io/vec/str/syscalls/assert/bench/args
-#   v0.2.0 (M1)  — added "flags" (consumer: CLI parser)
-#   v0.4.0 (M3)  — added "sankoch" (consumer: PNG IDAT zlib_decompress)
-#                  + "thread" (sankoch's _sankoch_lock/_unlock wrap mutex_lock/mutex_unlock)
-#   v1.1.0       — DROPPED stdlib "flags": CLI parsing moved to the [deps.cmdit]
-#                  distlib (cmdit = the stdlib flags parser productized + extended).
-#                  "args" stays — cmdit_argv/cmdit_parse call args_init/argc/argv,
-#                  resolved from here.
+# sankoch + thread: the linked inflate (chitra's PNG path resolves to this
+# leaf) and tests/decode.tcyr's direct zlib_decompress calls — ADR 0006.
 stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench", "args", "sankoch", "thread"]
 
-# Dependency resolution (kii v1.6.0, cyrius 6.7.9): every [deps.X] below is
-# git + tag ONLY. Through v1.5.2 each also named `path = "../X"`, which under
-# the pre-6.7.6 resolver made a local build vendor the SIBLING CHECKOUT, not
-# the tag — so the tags here were not what kii compiled: v1.5.2 shipped
-# darshana 1.1.2 (tag said 1.0.0), cmdit 1.2.5 (1.2.4) and chitra 1.0.3
-# (1.0.0), while CI, with no siblings, compiled the tags. From cyrius 6.7.6
-# ("git first") a `path` beside a tag is a dev override read only under
-# `--local` / CYRIUS_LOCAL, and every default build prints a hint naming the
-# checkouts it skipped. Nothing in kii documented a reason for the three
-# path entries, so they are gone: the tag is the only thing a build can
-# compile, locally and in CI alike. To build against a sibling checkout,
-# add its `path` back in a local edit and run `cyrius build --local`.
+# Every dep is git + tag only: the tag is what local builds and CI compile.
+# To build against a sibling checkout, add `path` locally and use --local.
 
-# AGNOS first-party deps. v0.6.0 / M5 introduces darshana — the
-# canonical ANSI escape primitives library. kii calls tty_fg_256_buf +
-# tty_bg_256_buf + tty_sgr_reset_buf (half-block and ASCII emit),
-# tty_winsize (terminal-fit geometry) and tty_has_ctl with TTY_SANITIZE_UTF8 /
-# TTY_KEEP_TAB / TTY_KEEP_LF (the stderr path-echo sanitizer). Pin history:
-# 0.8.1 → 0.8.2 at kii v1.4.1 (AGNOS TTY-mode parity), 0.8.2 → 1.0.0 at
-# v1.5.0 (darshana's API freeze, ADR 0003: 29 functions + 37 constants),
-# 1.0.0 → 1.3.0 at v1.6.0. 1.1.x–1.3.0 are additive on the frozen surface and
-# byte-identical in everything kii already emitted (190 rendered frames —
-# 8 fixtures, both lanes, 6 widths, --color 8, and 54 pty winsize cases —
-# compared against the v1.5.2 binary at this bump). kii v1.6.0 adopts two
-# of the additions:
-#   - tty_bg_256_buf (1.2.0) replaces kii's local _emit_bg_256_buf. kii was
-#     that composer's first consumer; darshana extracted it when thoth became
-#     the second. Same bytes for all 256 indices (tests/render.tcyr).
-#   - tty_has_ctl (1.3.0) replaces kii_path_has_control_bytes's own UTF-8 walk.
-#     darshana shaped it on kii's rule; it is that rule plus strict RFC 3629
-#     (overlong forms, surrogates and code points past U+10FFFF are refused
-#     too) — a deliberate tightening, recorded in CHANGELOG 1.6.0.
-# Not adopted: tty_winsize_or (1.2.0). It treats a 0 in either dimension as
-# "unknown" and substitutes both defaults; kii decides columns and rows
-# separately (src/emit.cyr `_kii_term_envelope` says why).
-# ⚠ darshana >= 1.3.0 needs cyrius >= 6.7.2: its bundle declares private
-# constants with `const`, and fails to compile under any 6.6.x pin.
+# ANSI escapes, terminal size, and the stderr path-echo sanitizer.
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
 tag = "1.3.0"
 modules = ["dist/darshana.cyr"]
 
-# CLI / argument parsing — cmdit (sovereign getopt-long lib, the stdlib flags
-# parser productized + extended). kii is its FIRST consumer (the re-fold: kii's
-# flag-set seeded cmdit's design; adopting it back validates the extraction).
-# Pinned per AGNOS dep-lockin discipline. Pin advanced 0.1.0 → 1.1.0 at kii v1.1.1
-# (cmdit froze its API at 1.0.0; 1.1.0 added cmdit_help_flags — both backward-
-# compatible supersets of the 0.1.0 surface kii uses). Pin advanced 1.1.0 →
-# 1.2.4 at kii v1.5.0: 1.2.0 added verb introspection + shell completions,
-# 1.2.1/1.2.2 fixed the completion generator and verb `--` forwarding, 1.2.3/
-# 1.2.4 are audit repairs. All append-only on the frozen 1.0.0 surface — kii
-# uses none of the verb machinery, and CMDIT_CTX_SIZE's growth (160 → 168) is
-# invisible because kii allocates its context through cmdit_new, never by hand.
-# Tag 1.2.4 → 1.2.5 at kii v1.6.0, which is NOT a bump of the code kii compiles:
-# 1.2.5 is what the dropped `path` override had been vendoring since v1.5.2.
-# Under cyrius 6.7.6+ git-first resolution the tag became authoritative, and
-# leaving it at 1.2.4 would have downgraded the compiled bundle. 1.2.5 is a
-# toolchain-only release (6.5.35 → 6.6.2, no source change).
+# CLI argument parsing.
 [deps.cmdit]
 git = "https://github.com/MacCracken/cmdit.git"
-tag = "1.2.5"
+tag = "1.4.0"
 modules = ["dist/cmdit.cyr"]
 
-# Image decode — chitra (pure-Cyrius CPU raster decoder, the image-substrate
-# extraction forked from kii's own src/png.cyr). THE PNG RE-FOLD (v1.2.0):
-# kii dropped its 813-line native decoder and consumes chitra's dist, the
-# same extract-on-2nd-consumer move kii made for CLI parsing with cmdit at
-# v1.1.0. Pin history: 0.2.0 (re-fold, strict superset of kii's PNG decoder
-# incl. 16-bit depth + every M7(c)/M8 guard) → 0.2.1 (full PNG matrix:
-# sub-byte depths 1/2/4 + Adam7 interlace) → 0.3.0 (THE JPEG WIRING, v1.4.0:
-# baseline JFIF JPEG; kii's adapter now calls chitra_image_decode, which
-# sniffs PNG vs JPEG and normalizes both to canonical RGBA8 — zero pipeline
-# change, see ADR 0008) → 1.0.0 (THE FORMAT BROADENING, v1.5.0: chitra's own
-# v1.0 freeze, carrying BMP (0.4.0) and GIF first-frame (0.5.0) decode. Because
-# kii's adapter calls chitra_image_decode unconditionally, kii renders BMP and
-# GIF WITHOUT a pipeline change — the v1.5.0 work is diagnostics, not decode:
-# KII_FMT_BMP/GIF tags, signature sniffing, and png_color_type_name learning
-# chitra's 0x200|bpp / 0x300|min_code_size sentinels. chitra 1.0.0 freezes 29
-# names + the ChitraImage/ChitraErr layouts + the numeric ChitraErrCode values
-# (ADR 0010); all nine names kii calls are in the frozen block, and
-# ChitraImage's growth to 56 bytes (src_depth @ +48) is append-only, so kii's
-# accessor-only usage is unaffected. Progressive / arithmetic / 12-bit / CMYK
-# JPEG remain refused — that rejection text stays true, only its version
-# reference moved. See ADR 0009). stdlib sankoch + thread STAY in [deps].stdlib
-# above: chitra's strip-include dist resolves zlib_decompress / crc32 / mutex
-# from the consumer's stdlib list, and kii's tests call zlib_decompress directly.
-# See ADR 0006 + ADR 0008 + ADR 0009.
-# Tag 1.0.0 → 1.0.3 at kii v1.6.0 — the same reasoning as cmdit above: 1.0.3 is
-# what the dropped `path` override had been vendoring, so v1.5.2 already shipped
-# it, and under git-first resolution a 1.0.0 tag would have DOWNGRADED kii to a
-# decoder without chitra 1.0.3's repairs (a SIGSEGV on the first PNG under
-# memory pressure, a truncated JPEG scan reported closed, every RLE BMP whose
-# width is not a multiple of 4 refused). The suite passes on either tag; the
-# downgrade is the reason, not a compile failure. Re-reading the 1.0.1–1.0.3
-# notes for this pin found CHITRA_ERR_INFLATE_LIMIT (35, chitra 1.0.1), which
-# kii had never mapped — see PNG_ERR_INFLATE_LIMIT in src/png.cyr.
+# Image decode: PNG / baseline JPEG / BMP / GIF first frame → RGBA8.
 [deps.chitra]
 git = "https://github.com/MacCracken/chitra.git"
-tag = "1.0.3"
+tag = "1.1.3"
 modules = ["dist/chitra.cyr"]

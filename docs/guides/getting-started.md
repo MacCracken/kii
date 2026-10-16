@@ -8,8 +8,8 @@ wants pre-rendered terminal art.
 ## Install
 
 ```sh
-git clone https://github.com/MacCracken/cyrius-kii
-cd cyrius-kii
+git clone https://github.com/MacCracken/kii
+cd kii
 cyrius deps                                 # resolve stdlib + darshana / cmdit / chitra
 cyrius build src/main.cyr build/kii         # compile
 ./build/kii --version
