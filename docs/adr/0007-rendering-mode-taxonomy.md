@@ -124,3 +124,78 @@ The follow-ups that remain open, directional contrast enhancement and a k-d-tree
 are pinned to roadmap 1.10.0, together with checking in the coverage-table generator: the
 offline script that produced the 27-glyph table is not in the repo, so the table cannot be
 regenerated today.
+
+## Amendment — v1.10.0 (the shape-vector refinements)
+
+This ADR remains **Accepted**. The three items the v1.6.4 amendment pinned to 1.10.0 are
+settled: the table has a generator, contrast enhancement runs before every match, and the
+k-d tree was built, measured and not taken. Half-block output is byte-identical; ASCII output
+changes.
+
+**1. The coverage table is generated, and it is a new table.**
+`scripts/gen-shape-table.sh` writes `src/ascii_shape.cyr`, and `--check` proves the committed
+file is its output.
+- **Method.** Each glyph is rasterized in Liberation Mono Regular at 40 px, in a 24 × 48 cell.
+  The advance is exactly 24 px, and the 45 px line box sits on a baseline at y = 35. The ink of
+  each 12 × 16 px region is summed, then scaled so each row's most-inked glyph reads 255, with
+  integer rounding. The header records the font hash, ImageMagick and FreeType.
+- **The v1.3.1 table could not be reproduced.** Its scratch generator is gone, and no transcript
+  on the dev host holds it. A search over size (32–56 px), placement (gravity, offsets,
+  subpixel phase), antialiasing on and off, and global or per-region scaling (scale fitted by
+  least squares) never came within 33 units per value of it. Symmetric glyphs in it read
+  heavier on the left (`|` 119 / 81), which no centred rendering gives. The new table differs
+  from it by 18.2 units per value on average.
+- **Scaled per row, not per region.** Scaling each dimension apart is Harri's normalization:
+  unscaled, most glyphs carry little ink in the top and bottom rows, so a bright top or bottom
+  region has no glyph near it. Harri scales each region alone. kii shares one maximum between
+  a row's two regions, because the left and right maxima come from asymmetric glyphs (`%`,
+  `@`). Scaled per region, `.` reads 51 / 76 and the mirrored pairs stop being mirrors. Per row,
+  `/` `\`, `(` `)` and `<` `>` mirror within 2 units, which `tests/ascii.tcyr` pins. Of the
+  three scalings, per row is also the closest to the v1.3.1 table (18.2 against 21.4 per region
+  and 32.0 global).
+
+**2. Contrast enhancement runs on every cell before the match** (`_ascii_contrast`). It follows
+Harri's write-up: x → (x / M)^p · M against a ceiling M, first directional, then global.
+- **Directional.** Region i's ceiling is the largest of its own value and the external samples
+  that affect it, per Harri's `AFFECTING_EXTERNAL_INDICES`. The article shows where the ten
+  external circles sit only in a figure. kii places them on the sub-samples the mapping
+  implies: two above the cell, three on each side, two below. A sample past the frame's edge,
+  or a transparent one, counts as 0.
+- **Global.** The ceiling is the cell's largest value after the directional step.
+- **Order.** The prose gives none. The article's GPU pipeline runs directional first, then
+  global, and kii follows it.
+- **p = 1.5.** The article's exponent control runs from 1 to 2. 1.5 was chosen by comparing
+  renders, not by a measure: at 2, photographs turn noisy with scattered `.` and `` ` ``.
+  The exponent is `ASCII_CONTRAST_R / ASCII_CONTRAST_Q`.
+- **Exact integers.** A 256-entry power table built at init (the exact half-up rounding of
+  255 · (t / 255)^p), a reciprocal table for the one division by M, and an exact shift for
+  / 255. Each is checked over its whole domain in `tests/ascii.tcyr`. aarch64 frames match
+  x86_64's.
+- **The cost.** The frame's luminance is built once per frame (`_ascii_lum_plane`, one byte a
+  sample, stored at pstruct +40) instead of per cell. Per run, interleaved with v1.9.1: a 256²
+  icon at `--width 200` takes 5.26 → 5.98 ms (+14 %), RAMGON 203.9 → 207.3 ms (+1.7 %), and
+  kitty's 3880 × 2168 screenshot 324.3 → 324.2 ms. A first draft cost +44 % on the icon. The
+  savings came from the plane, from skipping a step whose value is its ceiling or 0, from
+  sending an all-dark cell straight to a space, and from building the power table in one sweep
+  (511 steps, not 65,280).
+
+**3. The k-d tree is not taken.** An exact tree over the 27 glyph vectors was built, splitting
+on the widest dimension at the median. Ties go to the lower index, as in the scan. It agrees
+with the scan on 2,000,000 random vectors and on 710 vectors within ±2 of a glyph. It is
+slower:
+
+| Lookup | Random vectors | Real cells (RAMGON, kitty, archlinux) |
+|---|---:|---:|
+| linear scan with early exit (`_ascii_match`) | 331 ns | 203 ns |
+| k-d tree, recursive | 444 ns | 233 ns |
+| k-d tree, iterative (explicit stack) | 803 ns | 449 ns |
+
+With 27 points in 6 dimensions the tree prunes little, and the scan already stops scoring a
+glyph after three terms. Harri pairs a tree with a cache of answers. That only helps when
+cells repeat, and in a photograph they do not: 15,974 of RAMGON's 16,000 cells at that size are
+distinct, against 670 of 16,000 for the archlinux logo.
+
+**Effect on output.** Over 472 images, `--mode ascii --width 30` changes 8.7 % of glyph cells:
+5.6 % from the table and 5.7 % from contrast enhancement, which overlap. Under the corpus's two
+ASCII flag sets, 836 of the 912 frames that render change. Every half-block frame is
+byte-identical (1,888 of 1,888).

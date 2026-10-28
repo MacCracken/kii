@@ -387,3 +387,24 @@ x86_64 dev host at v1.9.1 (peak RSS, wall clock, `--width 80`):
   roadmap had pinned this re-pin as the fix since v1.6.3. A caller that must hold kii to a
   smaller footprint can run it under `ulimit -v`. A failed allocation is reported as
   `out of memory or image too large`, exit 1.
+
+
+## Amendment — v1.10.0 (the ASCII lane reads around each cell)
+
+[ADR 0007](0007-rendering-mode-taxonomy.md) § v1.10.0 amendment adds contrast enhancement to
+the ASCII lane. It changes which glyph a cell gets, never which bytes exist: every glyph is
+still one of the 27 in the table, and every colour still comes from the active tier, so the
+emit surface of the v1.8.0 amendment is unchanged.
+
+- **One new allocation.** `_ascii_lum_plane` takes one byte per downscaled sample, `cols · 2 ×
+  rows · 3`. Under `KII_MAX_CELLS` that is at most 6 MiB (6,291,456 bytes). It is checked, and a
+  failure is an error (exit 1).
+- **The new reads stay inside the plane.** The contrast pass reads the ten samples around each
+  cell, and four guards keep them in bounds: none above row 0, below the last row, left of
+  column 0 or right of the last column. A sample past an edge counts as 0. A new fuzz surface
+  renders every frame twice, with the plane between pads of 0 and then of 255, and requires the
+  same bytes (40,000 random frames a run). Dropping the top or the bottom guard makes 2,851 and
+  2,837 of 3,000 frames differ.
+- **The arithmetic is exact integers** (a 256-entry power table, an exact reciprocal for one
+  division and an exact shift for the other, each checked over its whole domain in
+  `tests/ascii.tcyr`), so every target computes the same glyphs.

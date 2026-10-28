@@ -213,7 +213,7 @@ After a successful decode:
 | `<path>: downscale failed (out of memory)` | The resampled buffer could not be allocated |
 | `<path>: quantization failed (OOM)` | The palette-index buffer could not be allocated |
 | `<path>: ANSI emit failed (downscale or quantize not run)` | Internal ordering error in the half-block lane. Not expected; please report it |
-| `<path>: ANSI emit failed (downscale not run)` | The same, in the `--mode ascii` lane |
+| `<path>: ANSI emit failed (downscale not run)` | The same, in the `--mode ascii` lane, which also prints it when the lane's luminance plane (v1.10.0) or, under `--dither fs`, its cell colours cannot be allocated |
 | `<path>: failed to write frame to stdout` | write(2) to stdout failed — e.g. the destination filesystem is full |
 
 Three warnings do **not** abort — the frame still renders and kii exits 0:

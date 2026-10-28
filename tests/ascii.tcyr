@@ -1,6 +1,7 @@
 # tests/ascii.tcyr — character-glyph ASCII mode, shape-vector matcher
-# (kii 1.3.1). Covers Rec.709 luma, the 6-region nearest-glyph match
-# against the coverage table, and the per-row glyph emit. Standalone suite.
+# (kii 1.3.1). Covers Rec.709 luma, the generated coverage table (v1.10.0),
+# the 6-region nearest-glyph match, contrast enhancement (v1.10.0), and the
+# per-row glyph emit. Standalone suite.
 include "src/ascii.cyr"
 include "lib/assert.cyr"
 
@@ -22,19 +23,249 @@ fn _mk_match(a, b, c, d, e, f): i64 {
     return _ascii_match(&v);
 }
 
-# Each glyph's own (normalized) coverage vector must match itself — a
-# distance-0 hit, the strongest correctness check on the matcher + table.
+# Coverage of glyph `g` in region `k`.
+fn _cov(g, k): i64 {
+    return load64(&ASCII_SHAPE_COV + (g * 6 + k) * 8);
+}
+
+# The index of glyph byte `ch` in the table, or -1.
+fn _glyph_index(ch): i64 {
+    var g = 0;
+    while (g < ASCII_SHAPE_COUNT) {
+        if (load64(&ASCII_SHAPE_GLYPHS + g * 8) == ch) { return g; }
+        g = g + 1;
+    }
+    return 0 - 1;
+}
+
+# 1 if glyphs `a` and `b` are left-right mirrors within `tol` in every region.
+fn _mirrors(a, b, tol): i64 {
+    var ga = _glyph_index(a);
+    var gb = _glyph_index(b);
+    if (ga < 0 || gb < 0) { return 0; }
+    var r = 0;
+    while (r < 3) {
+        var d0 = _cov(ga, r * 2) - _cov(gb, r * 2 + 1);
+        var d1 = _cov(ga, r * 2 + 1) - _cov(gb, r * 2);
+        if (d0 < 0 - tol || d0 > tol || d1 < 0 - tol || d1 > tol) { return 0; }
+        r = r + 1;
+    }
+    return 1;
+}
+
+# v1.10.0: the table src/ascii_shape.cyr that scripts/gen-shape-table.sh
+# generates. The script's --check proves the file is its output; these pin the
+# properties the matcher relies on, so a hand edit or a bad regeneration that
+# breaks one fails here even where ImageMagick is not installed.
+fn test_ascii_shape_table() {
+    _ascii_shape_init();
+    assert_eq(ASCII_SHAPE_COUNT, 27, "27 glyphs");
+    # The glyph order is part of the output: a tie goes to the lower index.
+    var order = " .,'`:;-_~=+|/\\<>()^vxo*#%@";
+    var in_order = 1;
+    var g = 0;
+    while (g < 27) {
+        if (load64(&ASCII_SHAPE_GLYPHS + g * 8) != load8(order + g)) { in_order = 0; }
+        g = g + 1;
+    }
+    assert_eq(in_order, 1, "glyphs in the generator's order");
+    # Space is glyph 0 and has no ink, so an all-dark cell is a space.
+    var k = 0;
+    var space_ink = 0;
+    while (k < 6) { space_ink = space_ink + _cov(0, k); k = k + 1; }
+    assert_eq(space_ink, 0, "space has no ink");
+    # Every value is on the 0..255 scale, and each row's most-inked glyph reads
+    # exactly 255 there (the generator scales per row).
+    var in_range = 1;
+    var r = 0;
+    while (r < 3) {
+        var row_max = 0;
+        g = 0;
+        while (g < 27) {
+            k = r * 2;
+            while (k < r * 2 + 2) {
+                var c = _cov(g, k);
+                if (c < 0 || c > 255) { in_range = 0; }
+                if (c > row_max) { row_max = c; }
+                k = k + 1;
+            }
+            g = g + 1;
+        }
+        assert_eq(row_max, 255, "a row's most-inked region reads 255");
+        r = r + 1;
+    }
+    assert_eq(in_range, 1, "every value in 0..255");
+    # Mirrored pairs stay mirrors, within two units of antialiasing (`|`'s
+    # stroke edges give 132 / 130): a per-row, not per-region, scale is what
+    # keeps them so.
+    assert_eq(_mirrors(47, 92, 2), 1, "'/' mirrors '\\'");
+    assert_eq(_mirrors(40, 41, 2), 1, "'(' mirrors ')'");
+    assert_eq(_mirrors(60, 62, 2), 1, "'<' mirrors '>'");
+    assert_eq(_mirrors(46, 46, 2), 1, "'.' is symmetric");
+    assert_eq(_mirrors(124, 124, 2), 1, "'|' is symmetric");
+    return 0;
+}
+
+# Each glyph's own coverage vector must match itself — a distance-0 hit, the
+# strongest correctness check on the matcher + table. It also proves no two
+# glyphs share a vector (the later one could never be chosen).
 fn test_ascii_match() {
+    _ascii_shape_init();
+    var self_hits = 0;
+    var g = 0;
+    while (g < ASCII_SHAPE_COUNT) {
+        var v[6];
+        var k = 0;
+        while (k < 6) { store8(&v + k, _cov(g, k)); k = k + 1; }
+        if (_ascii_match(&v) == load64(&ASCII_SHAPE_GLYPHS + g * 8)) { self_hits = self_hits + 1; }
+        g = g + 1;
+    }
+    assert_eq(self_hits, 27, "all 27 glyphs match their own vector");
     # all-dark -> space (32); also the tie-break to glyph 0.
     assert_eq(_mk_match(0, 0, 0, 0, 0, 0), 32, "all-dark -> ' '");
-    # '|' coverage [119,81,119,81,119,81] -> '|' (124).
-    assert_eq(_mk_match(119, 81, 119, 81, 119, 81), 124, "center column -> '|'");
-    # '/' coverage [2,214,185,33,78,0] -> '/' (47) — the forward diagonal.
-    assert_eq(_mk_match(2, 214, 185, 33, 78, 0), 47, "fwd diagonal -> '/'");
-    # '@' coverage [223,255,191,248,221,176] -> '@' (64), the densest.
-    assert_eq(_mk_match(223, 255, 191, 248, 221, 176), 64, "dense -> '@'");
+    # Near-miss vectors land on the glyph whose shape they are.
+    assert_eq(_mk_match(80, 80, 80, 80, 140, 140), 124, "a column, heavier below -> '|'");
+    assert_eq(_mk_match(0, 200, 120, 40, 80, 0), 47, "fwd diagonal -> '/'");
+    assert_eq(_mk_match(200, 0, 40, 120, 0, 80), 92, "back diagonal -> '\\'");
+    assert_eq(_mk_match(0, 0, 0, 0, 180, 180), 95, "ink along the bottom -> '_'");
     # Saturated cell -> the densest glyph '@'.
     assert_eq(_mk_match(255, 255, 255, 255, 255, 255), 64, "all-bright -> '@'");
+    return 0;
+}
+
+# A w x h luminance plane, every sample `val`.
+fn _plane(w, h, val): i64 {
+    var p = alloc(w * h);
+    var i = 0;
+    while (i < w * h) { store8(p + i, val); i = i + 1; }
+    return p;
+}
+
+# Copy cell (cx, cy)'s six samples out of a plane `w` wide, in region order.
+fn _cell_vec(plane, w, cx, cy, v): i64 {
+    var k = 0;
+    while (k < 6) {
+        store8(v + k, load8(plane + (cy * 3 + k / 2) * w + cx * 2 + k % 2));
+        k = k + 1;
+    }
+    return 0;
+}
+
+# 1 if the six bytes at `v` are a..f.
+fn _vec_is(v, a, b, c, d, e, f): i64 {
+    return load8(v) == a && load8(v + 1) == b && load8(v + 2) == c
+        && load8(v + 3) == d && load8(v + 4) == e && load8(v + 5) == f;
+}
+
+# v1.10.0: contrast enhancement. Expected vectors come from a reference written
+# from the description in src/ascii.cyr (exact fractions for the power table,
+# exact division in the step), not from this code.
+fn test_ascii_contrast() {
+    _ascii_contrast_init();
+    # The power table: round(255 * (t/255)^1.5), half up.
+    assert_eq(load64(&ASCII_CONTRAST_POW), 0, "POW[0] = 0");
+    assert_eq(load64(&ASCII_CONTRAST_POW + 16 * 8), 4, "POW[16] = 4 (4.008)");
+    assert_eq(load64(&ASCII_CONTRAST_POW + 64 * 8), 32, "POW[64] = 32 (32.06)");
+    assert_eq(load64(&ASCII_CONTRAST_POW + 128 * 8), 91, "POW[128] = 91 (90.69)");
+    assert_eq(load64(&ASCII_CONTRAST_POW + 192 * 8), 167, "POW[192] = 167 (166.60)");
+    assert_eq(load64(&ASCII_CONTRAST_POW + 255 * 8), 255, "POW[255] = 255");
+    var mono = 1;
+    var t = 0;
+    while (t < 255) {
+        var a = load64(&ASCII_CONTRAST_POW + t * 8);
+        var b = load64(&ASCII_CONTRAST_POW + (t + 1) * 8);
+        if (b < a || a > t) { mono = 0; }
+        t = t + 1;
+    }
+    assert_eq(mono, 1, "POW never falls, and never rises above t");
+    # The step over its whole domain (0 <= x <= m <= 255): the reciprocal and
+    # the /255 shift give exactly what plain division gives.
+    var off = 0;
+    var m = 1;
+    while (m < 256) {
+        var x = 0;
+        while (x <= m) {
+            var tr = (x * 255 + m / 2) / m;
+            var want = (load64(&ASCII_CONTRAST_POW + tr * 8) * m + 127) / 255;
+            if (_ascii_contrast_step(x, m) != want) { off = off + 1; }
+            x = x + 1;
+        }
+        m = m + 1;
+    }
+    assert_eq(off, 0, "step = the exact-division formula on all 32,896 (x, m)");
+    assert_eq(_ascii_contrast_step(100, 200), 71, "step(100, 200) = 71 (70.71)");
+    assert_eq(_ascii_contrast_step(200, 200), 200, "x = m is kept");
+    assert_eq(_ascii_contrast_step(0, 200), 0, "0 stays 0");
+
+    var v[6];
+    # A bright sample row just above the cell: its top regions are pulled down
+    # (directional: 100 against 200 -> 71), then the global pass, against the
+    # cell's own 100, takes 71 to 60.
+    var pa = _plane(6, 9, 100);
+    var x2 = 0;
+    while (x2 < 6) { store8(pa + 2 * 6 + x2, 200); x2 = x2 + 1; }
+    _cell_vec(pa, 6, 1, 1, &v);
+    _ascii_contrast(&v, pa, 6, 9, 1, 1);
+    assert_eq(_vec_is(&v, 60, 60, 100, 100, 100, 100), 1, "bright above -> top regions 60");
+    # The mapping, one external at a time: light e_j alone (200 in a field of
+    # 100) and exactly the regions whose ceiling takes e_j drop to 60. The masks
+    # (bit i = region v_i) invert Harri's table: e0, e1 -> v0 v1; e2 -> v0 v2;
+    # e3 -> v1 v3; e4 -> v0 v2 v4; e5 -> v1 v3 v5; e6 -> v2 v4; e7 -> v3 v5;
+    # e8, e9 -> v4 v5. Positions are (x, y) in the 6 x 9 plane, around cell (1, 1).
+    var ex = "\x02\x03\x01\x04\x01\x04\x01\x04\x02\x03";
+    var ey = "\x02\x02\x03\x03\x04\x04\x05\x05\x06\x06";
+    var emask = "\x03\x03\x05\x0A\x15\x2A\x14\x28\x30\x30";
+    var mapped = 0;
+    var j = 0;
+    while (j < 10) {
+        var pb = _plane(6, 9, 100);
+        store8(pb + load8(ey + j) * 6 + load8(ex + j), 200);
+        _cell_vec(pb, 6, 1, 1, &v);
+        _ascii_contrast(&v, pb, 6, 9, 1, 1);
+        var ok = 1;
+        var k = 0;
+        while (k < 6) {
+            var want = 100;
+            if ((load8(emask + j) >> k) & 1) { want = 60; }
+            if (load8(&v + k) != want) { ok = 0; }
+            k = k + 1;
+        }
+        mapped = mapped + ok;
+        j = j + 1;
+    }
+    assert_eq(mapped, 10, "each of the 10 externals reaches exactly its regions");
+    # A uniform field: a corner cell, whose missing neighbours read 0, is kept.
+    var pc = _plane(6, 9, 100);
+    _cell_vec(pc, 6, 0, 0, &v);
+    _ascii_contrast(&v, pc, 6, 9, 0, 0);
+    assert_eq(_vec_is(&v, 100, 100, 100, 100, 100, 100), 1, "uniform corner cell unchanged");
+    # A lone cell: no neighbours, so only the global pass acts; its brightest
+    # region is kept and the rest go 100 -> 71.
+    var pd = _plane(2, 3, 100);
+    store8(pd, 200);
+    _cell_vec(pd, 2, 0, 0, &v);
+    _ascii_contrast(&v, pd, 2, 3, 0, 0);
+    assert_eq(_vec_is(&v, 200, 71, 71, 71, 71, 71), 1, "lone cell: brightest kept, rest 71");
+
+    # The plane's written-out luma is _ascii_luma, and a masked sample is 0.
+    var rgb[48];
+    var mask[16];
+    var i = 0;
+    while (i < 48) { store8(&rgb + i, (i * 37 + 11) % 256); i = i + 1; }
+    i = 0;
+    while (i < 16) { store8(&mask + i, i % 3 == 0); i = i + 1; }
+    var lp = _ascii_lum_plane(&rgb, 0, 4, 4);
+    var lm = _ascii_lum_plane(&rgb, &mask, 4, 4);
+    var agree = 1;
+    i = 0;
+    while (i < 16) {
+        var want_l = _ascii_luma(load8(&rgb + i * 3), load8(&rgb + i * 3 + 1), load8(&rgb + i * 3 + 2));
+        if (load8(lp + i) != want_l) { agree = 0; }
+        if (i % 3 == 0) { if (load8(lm + i) != 0) { agree = 0; } }
+        else { if (load8(lm + i) != want_l) { agree = 0; } }
+        i = i + 1;
+    }
+    assert_eq(agree, 1, "plane = _ascii_luma per sample, 0 where masked");
     return 0;
 }
 
@@ -73,7 +304,7 @@ fn test_ascii_shape_row_buf() {
         sy = sy + 1;
     }
     var out[64];
-    var pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 4, 0, 2, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), 0, 4, 3, 0, 2, &out, 0);
     assert(pos > 0, "row_buf returns positive pos");
     assert_eq(load8(&out + pos - 1), 10,   "row ends LF");
     assert_eq(load8(&out + pos - 2), 0x6D, "reset 'm'");
@@ -95,7 +326,7 @@ fn test_ascii_shape_row_buf() {
     # v1.8.0: the whole row, exactly. A space takes no fg escape; the white
     # cell's mean (255,255,255) is tier-16 index 15, SGR 97.
     quant_set_tier(16);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), 0, 4, 3, 0, 2, &out, 0);
     assert_eq(_bytes_are(&out, pos, " \x1b[97m@\x1b[0m\n"), 1, "row = ' ' + 97 '@' + reset");
 
     # v1.8.0: transparency. Mask every sample of the white cell: it becomes
@@ -105,12 +336,12 @@ fn test_ascii_shape_row_buf() {
     while (z < 12) { store8(&mask + z, 0); z = z + 1; }
     sy = 0;
     while (sy < 3) { store8(&mask + sy * 4 + 2, 1); store8(&mask + sy * 4 + 3, 1); sy = sy + 1; }
-    pos = emit_ascii_shape_row_buf(&rgb, &mask, 0, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, _ascii_lum_plane(&rgb, &mask, 4, 3), 0, 4, 3, 0, 2, &out, 0);
     assert_eq(_bytes_are(&out, pos, "  \x1b[0m\n"), 1, "a fully transparent cell is a bare space");
     # Mask only the top two samples of the white cell: the rest still set the
     # colour (their mean is white), so it keeps SGR 97.
     store8(&mask + 6, 0); store8(&mask + 7, 0); store8(&mask + 10, 0); store8(&mask + 11, 0);
-    pos = emit_ascii_shape_row_buf(&rgb, &mask, 0, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, _ascii_lum_plane(&rgb, &mask, 4, 3), 0, 4, 3, 0, 2, &out, 0);
     assert_eq(_bytes_have(&out, pos, "\x1b[97m"), 1, "a partly transparent cell keeps its opaque samples' colour");
     return 0;
 }
@@ -123,13 +354,13 @@ fn test_ascii_shape_tiers() {
     while (z < 54) { store8(&rgb + z, 255); z = z + 1; }
     var out[128];
     quant_set_tier(16);
-    var pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 6, 0, 3, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 6, 3), 0, 6, 3, 0, 3, &out, 0);
     assert_eq(_bytes_are(&out, pos, "\x1b[97m@@@\x1b[0m\n"), 1, "three white cells: one fg escape");
     quant_set_tier(256);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 6, 0, 3, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 6, 3), 0, 6, 3, 0, 3, &out, 0);
     assert_eq(_bytes_are(&out, pos, "\x1b[38;5;231m@@@\x1b[0m\n"), 1, "tier 256: 38;5;231");
     quant_set_tier(KII_TIER_TC);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, 0, 6, 0, 3, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 6, 3), 0, 6, 3, 0, 3, &out, 0);
     assert_eq(_bytes_are(&out, pos, "\x1b[38;2;255;255;255m@@@\x1b[0m\n"), 1, "truecolour: 38;2;255;255;255");
     quant_set_tier(16);
     return 0;
@@ -157,11 +388,11 @@ fn test_ascii_cell_codes() {
     assert_eq(load32(codes), 0, "black cell → 0, as kii_color_code gives");
     assert_eq(load32(codes + 4), 15, "white cell → 15");
     var out[64];
-    var pos = emit_ascii_shape_row_buf(&rgb, 0, codes, 4, 0, 2, &out, 0);
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), codes, 4, 3, 0, 2, &out, 0);
     assert_eq(_bytes_are(&out, pos, " \x1b[97m@\x1b[0m\n"), 1, "with dither none the row is the v1.8.0 row");
     # The row takes its colour from the codes, not from the cell's own mean.
     store32(codes + 4, 1);
-    pos = emit_ascii_shape_row_buf(&rgb, 0, codes, 4, 0, 2, &out, 0);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), codes, 4, 3, 0, 2, &out, 0);
     assert_eq(_bytes_are(&out, pos, " \x1b[31m@\x1b[0m\n"), 1, "a given code (1, red) wins over the mean (white)");
     # A cell whose samples are all transparent gets the default code.
     var mask[12];
@@ -191,8 +422,8 @@ fn test_ascii_cell_codes() {
     assert_eq(load32(codes) * 1000 + load32(codes + 4) * 100 + load32(codes + 8) * 10 + load32(codes + 12),
               8787, "ordered field: 8 7 8 7");
     var out4[128];
-    pos = emit_ascii_shape_row_buf(&grey, 0, 0, 8, 0, 4, &out4, 0);
-    var pos2 = emit_ascii_shape_row_buf(&grey, 0, codes, 8, 0, 4, &out, 0);
+    pos = emit_ascii_shape_row_buf(&grey, 0, _ascii_lum_plane(&grey, 0, 8, 3), 0, 8, 3, 0, 4, &out4, 0);
+    var pos2 = emit_ascii_shape_row_buf(&grey, 0, _ascii_lum_plane(&grey, 0, 8, 3), codes, 8, 3, 0, 4, &out, 0);
     assert_eq(pos, pos2, "per-cell ordered row = field-coded row (length)");
     var same = 1;
     z = 0;
@@ -215,7 +446,9 @@ fn test_ascii_shape_guards() {
 
 fn main() {
     test_ascii_luma();
+    test_ascii_shape_table();
     test_ascii_match();
+    test_ascii_contrast();
     test_ascii_shape_row_buf();
     test_ascii_shape_tiers();
     test_ascii_cell_codes();

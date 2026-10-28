@@ -373,3 +373,44 @@ The last row is the largest file but not the slowest: only 79 MB of it is IDAT, 
 other 176 MB is one ancillary chunk that chitra CRC-checks and skips. Its memory is the
 highest because the read alone costs ~517 MB (v1.9.0 paid the same before refusing it). The
 worst-case bounds are recorded in [ADR 0002](adr/0002-security-model.md) § v1.9.1 amendment.
+
+## v1.10.0 — the ASCII lane's contrast pass, and the k-d tree that was not taken
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`, load average 1.1–1.9. CPU per run (user + system),
+three interleaved rounds against the v1.9.1 binary, minimum shown:
+
+| Render | v1.9.1 | v1.10.0 | change |
+|---|---:|---:|---:|
+| `--mode ascii --width 200`, archlinux-logo 256² | 5.26 ms | 5.98 ms | +14 % |
+| `--mode ascii --width 200`, RAMGON 1152×925 | 203.9 ms | 207.3 ms | +1.7 % |
+| `--mode ascii --width 200`, kitty screenshot 3880×2168 | 324.3 ms | 324.2 ms | 0 |
+| `--width 200` (half-block), archlinux-logo | 3.12 ms | 3.12 ms | 0 |
+
+The ASCII cost is the contrast pass and the luminance plane it reads, about 45 ns a cell on the
+icon. Decode dominates the larger images. How the first draft's +44 % came down:
+
+| Step | icon, ms/run |
+|---|---:|
+| v1.9.1 | 5.26 |
+| first draft: ten helper calls per cell for the samples around it | 7.65 |
+| one luminance plane per frame | 6.69 |
+| no call for a value that is its own ceiling or 0 | 6.59 |
+| power table built in one sweep (511 steps, was 65,280) | 6.11 |
+| the plane's luma written out, mask and no-mask loops apart | 5.93 |
+
+A reciprocal for the step's division by M changed nothing measurable (6.59 → 6.60 ms), and it
+stays only because it is exact over the whole domain. The `kii-bench` rows, which never reach
+the ASCII lane, match v1.9.1 within 1 % across two interleaved rounds (RAMGON 80×24
+197.0–197.6 ms, 2048² decode 367.2–368.4 ms).
+
+**The k-d tree.** Nearest-glyph lookup, exact against the scan, per vector:
+
+| Lookup | 2 M random vectors | 2 M real cells |
+|---|---:|---:|
+| linear scan with early exit | 331 ns | 203 ns |
+| k-d tree, recursive | 444 ns | 233 ns |
+| k-d tree, iterative | 803 ns | 449 ns |
+
+The real cells are each sample image's ASCII sampling at 200 × 80 cells, for RAMGON, the kitty
+screenshot and the archlinux logo. The tree was not adopted
+([ADR 0007](adr/0007-rendering-mode-taxonomy.md) § v1.10.0 amendment).

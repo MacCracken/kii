@@ -4,6 +4,116 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-28
+
+**The ASCII lane's refinements.** Its glyph table now comes from a checked-in generator, and
+every cell goes through directional and then global contrast enhancement before it is matched,
+after Alex Harri's write-up ([ADR 0007](docs/adr/0007-rendering-mode-taxonomy.md) § v1.10.0
+amendment). The third item pinned here, a k-d-tree lookup, was built and measured. It is exact
+but slower than the scan, so it was not taken.
+
+⚠ **ASCII frames change; half-block frames do not.** Over 472 images (every JPEG, GIF and BMP
+under `/usr/share`, every seventh PNG there, and the 7 fixtures) × 6 flag sets:
+- **Half-block:** 1,888 of 1,888 frames are byte-identical to v1.9.1.
+- **ASCII:** 836 of the 912 frames that render change, under the corpus's two ASCII flag sets.
+  At `--mode ascii --width 30`, 8.7 % of glyph cells change: 5.6 % from the new table and 5.7 %
+  from contrast, which overlap.
+
+**848 assertions** pass on x86_64 and under `cyrius test --aarch64` (ascii 37 → 67).
+aarch64 frames match x86_64 in 240 of 240 runs, 200 of them in the ASCII lane. **8,051,000 fuzz
+iterations** are all clean, including a new ASCII surface. Every target and suite builds with
+zero warnings.
+
+### Added
+- **`scripts/gen-shape-table.sh`** generates `src/ascii_shape.cyr`, the 27-glyph coverage table
+  that was inline in `src/ascii.cyr`; `--check` exits 1 if the committed file differs.
+  - Liberation Mono Regular at 40 px, in a 24 × 48 cell with the baseline at y = 35. Each
+    12 × 16 px region's ink is summed and scaled so each row's most-inked glyph reads 255, in
+    integer arithmetic.
+  - It needs ImageMagick 7 and the font, so CI does not run it. `tests/ascii.tcyr` pins what the
+    matcher relies on instead: the glyph order, a space with no ink, each row's 255, values in
+    range, mirror pairs within 2 units, and every glyph matching its own vector.
+  - ⚠ **The table is new.** The v1.3.1 table's scratch generator was lost, and no setting of
+    size, placement, antialiasing or scaling reproduced its values (the closest came within 33
+    units per value). The new table differs from it by 18.2 units per value on average.
+  - Scaled **per row** rather than Harri's per region: the left and right maxima come from
+    asymmetric glyphs, and scaled apart a symmetric `.` read 51 / 76 and the mirrored pairs
+    `/` `\`, `(` `)`, `<` `>` stopped being mirrors.
+- **Contrast enhancement** (`_ascii_contrast`), on every cell with any light:
+  - **Directional.** Each region's ceiling is the largest of its own value and the external
+    samples beside it, per Harri's mapping. They are ten sub-samples just outside the cell:
+    two above, three on each side, two below. A sample past the frame's edge or a transparent
+    one counts as 0.
+  - **Global.** The ceiling is the cell's brightest region after the directional step.
+  - Both use x → (x / M)^p · M with **p = 1.5**, from the article's range of 1 to 2. It was
+    chosen by comparing renders; at 2 photographs turned noisy.
+  - Exact integers: a 256-entry power table, a reciprocal for the division by M, and a shift
+    for / 255, each checked over its whole domain. So every target picks the same glyphs.
+- **The luminance plane** (`_ascii_lum_plane`): one byte per sample, built once per frame and
+  kept at pstruct +40, one of the slots v1.7.0 retired. It is at most 6 MiB under the frame cap
+  ([ADR 0002](docs/adr/0002-security-model.md) § v1.10.0 amendment).
+- **An ASCII-lane fuzz surface**, the eleventh, run after the others so their random stream is
+  unchanged.
+  - Each of its 40,000 iterations renders a random frame (up to 64 × 60 samples, random RGB,
+    a random mask half the time) twice: once with the plane between pads of 0 and once between
+    pads of 255. The two must be byte-identical.
+  - Every row must also end in the reset and LF, with only table glyphs between escapes.
+  - Dropping the top or the bottom edge guard makes 2,851 and 2,837 of 3,000 frames fail.
+
+### Changed
+- `emit_ascii_shape_row_buf` takes the luminance plane and the sample height:
+  `(rgb, mask, lum, codes, sub_w, sub_h, cy, cols, buf, pos)`. Each cell's six values now come
+  from the plane.
+- **An all-dark cell is a space at once,** without the contrast pass or the match. That is
+  exact: contrast keeps zeros at zero, and the space has no ink and wins every tie.
+- **The cost.** Per run, interleaved with v1.9.1:
+
+  | Render | v1.9.1 | v1.10.0 |
+  |---|---:|---:|
+  | a 256² icon, `--mode ascii --width 200` | 5.26 ms | 5.98 ms (+14 %) |
+  | RAMGON, `--mode ascii --width 200` | 203.9 ms | 207.3 ms (+1.7 %) |
+  | the kitty screenshot, `--mode ascii --width 200` | 324.3 ms | 324.2 ms |
+  | a 256² icon, half-block `--width 200` | 3.12 ms | 3.12 ms |
+
+  A first draft cost +44 % on the icon. `docs/benchmarks.md` § v1.10.0 has the steps that
+  brought it down.
+- `build/kii` 1,008,328 → 1,016,552 bytes (unstripped, DCE off). `--agnos` 1,022,600 →
+  1,030,824, `--aarch64` 1,237,464 → 1,241,592.
+
+### Not taken
+- **The k-d tree.** An exact tree over the 27 glyph vectors agreed with the scan on 2,000,000
+  random vectors and on 710 near each glyph. It was slower: 444 ns against the scan's 331 ns
+  on random vectors, and 233 ns against 203 ns on real cells. An iterative version took 803 and
+  449 ns. With 27 points in 6 dimensions it prunes little, and the scan already stops scoring a
+  glyph after three terms. A cache of answers, which Harri pairs with the tree, does not help
+  photographs either: 15,974 of RAMGON's 16,000 cells at that size are distinct.
+
+### Tests
+- `tests/ascii.tcyr` 37 → **67**.
+  - The generated table's properties, and every glyph matching its own vector.
+  - The power table at six points, monotone and never above t.
+  - The step: it equals plain division on all 32,896 (x, m) pairs, and keeps its fixed points.
+  - Contrast scenarios from a reference written apart from the code: a bright row above, a
+    uniform corner, and a lone cell.
+  - **All ten external samples lit one at a time,** each reaching exactly its regions.
+  - The plane's luma equals `_ascii_luma` per sample, and a masked sample is 0.
+- **Eight planted defects, each caught.** Six fail the unit suite:
+  - three in the mapping;
+  - an external read one row low;
+  - the frame's edge read as bright;
+  - a skipped global pass.
+
+  The other two, the top and bottom edge guards, are caught by the fuzz surface. The first round
+  let a mapping defect through (v0's ceiling reading the right-hand sample), and the
+  one-at-a-time cell was added for it.
+
+### Docs
+- **Roadmap:** the 1.10.0 section is deleted. No 1.x release is pinned after it.
+- ADR 0007 and ADR 0002 gain v1.10.0 amendments. `docs/benchmarks.md` § v1.10.0, `state.md`,
+  the README (status, arc, prior art, and the test counts, which still said 813 at v1.9.1),
+  CONTRIBUTING, SECURITY.md, the getting-started diagnostics table, the architecture module
+  map and `docs/doc-health.md` are refreshed.
+
 ## [1.9.1] - 2026-10-28
 
 **Toolchain `6.7.12` → `6.7.18`, and every dependency to its newest tag:** darshana `1.3.0` →

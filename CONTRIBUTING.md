@@ -43,10 +43,12 @@ Every behavior change needs at least:
 
 - One happy-path test in the suite that owns the area. The monolithic `tests/kii.tcyr` was **retired at v1.2.0** and split into five standalone suites: `tests/cli.tcyr` (flag parsing + the path sanitizer), `tests/quant.tcyr` (palette + quantizer), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii`), `tests/decode.tcyr` (the chitra adapter, per format).
 - One error-path test (malformed input, out-of-range arg, etc.)
-- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **ten** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF, the path-sanitizer differential, and the terminal envelope); add to whichever the change touches, and give a new surface a `bad` count — any non-zero count fails the run. If you add a surface that calls `alloc_reset()`, also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it once silently voided a million iterations. (sankoch's arena canary has covered this upstream since 2.7.10, re-verified at cyrius 6.7.9; the line stays as a second guard.)
+- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **eleven** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF, the path-sanitizer differential, the terminal envelope, and the ASCII lane, v1.10.0); a new surface goes after the last one, so the older surfaces keep the random stream they have always drawn; add to whichever the change touches, and give a new surface a `bad` count — any non-zero count fails the run. If you add a surface that calls `alloc_reset()`, also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it once silently voided a million iterations. (sankoch's arena canary has covered this upstream since 2.7.10, re-verified at cyrius 6.7.9; the line stays as a second guard.)
 - For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`. A bench guarded on a system fixture must report a visible SKIP when the fixture is absent, never vanish from the output.
 
-PRs without test coverage will be asked to add it. Current state: **818 unit assertions + 8,011,000 fuzz iters/run + 7 benches** as of v1.9.1.
+- The ASCII lane's glyph table, `src/ascii_shape.cyr`, is generated: change `scripts/gen-shape-table.sh`, run `./scripts/gen-shape-table.sh > src/ascii_shape.cyr`, and confirm with `./scripts/gen-shape-table.sh --check`. It needs ImageMagick 7 (`magick`) and Liberation Mono, so CI does not run it; `tests/ascii.tcyr` pins the properties the matcher relies on instead.
+
+PRs without test coverage will be asked to add it. Current state: **848 unit assertions + 8,051,000 fuzz iters/run + 7 benches** as of v1.10.0.
 
 ## Commits and PRs
 

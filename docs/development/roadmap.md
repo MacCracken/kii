@@ -3,26 +3,13 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.9.1**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.10.0**. No 1.x release is pinned after it.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
 are pinned**: a release takes the items listed under it, and an item moves to another
 version only by editing this file. Work that depends on another repo shipping first
 has no version until it does (§ Gated on upstream).
-
-## 1.10.0 — ASCII shape-vector refinements
-
-The two pieces deferred from Alex Harri's write-up at v1.3.1:
-
-- **Directional contrast enhancement**: normalize-by-max → power → denormalize on the cell
-  vector before matching, to sharpen edges.
-- **A k-d-tree lookup** in place of the 27-glyph linear scan.
-- **Recreate the coverage-table generator.** `src/ascii.cyr`'s 27-glyph table was
-  generated offline (`gen_shape.py`, Liberation-Mono) by a scratch script that is not in
-  the repo, so the table cannot be regenerated today (R-12). Check the generator in.
-
-See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
 
 ## Gated on upstream (1.x, no version until the dependency ships)
 
