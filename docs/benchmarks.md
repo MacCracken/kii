@@ -414,3 +414,51 @@ the ASCII lane, match v1.9.1 within 1 % across two interleaved rounds (RAMGON 80
 The real cells are each sample image's ASCII sampling at 200 × 80 cells, for RAMGON, the kitty
 screenshot and the archlinux logo. The tree was not adopted
 ([ADR 0007](adr/0007-rendering-mode-taxonomy.md) § v1.10.0 amendment).
+
+## v1.11.0 — the ASCII lane's area sampler
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`, load average 1.0–1.4. CPU per run (user + system),
+three to five interleaved rounds against the v1.10.0 binary, minimum shown. "All pixels" is the first
+version, which averaged every pixel of every span; v1.11.0 reads a span whole only up to 4
+pixels and takes 4 taps beyond ([ADR 0005](adr/0005-nearest-neighbor-downscale.md) § v1.11.0
+amendment).
+
+| Render (`--mode ascii`) | v1.10.0 | all pixels | v1.11.0 |
+|---|---:|---:|---:|
+| archlinux-logo 256², `--width 200` | 5.93 ms | 5.90 ms | 5.96 ms |
+| archlinux-logo 256², `--width 80` | 2.46 ms | 2.82 ms | 2.88 ms (+17 %) |
+| RAMGON 1152×925, `--width 80` | 201.4 ms | 206.2 ms | 202.9 ms (+0.7 %) |
+| RAMGON, `--width 200` | 209.8 ms | 215.3 ms | 216.3 ms (+3.1 %) |
+| 3000×2000 BMP, `--width 80` | 101.5 ms | 127.3 ms (+25 %) | 102.7 ms (+1.2 %) |
+| kitty screenshot 3880×2168, `--width 80` | 320.4 ms | 360.3 ms (+12 %) | 321.1 ms (+0.2 %) |
+| 4000×4000 PNG, `--width 48` | 451.8 ms | 519.2 ms (+15 %) | 452.2 ms (+0.1 %) |
+| 3000×2000 BMP, `--width 400` | 132.2 ms | 162.5 ms | 162.0 ms (+23 %) |
+
+- **Each source pixel read costs about 6–7 ns.** The cost follows how many pixels the frame
+  reads: all of them up to a 4× reduction, at most 16 per sample beyond. So it is small when
+  the image is much larger than the frame, and largest when the frame is wide: at `--width 400`
+  every sample reads about 15 pixels.
+- **The largest frame the cell cap allows,** `--width 1448` on the 4000 × 4000 PNG, takes
+  566 → 701 ms, and the kitty screenshot at that width 490 → 560 ms. Peak RSS is unchanged
+  (140.6 MB and, for RAMGON at 80 columns, 18.6 MB).
+- **The icon at `--width 200` is enlarged on both axes,** so the sampler hands it to
+  `downscale_to_rgb` and it costs nothing. Before that hand-off, the general loop cost +11 %
+  there (5.92 → 6.58 ms). A one-pixel fast path inside the loop recovered only 0.1 ms.
+- **Not memory-bound.** An inner loop with one 32-bit load per pixel instead of four byte loads
+  measured the same (126.9 → 127.3 ms on the BMP).
+- **A fixed 4 × 4 supersample** at every geometry cost +0.2–1.2 % on the large images, but +158 %
+  on the icon at `--width 200` (15.2 ms), where it read 16 pixels per sample of a 256-pixel
+  source. Hence the hybrid: read short spans whole, tap long ones, hand off enlargements.
+
+**`kii-bench`**, two interleaved rounds against v1.10.0. The existing rows, which never reach the
+ASCII lane, match within ~1 % (RAMGON 80×24 193.0–195.1 ms against 193.0–197.3; 2048² decode
+359.4–359.5 ms against 359.3–373.2, the 373.2 being v1.10.0's first round). The four new rows
+downscale a decoded RAMGON to the ASCII lane's grid:
+
+| Sampling | 160 × 96 (80 columns) | 400 × 240 (200 columns) |
+|---|---:|---:|
+| `downscale_to_rgb`, one point per sample | 0.11 ms | 0.65–0.70 ms |
+| `downscale_area_to_rgb` | 1.65 ms | 7.79–7.87 ms |
+
+At 80 columns every span is over 4 pixels, so each sample takes 16 taps. At 200 columns the
+spans are about 3 × 4 pixels, so they are read whole and every source pixel is read once.

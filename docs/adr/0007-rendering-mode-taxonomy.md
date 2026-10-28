@@ -199,3 +199,45 @@ distinct, against 670 of 16,000 for the archlinux logo.
 5.6 % from the table and 5.7 % from contrast enhancement, which overlap. Under the corpus's two
 ASCII flag sets, 836 of the 912 frames that render change. Every half-block frame is
 byte-identical (1,888 of 1,888).
+
+## Amendment — v1.11.0 (area sampling)
+
+This ADR remains **Accepted**. Each cell's six region values are now means over the source area
+each region covers, not one point per region
+([ADR 0005](0005-nearest-neighbor-downscale.md) § v1.11.0 amendment). The table, the contrast
+pass and the match are unchanged. Half-block output is byte-identical.
+
+**What one point per region got wrong.** Whether a thin feature showed depended on where the
+points fell.
+- In a 480 × 480 test of 2 px lines at `--width 48`, the horizontal and vertical lines drew no
+  glyph at all, and the circle broke into pieces. Both now draw, as a row of `` ` `` and a
+  column of `:`, and the circle is unbroken.
+- The two diagonals of a 480 × 240 X at `--width 60` rendered differently (`*>x_` one way,
+  `_o/*` the other), because the centre rule's ties go right and down. They are now exact
+  mirrors (`*>x_.` and `._x<*`).
+
+**Ink drawn as a space.** For each cell with ink, its coverage was measured with an ImageMagick
+box filter, then the cell's glyph was checked:
+
+| Test image | Cells with ≥ 5 % ink | v1.10.0 draws a space | v1.11.0 |
+|---|---:|---:|---:|
+| 2 px lines and circle, `--width 48` | 291 | 127 | 18 |
+| the same, `--width 80` | 519 | 142 | 40 |
+| 12 px lines, 4000 × 4000, `--width 48` | 248 | 80 | 4 |
+| 5 px X, `--width 60` | 170 | 40 | 3 |
+| white serif text, `--width 60` | 90 | 24 | 3 |
+| 3 px ring on transparency, `--width 40` | 99 | 24 | 4 |
+
+At 15 % coverage and above, v1.11.0 draws a glyph in every cell, where v1.10.0 left up to 26 of
+134 blank. Its remaining blanks are faint fringe cells, 5–15 % coverage, where a space is the
+nearest glyph. Neither version draws a glyph where there is no ink.
+
+**The trade-off.** A thin line is light ink, so it now draws as `.` `` ` `` `:` `'` instead of
+as a bold `\` or `/` with gaps. That is its real coverage. Photos lose their salt-and-pepper
+texture: RAMGON changes 26–39 % of its cells between `--width 30` and `--width 100`, and the
+Arch logo 2–6 %, mostly along its edges, which become symmetric.
+
+**Effect on output.** Over the 472-image corpus, 328 of the 912 ASCII frames that render change,
+under the corpus's two ASCII flag sets. At `--mode ascii --width 30`, 1.6 % of glyph cells
+change, in 158 frames. Every frame that changes is reduced on some axis; the 276 enlarged on
+both are byte-identical. Every half-block frame is byte-identical (1,888 of 1,888).

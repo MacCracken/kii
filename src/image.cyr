@@ -167,7 +167,8 @@ var STRUCT_COLOR_TYPE_OFFSET      = 24;   # always 6 (RGBA)
 var STRUCT_ALPHA_MASK_OFFSET      = 32;   # v1.8.0: downscale's transparency mask (one byte per
 # downscaled pixel, 1 = transparent), or 0 when no sampled pixel is transparent
 var STRUCT_LUMA_PLANE_OFFSET      = 40;   # v1.10.0: the ASCII lane's luminance plane (one byte
-# per downscaled sample, 0 where transparent; _ascii_lum_plane), set by emit_ascii_shape
+# per downscaled sample, 0 where transparent), set by downscale_area_to_rgb, or by
+# emit_ascii_shape (_ascii_lum_plane) when the downscale left it 0
 var STRUCT_SEEN_IEND_OFFSET       = 48;
 var STRUCT_PIXELS_BUF_OFFSET      = 72;   # chitra's owned RGBA8 buffer
 var STRUCT_PIXELS_SIZE_OFFSET     = 80;   # = width × height × 4

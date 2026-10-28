@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.10.0** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v1.11.0** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
 
@@ -82,6 +82,12 @@ shared substrate, which is the point:
   cell is matched, which sharpens edges ([ADR 0007](docs/adr/0007-rendering-mode-taxonomy.md)
   § v1.10.0 amendment). A k-d-tree lookup was built, found exact but slower than the scan, and
   not taken. ASCII frames change; half-block frames are byte-identical.
+- **v1.11.0** — the ASCII lane samples areas: each region of a cell is the mean of the source
+  pixels it covers, not one pixel, so thin lines and edges stop dropping out (cells with ink
+  drawn as a space fall from 127 of 291 to 18 on a test of 2 px lines). Large photos cost at
+  most ~3 % more at up to 200 columns, and more on very wide frames (+23 % at 400)
+  ([ADR 0005](docs/adr/0005-nearest-neighbor-downscale.md) § v1.11.0 amendment). Reduced ASCII
+  frames change; half-block frames are byte-identical.
 
 ### Supported input formats
 
@@ -169,7 +175,7 @@ Per AGNOS `feedback_redesign_dont_reinvent` the convergent shape comes from mult
 | PNG decoder | [W3C PNG Specification](https://www.w3.org/TR/png/) (1.3) | Reference impl: `libpng`; minimal-port refs: `stb_image.h`, `lodepng` |
 | 16-color ANSI palette | Linux console color table (CGA-derived) | xterm 16-color set (identical for ANSI 0-7 + bright 0-7) |
 | Dithering (v1.9.0) | Floyd & Steinberg (1976); Bayer (1973) ordered matrix | `chafa` (`--dither ordered\|diffusion`), `libcaca` (`ordered2/4/8`, `fstein`) |
-| Character-glyph matching (`--mode ascii`) | Alex Harri, ["ASCII characters are not pixels"](https://alexharri.com/blog/ascii-rendering): shape vectors (v1.3.1), per-dimension normalization and contrast enhancement (v1.10.0) | `chafa` (`--symbols`), `jp2a` (the luminance ramp v1.3.0 started from) |
+| Character-glyph matching (`--mode ascii`) | Alex Harri, ["ASCII characters are not pixels"](https://alexharri.com/blog/ascii-rendering): shape vectors (v1.3.1), per-dimension normalization and contrast enhancement (v1.10.0), several samples per region (supersampling; kii averages each region's area, v1.11.0) | `chafa` (`--symbols`), `jp2a` (the luminance ramp v1.3.0 started from) |
 | Half-block glyph quantization | `chafa` source `chafa-canvas.c` glyph-selection routines | Various ASCII-art-converter tutorials; Unicode Block Elements block (`U+2580`-`U+259F`) spec |
 
 ## Building
@@ -187,10 +193,10 @@ truth, so read it there.
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 848 assertions across 5 suites (cli/quant/render/ascii/decode)
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 11 fuzz surfaces, 8,051,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII)
+cyrius test                           # 877 assertions across 5 suites (cli/quant/render/ascii/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 12 fuzz surfaces, 8,151,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area)
 ./scripts/gen-shape-table.sh --check                            # the ASCII glyph table is the generator's output (needs ImageMagick 7 + Liberation Mono)
-cyrius bench tests/kii.bcyr                                     # 7 benches (quantize, end-to-end, decode-latency)
+cyrius bench tests/kii.bcyr                                     # 11 benches (quantize, end-to-end, ASCII sampling, decode-latency)
 ```
 
 Benchmark results are captured per release in [`docs/benchmarks.md`](docs/benchmarks.md).

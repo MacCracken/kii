@@ -4,7 +4,7 @@ Non-obvious constraints, quirks, and invariants that a reader cannot derive from
 
 Not decisions (those live in [`../adr/`](../adr/)) and not guides (those live in [`../guides/`](../guides/)). An item here describes *how the world is*, not *what we chose* or *how to do something*.
 
-## Module map (v1.9.0)
+## Module map (v1.11.0)
 
 The pipeline runs top to bottom; each module owns one stage. The shared `pstruct` (function-scope `var pstruct[160]` in `src/main.cyr`) carries data between stages via byte-offset slots declared in `src/image.cyr`. kii has no decoder of its own: since the v1.2.0 re-fold every format is parsed inside `chitra` ([ADR 0006](../adr/0006-adopt-chitra-decoder.md)), and `src/image.cyr` (`src/png.cyr` until v1.7.0) is the adapter that feeds it. Redrawn at v1.6.4; the v0.7.0 map showed the in-repo chunk walk, sankoch inflate and filter undo that the re-fold deleted.
 
@@ -27,10 +27,12 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
           emit.cyr    geometry: --width N, or the terminal via _kii_term_envelope
           cli.cyr     kii_frame_cells_ok: at most KII_MAX_CELLS (1,048,576) cells
              ▼
-          downscale.cyr  downscale_to_rgb: nearest-neighbour at each span's
-             │           centre (v1.9.0); alpha < 128 → the
-             │           transparency mask, partial alpha over black
-             │           (half-block: cols × rows·2;  ascii: cols·2 × rows·3)
+          downscale.cyr  half-block: downscale_to_rgb, nearest-neighbour at
+             │           each span's centre (v1.9.0), cols × rows·2
+             │           ascii: downscale_area_to_rgb, each span's mean
+             │           (v1.11.0), cols·2 × rows·3, + the luminance plane
+             │           alpha < 128 → the transparency mask, partial
+             │           alpha over black
      ┌───────┴──────────────────────┐
      ▼ --mode halfblock (default)   ▼ --mode ascii
   quant.cyr  quantize_downscaled   ascii.cyr  emit_ascii_shape
@@ -56,7 +58,7 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
 | `src/image.cyr` | The chitra adapter (`src/png.cyr` until v1.7.0): `kii_decode_image` (read, sniff, decode, adapt); the `IMG_ERR_*` code space; `_kii_map_read_err` (read errno → `IMG_ERR_*`, v1.6.4); `_kii_map_chitra_err` (`ChitraErr` → `IMG_ERR_*`); `kii_decode_error_text` and `kii_incomplete_warning_text` (the text of every decode diagnostic and warning, v1.6.4); `kii_source_type_name`; the `STRUCT_*_OFFSET` layout | M2, adapter since v1.2.0 |
 | `src/palette.cyr` | Linux-console 16-color ANSI palette + lazy init + accessors | M4(a) |
 | `src/quant.cyr` | RGB → colour codes: `quant_set_tier` (the `--color` tier: `KII_TIER_8` / `_16` / `_256` / `_TC`), tier-1 `quantize_nearest_rgb`, tier-256 `quantize_256` (v1.8.0), `kii_color_code` (a pixel's code at the active tier; `KII_COLOR_DEFAULT` = transparent), and `quantize_rgb_buf` + `quantize_downscaled` for the half-block lane; dithering (v1.9.0): `quant_set_dither`, the 4×4 Bayer offset, `kii_color_code_at` (one pixel, with its ordered offset), and the Floyd-Steinberg pass `_quant_fs` | M4(b)(d) + M5(c) + v1.9.0 |
-| `src/downscale.cyr` | Nearest-neighbor RGB resampler, sampling each span's centre since v1.9.0 (ADR 0005 amendment): `downscale_to_rgb` over chitra's RGBA8 (the only pixel format since v1.7.0 removed the per-colour-type dispatch), with `_over_black` compositing alpha over black (v1.6.4) | M5(b) |
+| `src/downscale.cyr` | The RGB resamplers over chitra's RGBA8 (the only pixel format since v1.7.0 removed the per-colour-type dispatch), with `_over_black` compositing alpha over black (v1.6.4). `downscale_to_rgb`: nearest-neighbour, sampling each span's centre since v1.9.0, for the half-block lane. `downscale_area_to_rgb` (v1.11.0): the ASCII lane's area sampler, each sample the mean of its span (whole up to 4 pixels, 4 taps beyond, via `_area_bound` / `_area_taps`), which also writes the luminance plane; with no reduction it hands off to `downscale_to_rgb` (ADR 0005 amendments) | M5(b), area v1.11.0 |
 | `src/emit.cyr` | Half-block ANSI emit (darshana composers) + `_kii_compute_target_geometry` + `_kii_compute_fit_geometry` + `_kii_term_envelope` (v1.6.0) + `_kii_write_all`; the frame loop and row ending both lanes share, `_kii_emit_frame` and `_kii_row_end` (v1.7.0); the tier-aware SGR composers `_kii_sgr_fg` / `_kii_sgr_bg` and the row's elision and transparency glyph rules (v1.8.0) | M5(c) + M6(a)(b) |
 | `src/ascii.cyr` | The `--mode ascii` lane: `_ascii_lum_plane` (the frame's luminance, once per frame) and `_ascii_contrast` (directional then global contrast enhancement, v1.10.0), `_ascii_match`, `emit_ascii_shape`; `_ascii_cell_codes`, the cell-colour field `--dither fs` needs (v1.9.0) | v1.3.0, shape-vector v1.3.1 |
 | `src/ascii_shape.cyr` | **Generated** by `scripts/gen-shape-table.sh`: the 27-glyph coverage table (`ASCII_SHAPE_*`, `_ascii_shape_init`). Never hand-edited; `--check` proves it is the script's output | v1.10.0 (inline in `src/ascii.cyr` since v1.3.1) |
@@ -71,7 +73,7 @@ It is **not** a Cyrius `struct` type. The byte-offset approach was the simplest 
 
 **Invariant**: when adding a slot, bump the offset to the next 8-aligned value AND bump `var pstruct[N]` in `main.cyr` to ≥ `last_offset + 8`. The 160-byte size covers offsets up to 152 inclusive (slot 19, `STRUCT_FORMAT_OFFSET`); slot 20 would need a bump to 168 minimum. The zeroing loop in `kii_decode_image` is bounded by the same 160.
 
-The first four slots (WIDTH / HEIGHT / BIT_DEPTH / COLOR_TYPE) sit at offsets 0–24 because the M2 decoder's IHDR buffer used the same four offsets, so one summary helper could read either buffer. That decoder, its IHDR buffer and the helper were deleted in the v1.2.0 re-fold; the offsets stayed. Since then the adapter always writes BIT_DEPTH 8 and COLOR_TYPE 6, which now state the pixel format (`downscale_to_rgb` refuses anything else), and the real source colour type goes in `STRUCT_SRC_COLOR_TYPE_OFFSET` (144) for `--verbose`. The native decoder's `IDAT_*`, `PLTE_*` and `INTERLACE` slots were retired at v1.7.0; their offsets (32, 40, 56, 64, 88, 96) were left unused rather than the struct repacked, so every live slot keeps its offset. v1.8.0 reuses 32 for `STRUCT_ALPHA_MASK_OFFSET`, downscale's transparency mask (0 when nothing is transparent).
+The first four slots (WIDTH / HEIGHT / BIT_DEPTH / COLOR_TYPE) sit at offsets 0–24 because the M2 decoder's IHDR buffer used the same four offsets, so one summary helper could read either buffer. That decoder, its IHDR buffer and the helper were deleted in the v1.2.0 re-fold; the offsets stayed. Since then the adapter always writes BIT_DEPTH 8 and COLOR_TYPE 6, which now state the pixel format (`downscale_to_rgb` refuses anything else), and the real source colour type goes in `STRUCT_SRC_COLOR_TYPE_OFFSET` (144) for `--verbose`. The native decoder's `IDAT_*`, `PLTE_*` and `INTERLACE` slots were retired at v1.7.0; their offsets (32, 40, 56, 64, 88, 96) were left unused rather than the struct repacked, so every live slot keeps its offset. v1.8.0 reuses 32 for `STRUCT_ALPHA_MASK_OFFSET`, downscale's transparency mask (0 when nothing is transparent). v1.10.0 reuses 40 for `STRUCT_LUMA_PLANE_OFFSET`, the ASCII lane's luminance plane; since v1.11.0 the area sampler writes it, `downscale_to_rgb` clears it, and `emit_ascii_shape` builds one only when it is 0.
 
 ### 002 — half-block aspect math (cell-vs-source-pixel asymmetry)
 

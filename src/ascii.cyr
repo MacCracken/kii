@@ -21,8 +21,9 @@
 #
 # Still a SECOND lane beside the half-block default (ADR 0007). One char =
 # one cell, so main.cyr downscales to (cols*2)x(rows*3) for this mode — the
-# 2x3 sub-samples per character cell. Foreground is the cell's mean color
-# quantized to the 16-color palette.
+# 2x3 sub-samples per character cell. Since v1.11.0 each sub-sample is the
+# mean over its span (downscale_area_to_rgb), which also leaves the luminance
+# plane. Foreground is the cell's mean color quantized to the active tier.
 #
 # Stdlib (alloc/syscalls) + darshana (tty_*) auto-resolve; image.cyr gives
 # the pstruct contract; quant.cyr gives quantize_nearest_rgb (per-cell fg).
@@ -342,7 +343,8 @@ fn _ascii_match(v): i64 {
 # and an fg that repeats the one this row last set is elided; the row state
 # starts unknown, so every row is self-contained.
 #
-# v1.10.0: `lum` is the frame's luminance plane (_ascii_lum_plane), from which
+# v1.10.0: `lum` is the frame's luminance plane (downscale_area_to_rgb's since
+# v1.11.0, else _ascii_lum_plane's), from which
 # the row takes each cell's six values, and `sub_h` the sub-sample height, so the
 # contrast pass (_ascii_contrast) can read the samples just outside the cell and
 # treat those past the frame's edge as dark.
@@ -506,9 +508,13 @@ fn emit_ascii_shape(pstruct): i64 {
     if (rgb == 0) { return 0 - 1; }
     if (sub_w < 2 || sub_h < 3) { return 0 - 1; }
     var mask = load64(pstruct + STRUCT_ALPHA_MASK_OFFSET);
-    var lum = _ascii_lum_plane(rgb, mask, sub_w, sub_h);
-    if (lum == 0) { return 0 - 1; }
-    store64(pstruct + STRUCT_LUMA_PLANE_OFFSET, lum);
+    # downscale_area_to_rgb leaves its own, area-averaged plane here.
+    var lum = load64(pstruct + STRUCT_LUMA_PLANE_OFFSET);
+    if (lum == 0) {
+        lum = _ascii_lum_plane(rgb, mask, sub_w, sub_h);
+        if (lum == 0) { return 0 - 1; }
+        store64(pstruct + STRUCT_LUMA_PLANE_OFFSET, lum);
+    }
     var codes = 0;
     if (quant_dither() == KII_DITHER_FS && quant_tier() != KII_TIER_TC) {
         codes = _ascii_cell_codes(rgb, mask, sub_w, sub_w / 2, sub_h / 3);

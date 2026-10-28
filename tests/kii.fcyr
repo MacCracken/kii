@@ -75,6 +75,7 @@ var EMIT_FUZZ_ITERS   = 1000;
 var PATH_DIFF_FUZZ_ITERS = 1000000;   # v1.6.0 — tty_has_ctl vs the v1.5.2 walk
 var ENV_FUZZ_ITERS       = 1000000;   # v1.6.0 — _kii_term_envelope + fit geometry
 var ASCII_FUZZ_ITERS     = 40000;     # v1.10.0 — the ASCII lane's contrast pass + match
+var AREA_FUZZ_ITERS      = 100000;    # v1.11.0 — the ASCII lane's area sampler
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -601,6 +602,193 @@ fn fuzz_ascii_iter(rgb, mask, out_a, out_b): i64 {
     return 0;
 }
 
+# ---- v1.11.0 area-sampling fuzz surface ----------------------------
+# downscale_area_to_rgb reads up to KII_AREA_TAPS^2 source pixels per output
+# sample from offset tables it builds, so a wrong bound reads outside the
+# image. Each iteration builds a random RGBA8 image (1..48 a side; alpha all
+# opaque, drawn from the threshold's neighbourhood, or any byte) and downscales
+# it to a random 1..96 x 1..64, which covers upscales, mixed axes, exact spans
+# and tapped ones. Two checks:
+#   - pad differential: the image is copied between pads of 0 and of 255, and
+#     both copies must give the same samples, mask and plane;
+#   - reference: every sample must equal what the definition gives, worked out
+#     here by testing each source pixel's centre against the span
+#     (2iw <= (2s+1)n < 2(i+1)w) rather than through _area_bound.
+# A delegated frame (no reduction on either axis) leaves no plane, so its plane
+# is built with _ascii_lum_plane, as emit_ascii_shape would. It runs after
+# every older surface.
+
+# Destination position i of n on an axis of w source pixels: the source
+# indices to read, into `out` (at most KII_AREA_TAPS i64s). Returns the count.
+fn _fz_area_axis(i, n, w, out): i64 {
+    var k = KII_AREA_TAPS;
+    var c = 0;
+    var first = 0 - 1;
+    var s = 0;
+    while (s < w) {
+        var p = (2 * s + 1) * n;
+        if (p >= 2 * i * w && p < 2 * (i + 1) * w) {
+            if (first < 0) { first = s; }
+            c = c + 1;
+        }
+        s = s + 1;
+    }
+    var j = 0;
+    if (c == 0) { store64(out, ((2 * i + 1) * w) / (2 * n)); return 1; }
+    if (c <= k) {
+        while (j < c) { store64(out + j * 8, first + j); j = j + 1; }
+        return c;
+    }
+    while (j < k) { store64(out + j * 8, ((2 * (i * k + j) + 1) * w) / (2 * n * k)); j = j + 1; }
+    return k;
+}
+
+# 0 if pstruct's samples, mask and plane are what the definition gives for the
+# w x h image at `pix`, else -1.
+fn _fz_area_ref(pstruct, pix, w, h, dw, dh): i64 {
+    var k = KII_AREA_TAPS;
+    var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var mask = load64(pstruct + STRUCT_ALPHA_MASK_OFFSET);
+    var lum = load64(pstruct + STRUCT_LUMA_PLANE_OFFSET);
+    if (lum == 0) { lum = _ascii_lum_plane(rgb, mask, dw, dh); }
+    if (rgb == 0 || lum == 0) { return 0 - 1; }
+    var xt = alloc(dw * (k + 1) * 8);
+    if (xt == 0) { return 0 - 1; }
+    var dx = 0;
+    while (dx < dw) { store64(xt + dx * (k + 1) * 8, _fz_area_axis(dx, dw, w, xt + dx * (k + 1) * 8 + 8)); dx = dx + 1; }
+    var ys[32];                        # KII_AREA_TAPS (4) i64s: 32 bytes at function scope
+    var any_t = 0;
+    var dy = 0;
+    while (dy < dh) {
+        var ny = _fz_area_axis(dy, dh, h, &ys);
+        dx = 0;
+        while (dx < dw) {
+            var xe = xt + dx * (k + 1) * 8;
+            var nx = load64(xe);
+            var sr = 0;
+            var sg = 0;
+            var sb = 0;
+            var nop = 0;
+            var yi = 0;
+            while (yi < ny) {
+                var xi = 0;
+                while (xi < nx) {
+                    var p = pix + (load64(&ys + yi * 8) * w + load64(xe + 8 + xi * 8)) * 4;
+                    var a = load8(p + 3);
+                    if (a >= KII_ALPHA_THRESHOLD) {
+                        sr = sr + _over_black(load8(p), a);
+                        sg = sg + _over_black(load8(p + 1), a);
+                        sb = sb + _over_black(load8(p + 2), a);
+                        nop = nop + 1;
+                    }
+                    xi = xi + 1;
+                }
+                yi = yi + 1;
+            }
+            var o = dy * dw + dx;
+            var er = 0;
+            var eg = 0;
+            var eb = 0;
+            var em = 1;
+            var el = 0;
+            if (nop > 0) {
+                er = (sr + nop / 2) / nop;
+                eg = (sg + nop / 2) / nop;
+                eb = (sb + nop / 2) / nop;
+                em = 0;
+                el = (54 * sr + 183 * sg + 19 * sb) / (256 * nx * ny);
+            }
+            if (em == 1) { any_t = 1; }
+            var gm = 0;
+            if (mask != 0) { gm = load8(mask + o); }
+            if (load8(rgb + o * 3) != er || load8(rgb + o * 3 + 1) != eg
+                    || load8(rgb + o * 3 + 2) != eb) { return 0 - 1; }
+            if (gm != em || load8(lum + o) != el) { return 0 - 1; }
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    # The mask is left out exactly when no sample is transparent.
+    if ((mask == 0) != (any_t == 0)) { return 0 - 1; }
+    return 0;
+}
+
+# The image at `src`, between two pads of `pad` bytes set to `val`, as a
+# pstruct in `ps`. Returns 0.
+fn _fz_area_image(ps, src, pix, n, pad, val, w, h): i64 {
+    var i = 0;
+    while (i < pad) { store8(src + i, val); store8(src + pad + n + i, val); i = i + 1; }
+    memcpy(src + pad, pix, n);
+    i = 0;
+    while (i < 160) { store64(ps + i, 0); i = i + 8; }
+    store64(ps + STRUCT_WIDTH_OFFSET, w);
+    store64(ps + STRUCT_HEIGHT_OFFSET, h);
+    store64(ps + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(ps + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(ps + STRUCT_PIXELS_BUF_OFFSET, src + pad);
+    store64(ps + STRUCT_PIXELS_SIZE_OFFSET, n);
+    return 0;
+}
+
+# 1 if the two pstructs' samples, masks and planes are the same.
+fn _fz_area_same(a, b, dw, dh): i64 {
+    var n = dw * dh;
+    if (memeq(load64(a + STRUCT_DOWNSCALED_BUF_OFFSET), load64(b + STRUCT_DOWNSCALED_BUF_OFFSET), n * 3) == 0) { return 0; }
+    var ma = load64(a + STRUCT_ALPHA_MASK_OFFSET);
+    var mb = load64(b + STRUCT_ALPHA_MASK_OFFSET);
+    if ((ma == 0) != (mb == 0)) { return 0; }
+    if (ma != 0 && memeq(ma, mb, n) == 0) { return 0; }
+    var la = load64(a + STRUCT_LUMA_PLANE_OFFSET);
+    var lb = load64(b + STRUCT_LUMA_PLANE_OFFSET);
+    if ((la == 0) != (lb == 0)) { return 0; }
+    if (la != 0 && memeq(la, lb, n) == 0) { return 0; }
+    return 1;
+}
+
+# `pix` holds the image (48 x 48 x 4 bytes at most); `src_a` / `src_b` hold a
+# padded copy each (the image + 2 x AREA_FUZZ_PAD).
+var AREA_FUZZ_PAD = 512;
+fn fuzz_area_iter(pix, src_a, src_b): i64 {
+    var w = 1 + _fuzz_rand() % 48;
+    var h = 1 + _fuzz_rand() % 48;
+    var dw = 1 + _fuzz_rand() % 96;
+    var dh = 1 + _fuzz_rand() % 64;
+    var amode = _fuzz_rand() % 3;
+    var n = w * h * 4;
+    var i = 0;
+    while (i < n) {
+        store8(pix + i, _fuzz_rand() & 255);
+        if (i % 4 == 3) {
+            if (amode == 0) { store8(pix + i, 255); }
+            if (amode == 1) {
+                var pick = _fuzz_rand() % 6;
+                var av = 255;
+                if (pick == 0) { av = 0; }
+                if (pick == 1) { av = KII_ALPHA_THRESHOLD - 1; }
+                if (pick == 2) { av = KII_ALPHA_THRESHOLD; }
+                if (pick == 3) { av = 200; }
+                store8(pix + i, av);
+            }
+        }
+        i = i + 1;
+    }
+    var ps_a[160];
+    var ps_b[160];
+    _fz_area_image(&ps_a, src_a, pix, n, AREA_FUZZ_PAD, 0, w, h);
+    _fz_area_image(&ps_b, src_b, pix, n, AREA_FUZZ_PAD, 255, w, h);
+    var bad = 0;
+    if (downscale_area_to_rgb(&ps_a, dw, dh) != 0) { bad = 1; }
+    if (downscale_area_to_rgb(&ps_b, dw, dh) != 0) { bad = 1; }
+    if (bad == 0) {
+        if (_fz_area_same(&ps_a, &ps_b, dw, dh) == 0) { bad = 1; }
+        if (_fz_area_ref(&ps_a, pix, w, h, dw, dh) != 0) { bad = 1; }
+    }
+    alloc_reset();                     # the samples, mask, plane and tables are scratch
+    crc32_table = 0;                   # as the decoder surfaces do after a reset
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -904,6 +1092,17 @@ fn main(): i64 {
         if (fuzz_ascii_iter(&ascii_rgb, &ascii_mask, &ascii_out_a, &ascii_out_b) != 0) { ascii_bad = ascii_bad + 1; }
         ascii_iter = ascii_iter + 1;
     }
+    # v1.11.0: the ASCII lane's area sampler. Images are at most 48 x 48, so
+    # 9,216 pixel bytes, and each padded copy adds 2 x AREA_FUZZ_PAD.
+    var area_pix[9216];
+    var area_src_a[10240];
+    var area_src_b[10240];
+    var area_iter = 0;
+    var area_bad  = 0;
+    while (area_iter < AREA_FUZZ_ITERS) {
+        if (fuzz_area_iter(&area_pix, &area_src_a, &area_src_b) != 0) { area_bad = area_bad + 1; }
+        area_iter = area_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -961,11 +1160,16 @@ fn main(): i64 {
     vec_push(args_ascii, ascii_bad);
     fmt_printf("fuzz: %d iterations passed (ascii lane, pad differential; bad=%d)\n", args_ascii);
 
+    var args_area = vec_new();
+    vec_push(args_area, area_iter);
+    vec_push(args_area, area_bad);
+    fmt_printf("fuzz: %d iterations passed (area sampler, pad differential + reference; bad=%d)\n", args_area);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

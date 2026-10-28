@@ -1,4 +1,7 @@
-# downscale.cyr — nearest-neighbor RGB resampler.
+# downscale.cyr — the RGB resamplers: nearest-neighbor (downscale_to_rgb,
+# both lanes through v1.10.0 and the half-block lane since) and, since
+# v1.11.0, an area sampler for the ASCII lane (downscale_area_to_rgb, at the
+# end of this file).
 #
 # v0.6.0 / M5(b). Reads the decoded RGBA8 source buffer at
 # STRUCT_PIXELS_BUF_OFFSET (W_src × H_src × 4 bytes, chitra's canonical
@@ -171,6 +174,188 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     }
     if (any_transparent == 0) { mask = 0; }
     store64(pstruct + STRUCT_ALPHA_MASK_OFFSET, mask);
+    # No luminance plane: emit_ascii_shape builds one from these samples.
+    # (Cleared so a plane an earlier downscale_area_to_rgb left is not reused.)
+    store64(pstruct + STRUCT_LUMA_PLANE_OFFSET, 0);
+
+    store64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET, out_buf);
+    store64(pstruct + STRUCT_DOWNSCALED_W_OFFSET,   dst_w);
+    store64(pstruct + STRUCT_DOWNSCALED_H_OFFSET,   dst_h);
+    return 0;
+}
+
+# ---- area sampling for the ASCII lane (v1.11.0) ----------------------
+# downscale_to_rgb reads ONE source pixel per destination pixel. The ASCII
+# lane matches each cell's six region values against glyph coverage, so a
+# line thinner than a region's span is caught or missed depending on where
+# the one sample lands, and an edge that crosses a region counts as all ink or
+# none. This variant gives each destination pixel the mean over its span.
+# Alex Harri's write-up (https://alexharri.com/blog/ascii-rendering) averages
+# several samples per cell for the same reason, which he calls supersampling;
+# kii reads a short span whole and takes evenly spaced taps over a long one.
+#
+# Per axis, the span of destination pixel i is the source pixels whose
+# centres lie in it:
+#
+#     s belongs to i when i*W/n <= s + 1/2 < (i+1)*W/n
+#
+# A span of at most KII_AREA_TAPS pixels is read whole, so up to a 4x
+# reduction the mean is exact and each source pixel is read once. A longer
+# span takes KII_AREA_TAPS evenly spaced samples instead (the centre samples
+# of a KII_AREA_TAPS-times-finer grid), so a destination pixel never reads
+# more than KII_AREA_TAPS^2 source pixels and the cost stays O(dst), as
+# downscale_to_rgb's is, however large the source. A span with no pixel
+# centre (an upscale) takes the centre sample, exactly as downscale_to_rgb.
+#
+# A source pixel is transparent below KII_ALPHA_THRESHOLD, as before; partial
+# alpha composites over black. The destination colour is the rounded mean of
+# the opaque samples, and the destination is transparent (mask 1) only when
+# none is opaque. The luminance plane (pstruct +40, which emit_ascii_shape
+# then uses instead of building its own) is the mean luma over ALL the
+# samples with transparent ones as 0, so a region a line half covers reads as
+# half ink on a transparent background too.
+#
+# Integer throughout: a destination pixel sums at most KII_AREA_TAPS^2
+# samples of at most 255 * 256 luma units.
+var KII_AREA_TAPS = 4;
+
+# The first source pixel of span i of n over a source of size w: the
+# smallest s with s + 1/2 >= i*w/n, i.e. ceil((2*i*w - n) / (2n)), which is
+# (2*i*w + n - 1) / (2n) for every i >= 0 (0 at i = 0, w at i = n).
+fn _area_bound(i, w, n): i64 {
+    return (2 * i * w + n - 1) / (2 * n);
+}
+
+# Fill one axis's sample table: for each of the n destination positions over
+# a source of size w, a count c <= k and then c sample offsets (source index
+# times `unit` bytes), in an entry of k + 1 i64s.
+fn _area_taps(tbl, n, w, k, unit): i64 {
+    var i = 0;
+    while (i < n) {
+        var e = tbl + i * (k + 1) * 8;
+        var a = _area_bound(i, w, n);
+        var b = _area_bound(i + 1, w, n);
+        if (b <= a) {
+            a = ((2 * i + 1) * w) / (2 * n);
+            b = a + 1;
+        }
+        var j = 0;
+        if (b - a <= k) {
+            store64(e, b - a);
+            while (a + j < b) { store64(e + 8 + j * 8, (a + j) * unit); j = j + 1; }
+        } else {
+            store64(e, k);
+            while (j < k) {
+                store64(e + 8 + j * 8, (((2 * (i * k + j) + 1) * w) / (2 * n * k)) * unit);
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn downscale_area_to_rgb(pstruct, dst_w, dst_h): i64 {
+    if (dst_w <= 0 || dst_h <= 0) { return 0 - 1; }
+
+    var src_w     = load64(pstruct + STRUCT_WIDTH_OFFSET);
+    var src_h     = load64(pstruct + STRUCT_HEIGHT_OFFSET);
+    var bit_depth = load64(pstruct + STRUCT_BIT_DEPTH_OFFSET);
+    var color_type= load64(pstruct + STRUCT_COLOR_TYPE_OFFSET);
+    var pixels    = load64(pstruct + STRUCT_PIXELS_BUF_OFFSET);
+    var pix_size  = load64(pstruct + STRUCT_PIXELS_SIZE_OFFSET);
+
+    if (pixels == 0)    { return 0 - 1; }
+    if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
+    if (bit_depth != 8 || color_type != 6) { return 0 - 1; }
+    if (pix_size < src_w * src_h * 4) { return 0 - 1; }
+    var max_cells = ALLOC_MAX / 3;
+    if (dst_w > max_cells)            { return 0 - 1; }
+    if (dst_h > max_cells / dst_w)    { return 0 - 1; }
+    # No reduction on either axis: every span is under one source pixel wide,
+    # so it holds at most the one pixel its centre lies on, and the result is
+    # downscale_to_rgb's exactly. Let it do the work (and emit build the
+    # plane): at --width 200 on a 256-pixel icon the general loop cost 10 %.
+    if (src_w <= dst_w && src_h <= dst_h) { return downscale_to_rgb(pstruct, dst_w, dst_h); }
+
+    var k = KII_AREA_TAPS;
+    var out_buf = alloc(dst_w * dst_h * 3);
+    var mask = alloc(dst_w * dst_h);
+    var lum = alloc(dst_w * dst_h);
+    var xt = alloc(dst_w * (k + 1) * 8);
+    var yt = alloc(dst_h * (k + 1) * 8);
+    if (out_buf == 0 || mask == 0 || lum == 0 || xt == 0 || yt == 0) { return 0 - 1; }
+    _area_taps(xt, dst_w, src_w, k, 4);
+    _area_taps(yt, dst_h, src_h, k, src_w * 4);
+    var any_transparent = 0;
+
+    var dy = 0;
+    var op = out_buf;
+    var mp = mask;
+    var lp = lum;
+    while (dy < dst_h) {
+        var ye = yt + dy * (k + 1) * 8;
+        var ny = load64(ye);
+        var dx = 0;
+        while (dx < dst_w) {
+            var xe = xt + dx * (k + 1) * 8;
+            var nx = load64(xe);
+            var sr = 0;
+            var sg = 0;
+            var sb = 0;
+            var nop = 0;
+            var yi = 0;
+            while (yi < ny) {
+                var rowp = pixels + load64(ye + 8 + yi * 8);
+                var xi = 0;
+                while (xi < nx) {
+                    var sp = rowp + load64(xe + 8 + xi * 8);
+                    var a = load8(sp + 3);
+                    if (a == 255) {
+                        sr = sr + load8(sp);
+                        sg = sg + load8(sp + 1);
+                        sb = sb + load8(sp + 2);
+                        nop = nop + 1;
+                    } else {
+                        if (a >= KII_ALPHA_THRESHOLD) {
+                            sr = sr + _over_black(load8(sp), a);
+                            sg = sg + _over_black(load8(sp + 1), a);
+                            sb = sb + _over_black(load8(sp + 2), a);
+                            nop = nop + 1;
+                        }
+                    }
+                    xi = xi + 1;
+                }
+                yi = yi + 1;
+            }
+            if (nop == 0) {
+                store8(op, 0);
+                store8(op + 1, 0);
+                store8(op + 2, 0);
+                store8(mp, 1);
+                store8(lp, 0);
+                any_transparent = 1;
+            } else {
+                var n = nx * ny;
+                var h = nop / 2;
+                store8(op, (sr + h) / nop);
+                store8(op + 1, (sg + h) / nop);
+                store8(op + 2, (sb + h) / nop);
+                store8(mp, 0);
+                # Floor, as _ascii_luma's >> 8, so a one-pixel span gives the
+                # point lane's value exactly.
+                store8(lp, (54 * sr + 183 * sg + 19 * sb) / (256 * n));
+            }
+            op = op + 3;
+            mp = mp + 1;
+            lp = lp + 1;
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    if (any_transparent == 0) { mask = 0; }
+    store64(pstruct + STRUCT_ALPHA_MASK_OFFSET, mask);
+    store64(pstruct + STRUCT_LUMA_PLANE_OFFSET, lum);
 
     store64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET, out_buf);
     store64(pstruct + STRUCT_DOWNSCALED_W_OFFSET,   dst_w);

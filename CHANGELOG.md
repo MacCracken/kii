@@ -4,6 +4,92 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-28
+
+**The ASCII lane samples areas.** Each of a cell's six region values is now the mean over the
+source pixels that region covers, not one pixel at its centre
+([ADR 0005](docs/adr/0005-nearest-neighbor-downscale.md) and
+[ADR 0007](docs/adr/0007-rendering-mode-taxonomy.md) § v1.11.0 amendments). Thin lines and
+edges stop dropping out: in a test of 2 px lines at `--width 48`, cells with ink drawn as a space
+fall from 127 of 291 to 18, and the horizontal and vertical lines, which drew nothing, now draw.
+The half-block lane still reads one pixel per cell.
+
+⚠ **ASCII frames that are reduced change; nothing else does.** Over 472 images (every JPEG, GIF
+and BMP under `/usr/share`, every seventh PNG there, and the 7 fixtures) × 6 flag sets:
+- **Half-block:** 1,888 of 1,888 frames are byte-identical to v1.10.0.
+- **ASCII:** 328 of the 912 frames that render change, under the corpus's two ASCII flag sets.
+  At `--mode ascii --width 30`, 1.6 % of glyph cells change, in 158 frames. Every frame
+  enlarged on both axes is byte-identical (276 at that width).
+
+**877 assertions** pass on x86_64 and under `cyrius test --aarch64` (render 194 → 223).
+aarch64 frames match x86_64 in 348 of 348 runs. **8,151,000 fuzz iterations** are all clean,
+including a new area-sampler surface. Every target and suite builds with zero warnings.
+
+### Added
+- **`downscale_area_to_rgb`** (`src/downscale.cyr`), used only by the ASCII lane. Per axis, a
+  sample's span is the source pixels whose centres fall in it.
+  - **A span of at most 4 pixels (`KII_AREA_TAPS`) is read whole,** so up to about a 4×
+    reduction the mean is exact.
+  - **A longer span takes 4 evenly spaced taps,** so no sample reads more than 16 pixels and the
+    cost does not grow with the source. Averaging every pixel was tried first and cost +12 % to
+    +25 % on 6–16 MP images; the taps cost about 1 % there and pick the same glyph as full
+    averaging in 97.5 % of cells.
+  - **No reduction on either axis** gives nearest-neighbour's bytes exactly, so the sampler
+    hands the frame to `downscale_to_rgb`. The general loop had cost +11 % on a 256² icon at
+    `--width 200`.
+  - **Transparency.** A sample is transparent only when none of its pixels is opaque. Its colour
+    is the mean of its opaque pixels. Its luminance counts transparent pixels as 0, so a stroke
+    on a transparent background reads at its real coverage.
+  - **Exact integers:** colour means round half up, and luminance floors as `_ascii_luma` does.
+- **An area-sampler fuzz surface**, the twelfth, run after the others so their random stream is
+  unchanged. Each of its 100,000 iterations downscales a random image (up to 48 × 48, three alpha
+  mixes) to a random 1–96 × 1–64.
+  - The image sits between pads of 0 and then of 255, and both copies must give the same
+    samples, mask and plane.
+  - Every sample must match the definition, computed separately: each source pixel's centre is
+    tested against the span.
+- **Four bench rows** in `tests/kii.bcyr`: point against area sampling of a decoded RAMGON at the
+  ASCII lane's 80- and 200-column grids.
+
+### Changed
+- **The luminance plane moves to the sampler.** `downscale_area_to_rgb` leaves it at pstruct +40
+  (luminance over the whole span), and `emit_ascii_shape` builds one only when the slot is 0.
+  `downscale_to_rgb` now clears the slot, so a plane from an earlier call is never reused.
+- **The cost.** CPU per run, interleaved with v1.10.0, minimum of three to five rounds:
+
+  | Render | v1.10.0 | v1.11.0 |
+  |---|---:|---:|
+  | 256² icon, `--mode ascii --width 200` | 5.93 ms | 5.96 ms |
+  | 256² icon, `--mode ascii --width 80` | 2.46 ms | 2.88 ms (+17 %) |
+  | RAMGON, `--mode ascii --width 80` | 201.4 ms | 202.9 ms (+0.7 %) |
+  | RAMGON, `--mode ascii --width 200` | 209.8 ms | 216.3 ms (+3.1 %) |
+  | 6 MP BMP, `--mode ascii --width 80` | 101.5 ms | 102.7 ms (+1.2 %) |
+  | 16 MP PNG, `--mode ascii --width 48` | 451.8 ms | 452.2 ms |
+  | 6 MP BMP, `--mode ascii --width 400` | 132.2 ms | 162.0 ms (+23 %) |
+
+  The cost is about 6–7 ns per source pixel read. It is largest when the frame is wide enough
+  for every sample to read many pixels; the largest frame the cell cap allows
+  (`--width 1448` on a 4000²) takes 566 → 701 ms. `docs/benchmarks.md` § v1.11.0 has the rest.
+- `build/kii` 1,016,552 → 1,020,648 bytes (unstripped, DCE off). `--agnos` 1,030,824 →
+  1,039,024, `--aarch64` 1,241,592 → 1,241,600.
+
+### Tests
+- `tests/render.tcyr` 194 → **223**: a white pixel that point sampling misses and area sampling
+  keeps, an exact 10 → 3 and a tapped 10 → 1 (and a pixel between the taps, pinned), the
+  identity and 2×–4× enlargements equal to `downscale_to_rgb` with no plane, one axis reduced,
+  coverage-weighted luminance and the mask with transparency, partial alpha, a stale plane
+  cleared, and the overflow guard.
+- **Eleven planted defects in the sampler; nine fail the fuzz surface** (3,100–10,088 of 20,000
+  iterations each). The other two are equivalent rewrites, shown by enumeration. One was a
+  special case in the span bound for i = 0, which the formula already handles, so it was
+  removed.
+
+### Docs
+- **Roadmap:** current release v1.11.0. No 1.x release is pinned after it.
+- ADR 0005, ADR 0007 and ADR 0002 gain v1.11.0 amendments. `docs/benchmarks.md` § v1.11.0,
+  `state.md`, the README (status, arc, test counts), CONTRIBUTING, SECURITY.md, the architecture
+  module map and `docs/doc-health.md` are refreshed.
+
 ## [1.10.0] - 2026-10-28
 
 **The ASCII lane's refinements.** Its glyph table now comes from a checked-in generator, and

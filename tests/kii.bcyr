@@ -118,6 +118,41 @@ fn main(): i64 {
     bench_batch_stop(bh_200, n_200);
     bench_report(bh_200);
 
+    # ---- v1.11.0: the ASCII lane's sampling, decode excluded --------
+    # RAMGON (1152 x 925) decoded once, then downscaled to the ASCII lane's
+    # sub-sample grid at 80 and 200 columns: one point per sample
+    # (downscale_to_rgb, what the lane used through v1.10.0) against the area
+    # sampler. At 80 columns (160 x 96) every span is over 4 pixels, so the
+    # area sampler takes 16 taps; at 200 (400 x 240) it reads each span whole.
+    var pstr_as[160];
+    kii_decode_image("tests/fixtures/RAMGON.png", &pstr_as);
+    var bh_pt80 = bench_new("downscale_to_rgb RAMGON → 160×96 (ASCII 80 cols)");
+    var n_as = 100;
+    bench_batch_start(bh_pt80);
+    var ja = 0;
+    while (ja < n_as) { downscale_to_rgb(&pstr_as, 160, 96); ja = ja + 1; }
+    bench_batch_stop(bh_pt80, n_as);
+    bench_report(bh_pt80);
+    var bh_ar80 = bench_new("downscale_area_to_rgb RAMGON → 160×96 (ASCII 80 cols)");
+    bench_batch_start(bh_ar80);
+    ja = 0;
+    while (ja < n_as) { downscale_area_to_rgb(&pstr_as, 160, 96); ja = ja + 1; }
+    bench_batch_stop(bh_ar80, n_as);
+    bench_report(bh_ar80);
+    var bh_pt200 = bench_new("downscale_to_rgb RAMGON → 400×240 (ASCII 200 cols)");
+    var n_as2 = 40;
+    bench_batch_start(bh_pt200);
+    ja = 0;
+    while (ja < n_as2) { downscale_to_rgb(&pstr_as, 400, 240); ja = ja + 1; }
+    bench_batch_stop(bh_pt200, n_as2);
+    bench_report(bh_pt200);
+    var bh_ar200 = bench_new("downscale_area_to_rgb RAMGON → 400×240 (ASCII 200 cols)");
+    bench_batch_start(bh_ar200);
+    ja = 0;
+    while (ja < n_as2) { downscale_area_to_rgb(&pstr_as, 400, 240); ja = ja + 1; }
+    bench_batch_stop(bh_ar200, n_as2);
+    bench_report(bh_ar200);
+
     # ---- M7(d) decode-latency matrix at three source resolutions ----
     # Audit acceptance: capture DoS-relevant worst-case timing envelope
     # across small / medium / large input sizes. Decode-only (no

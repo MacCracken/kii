@@ -56,6 +56,19 @@ fn _r_make_2x2(pstruct): i64 {
     return 0;
 }
 
+# A 10x1 RGBA8 row into `buf` (40 bytes): black, but white at x = `hot`.
+fn _ar_row(buf, hot): i64 {
+    var x = 0;
+    while (x < 10) {
+        var v = 0;
+        if (x == hot) { v = 255; }
+        store8(buf + x * 4, v); store8(buf + x * 4 + 1, v);
+        store8(buf + x * 4 + 2, v); store8(buf + x * 4 + 3, 255);
+        x = x + 1;
+    }
+    return 0;
+}
+
 # The background composer kii carried from v0.6.0 to v1.5.2, kept here
 # VERBATIM (minus its comments) as the reference for the v1.6.0 swap to
 # darshana's `tty_bg_256_buf`. Test-only: nothing in src/ calls it.
@@ -420,6 +433,103 @@ fn main() {
     # The guard must not reject anything alloc would have honoured: a real
     # geometry still succeeds.
     assert_eq(downscale_to_rgb(&pstr_ov, 16, 8), 0, "ordinary geometry still succeeds");
+
+    test_group("v1.11.0 — downscale_area_to_rgb: each sample is its span's mean");
+    # A 10x1 row, black but for one white pixel at x = `ax_hot`: the thin line
+    # the point sampler misses. _ar_row rebuilds it.
+    var pstr_ar[160];
+    var arbuf[40];
+    var az = 0;
+    while (az < 160) { store64(&pstr_ar + az, 0); az = az + 8; }
+    store64(&pstr_ar + STRUCT_WIDTH_OFFSET, 10);
+    store64(&pstr_ar + STRUCT_HEIGHT_OFFSET, 1);
+    store64(&pstr_ar + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(&pstr_ar + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(&pstr_ar + STRUCT_PIXELS_BUF_OFFSET, &arbuf);
+    store64(&pstr_ar + STRUCT_PIXELS_SIZE_OFFSET, 40);
+    _ar_row(&arbuf, 3);
+    # Point: 10 -> 2 samples pixels 2 and 7, both black.
+    assert_eq(downscale_to_rgb(&pstr_ar, 2, 1), 0, "point 10 -> 2 -> 0");
+    var ad = load64(&pstr_ar + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(ad) + load8(ad + 3), 0, "point 10 -> 2: the white pixel is missed");
+    # Area, exact (every span at most KII_AREA_TAPS = 4 pixels): 10 -> 3 has
+    # spans [0, 3), [3, 7), [7, 10) by pixel centre.
+    assert_eq(downscale_area_to_rgb(&pstr_ar, 3, 1), 0, "area 10 -> 3 -> 0");
+    ad = load64(&pstr_ar + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var al = load64(&pstr_ar + STRUCT_LUMA_PLANE_OFFSET);
+    assert_eq(load8(ad) * 1000 + load8(ad + 3) * 10 + load8(ad + 6), 640,
+      "area 10 -> 3: 0, then 255 / 4 rounded, then 0");
+    assert_eq(load8(al + 1), 63, "area 10 -> 3: the luma plane holds 255 / 4, floored");
+    assert_eq(load64(&pstr_ar + STRUCT_ALPHA_MASK_OFFSET), 0, "opaque row: no mask");
+    # Area, sampled: a 10-pixel span takes 4 taps, at pixels 1, 3, 6 and 8.
+    assert_eq(downscale_area_to_rgb(&pstr_ar, 1, 1), 0, "area 10 -> 1 -> 0");
+    ad = load64(&pstr_ar + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(ad), 64, "area 10 -> 1: the tap on pixel 3 counts, 255 / 4");
+    # ...so a one-pixel line can still fall between taps once a span is longer
+    # than KII_AREA_TAPS. Pinned so a change to the tap spacing is seen.
+    _ar_row(&arbuf, 4);
+    downscale_area_to_rgb(&pstr_ar, 1, 1);
+    ad = load64(&pstr_ar + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(ad), 0, "area 10 -> 1: pixel 4 lies between the taps");
+    # No reduction on either axis: downscale_to_rgb's bytes, and no plane (emit
+    # builds it from the samples).
+    var pstr_ai[160];
+    var pstr_pi[160];
+    _r_make_2x2(&pstr_ai);
+    _r_make_2x2(&pstr_pi);
+    var ai_ok = 1;
+    var aw = 1;
+    while (aw <= 4) {
+        assert_eq(downscale_area_to_rgb(&pstr_ai, aw * 2, aw * 2), 0, "area 2x2 -> 2k x 2k -> 0");
+        downscale_to_rgb(&pstr_pi, aw * 2, aw * 2);
+        if (memeq(load64(&pstr_ai + STRUCT_DOWNSCALED_BUF_OFFSET),
+                  load64(&pstr_pi + STRUCT_DOWNSCALED_BUF_OFFSET), aw * aw * 12) == 0) { ai_ok = 0; }
+        if (load64(&pstr_ai + STRUCT_LUMA_PLANE_OFFSET) != 0) { ai_ok = 0; }
+        aw = aw + 1;
+    }
+    assert_eq(ai_ok, 1, "area == point at the identity and 2x, 3x, 4x upscales");
+    # One axis reduced, one not: 2x2 -> 1x2 averages each row's two pixels.
+    assert_eq(downscale_area_to_rgb(&pstr_ai, 1, 2), 0, "area 2x2 -> 1x2 -> 0");
+    ad = load64(&pstr_ai + STRUCT_DOWNSCALED_BUF_OFFSET);
+    al = load64(&pstr_ai + STRUCT_LUMA_PLANE_OFFSET);
+    assert_eq(load8(ad) * 1000 + load8(ad + 3), 102112, "area 2x2 -> 1x2: R (100+103)/2, (110+113)/2 rounded");
+    assert_eq(load8(al), (54 * 203 + 183 * 205 + 19 * 207) / 512, "area 2x2 -> 1x2: the luma of the row's sums");
+    # Transparency. A 4x1 row: white, then three transparent pixels.
+    var pstr_at[160];
+    var atbuf[16];
+    az = 0;
+    while (az < 16) { store8(&atbuf + az, 0); az = az + 1; }
+    store8(&atbuf, 255); store8(&atbuf + 1, 255); store8(&atbuf + 2, 255); store8(&atbuf + 3, 255);
+    az = 0;
+    while (az < 160) { store64(&pstr_at + az, 0); az = az + 8; }
+    store64(&pstr_at + STRUCT_WIDTH_OFFSET, 4);
+    store64(&pstr_at + STRUCT_HEIGHT_OFFSET, 1);
+    store64(&pstr_at + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(&pstr_at + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(&pstr_at + STRUCT_PIXELS_BUF_OFFSET, &atbuf);
+    store64(&pstr_at + STRUCT_PIXELS_SIZE_OFFSET, 16);
+    assert_eq(downscale_area_to_rgb(&pstr_at, 1, 1), 0, "area 4 -> 1 with alpha -> 0");
+    ad = load64(&pstr_at + STRUCT_DOWNSCALED_BUF_OFFSET);
+    al = load64(&pstr_at + STRUCT_LUMA_PLANE_OFFSET);
+    assert_eq(load8(ad), 255, "one opaque pixel of four: the colour is that pixel's");
+    assert_eq(load8(al), 63, "one opaque pixel of four: luma 255 / 4, floored");
+    assert_eq(load64(&pstr_at + STRUCT_ALPHA_MASK_OFFSET), 0, "a span with an opaque pixel is opaque");
+    assert_eq(downscale_area_to_rgb(&pstr_at, 2, 1), 0, "area 4 -> 2 with alpha -> 0");
+    var am = load64(&pstr_at + STRUCT_ALPHA_MASK_OFFSET);
+    al = load64(&pstr_at + STRUCT_LUMA_PLANE_OFFSET);
+    assert(am != 0, "an all-transparent span sets the mask");
+    assert_eq(load8(am) * 10 + load8(am + 1), 1, "mask: [0, 2) opaque, [2, 4) transparent");
+    assert_eq(load8(al) * 1000 + load8(al + 1), 127000, "luma: 255 / 2 floored, then 0");
+    store8(&atbuf + 3, 200);
+    downscale_area_to_rgb(&pstr_at, 1, 1);
+    ad = load64(&pstr_at + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(load8(ad), 200, "partial alpha composites over black, as downscale_to_rgb");
+    # A point downscale after an area one clears the plane the area one left.
+    downscale_to_rgb(&pstr_at, 2, 1);
+    assert_eq(load64(&pstr_at + STRUCT_LUMA_PLANE_OFFSET), 0, "downscale_to_rgb clears a stale plane");
+    assert_eq(downscale_area_to_rgb(&pstr_at, 0, 1), 0 - 1, "dst_w = 0 -> -1");
+    assert_eq(downscale_area_to_rgb(&pstr_ov, 4611686018427387902, 4611686018427387902), 0 - 1,
+      "area: wrapping dst_w*dst_h*3 -> -1");
 
     # v1.6.0: kii's local `_emit_bg_256_buf` is gone; the half-block emit
     # calls darshana's `tty_bg_256_buf` (darshana 1.2.0). The two groups below

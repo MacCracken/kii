@@ -239,3 +239,45 @@ its own decision ([0011](0011-dithering.md)), applied after this downscale. The
 `--filter {nearest,bilinear,box}` this ADR paired it with is not on the roadmap.
 Nearest-neighbour stays the only resampler. A box filter with `--dither fs` (§ Alternatives)
 remains the obvious next step if a consumer asks for photographic output at tier 1.
+
+## Amendment — v1.11.0 (the ASCII lane samples areas)
+
+This ADR remains **Accepted** for the half-block lane, which still reads one source pixel per
+destination pixel. The ASCII lane no longer uses it: since v1.11.0 each of its sub-samples is
+the mean over the source span it covers (`downscale_area_to_rgb`).
+
+**1. Why the box-filter rejection does not carry over.** § Alternatives rejects a box filter
+because averaging before a 16-colour quantize washes the colour out. The ASCII lane does not
+quantize its sub-samples. It matches their luminance against glyph coverage, and colours each
+cell with the mean of its six samples, which was already an average. With one point per
+region, the match depended on where the point landed:
+- a 2 px line in a 5 px span was either caught at full strength or missed outright;
+- a run of cells along a thin horizontal or vertical line could lose it entirely;
+- the centre rule's tie-break (right and down) made the two diagonals of an X render
+  differently.
+
+[ADR 0007](0007-rendering-mode-taxonomy.md) § v1.11.0 amendment has the measures.
+
+**2. The rule.** Per axis, the span of destination i is the source pixels whose centres lie in
+`[i·W / n, (i+1)·W / n)`; its first pixel is `(2·i·W + n − 1) / (2·n)`.
+- **A span of at most `KII_AREA_TAPS` (4) pixels is read whole,** so up to about a 4× reduction
+  the mean is exact and each source pixel is read once.
+- **A longer span takes 4 evenly spaced taps,** the centre samples of a 4×-finer grid
+  (`((2·(i·4 + j) + 1)·W) / (8·n)`). So no sample reads more than 16 pixels, and the cost
+  stays proportional to the output, as nearest-neighbour's is. Averaging every pixel was
+  measured first. It cost +12 % to +25 % on 6–16 MP images, against +0.1 % to +1.2 % with
+  taps, and the two pick the same glyph in 97.5 % of cells.
+- **A span with no pixel centre** (an axis being enlarged) takes the centre sample of the
+  v1.9.0 amendment.
+- **With no reduction on either axis** every span holds at most the pixel its centre lies on,
+  so the result is nearest-neighbour's exactly, and the sampler hands the frame to
+  `downscale_to_rgb`. Every enlarged ASCII frame is byte-identical to v1.10.0.
+
+**3. Transparency.** A sample is transparent only when none of its pixels is opaque. Its colour
+is the mean of the opaque pixels. Its luminance is the mean over all of them, with transparent
+ones counted as 0, so a stroke on a transparent background reads at its real coverage. The
+sampler writes that luminance plane itself (pstruct +40); `emit_ascii_shape` builds one only
+when the slot is 0.
+
+**4. Exact integers.** The colour means round half up. The luminance floors, as `_ascii_luma`
+does, so a one-pixel span gives the point lane's value. aarch64 frames match x86_64's.

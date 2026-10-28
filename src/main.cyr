@@ -108,7 +108,7 @@ fn _eprint_quant_summary(path, pstruct): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 1.10.0");
+    println("kii 1.11.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -293,10 +293,12 @@ fn main(): i64 {
     #     ascii_rows = target_src_rows/2 (half-block's char-row count). The
     #     shape emit does its own per-cell mean-color quantize, so no
     #     separate quantize_downscaled pass. Keeps aspect right in ~2:1 cells.
+    #     Each sub-sample is the mean over its span (downscale_area_to_rgb,
+    #     v1.11.0), not one point, so thin lines and edges keep their ink.
     if (ascii_lane == 1) {
         var ascii_rows = target_src_rows / 2;
         if (ascii_rows < 1) { ascii_rows = 1; }
-        var adrc = downscale_to_rgb(&pstruct, target_w * 2, ascii_rows * 3);
+        var adrc = downscale_area_to_rgb(&pstruct, target_w * 2, ascii_rows * 3);
         if (adrc != 0) {
             _eprint_path_msg(path, "downscale failed (out of memory)");
             return KII_EXIT_RUN;

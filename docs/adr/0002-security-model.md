@@ -408,3 +408,35 @@ emit surface of the v1.8.0 amendment is unchanged.
 - **The arithmetic is exact integers** (a 256-entry power table, an exact reciprocal for one
   division and an exact shift for the other, each checked over its whole domain in
   `tests/ascii.tcyr`), so every target computes the same glyphs.
+
+## Amendment — v1.11.0 (the area sampler's reads)
+
+[ADR 0005](0005-nearest-neighbor-downscale.md) § v1.11.0 amendment gives the ASCII lane an area
+sampler, `downscale_area_to_rgb`. It reads up to 16 source pixels per sample, at offsets from
+two tables it builds per frame. The emit surface is unchanged.
+
+- **Every read is inside the image.** Each table entry is a source index below its axis's
+  length. A span ends at most at W, since the bound for i = n is W. A tap,
+  `((2m + 1)·W) / (2·n·k)` for m < n·k, is below W. The centre sample is below W, as before.
+- **A fuzz surface checks it**, the twelfth, with 100,000 random images and geometries a run.
+  Images are up to 48 × 48 with three alpha mixes, and outputs up to 96 × 64, so the runs cover
+  enlarged, mixed, exact and tapped axes. Each image is copied between pads of 0 and of 255, and
+  the two copies must give the same samples, mask and plane. Every sample must also equal the
+  definition, computed separately: each source pixel's centre is tested against the span,
+  rather than going through the sampler's bound formula.
+  - Eleven defects were planted. Nine were caught, failing 3,100–10,088 of 20,000 iterations
+    each; they include a bound off by one, a tap one step late and a row stride one pixel long.
+  - The other two are equivalent rewrites, shown by enumeration: the bound's special case for
+    i = 0 (the formula already gives 0, so the case was removed), and `<` for `<=` at the
+    4-pixel limit (on all 356,889 four-pixel spans with W, n ≤ 400 the four taps are the four
+    pixels).
+- **The work is bounded.** Per axis the spans do not overlap, so a frame reads at most
+  max(W, sub_w) × max(H, sub_h) pixels, and at most 16 per sample. A frame reduced on both axes
+  therefore reads each source pixel at most once, which is at most `CHITRA_MAX_PIXELS` (16.7 M).
+  The largest frame the cell cap allows, `--mode ascii --width 1448` on a 4000 × 4000 PNG, takes
+  566 → 701 ms of CPU, with peak RSS unchanged at 140.6 MB.
+- **Allocations.** The luminance plane moves from the emit to the sampler at the same size
+  (one byte a sample, at most 6 MiB). The two tables take 40 bytes per output column and per
+  output row; at any geometry kii produces that is about 6 MiB at most, because an axis being
+  reduced is shorter than its source, which is at most 65,535 pixels. Each allocation is
+  checked, and a failure is the existing `downscale failed (out of memory)`, exit 1.
