@@ -4,6 +4,106 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-10-28
+
+**Toolchain `6.7.12` → `6.7.18`, and every dependency to its newest tag:** darshana `1.3.0` →
+`1.6.0`, cmdit `1.4.0` → `1.5.0`, chitra `1.2.0` → `1.3.1`. No kii code changed except the
+`--version` literal and comments. ⚠ **One thing kii does changes: a PNG past 16 MiB of
+scanlines now renders** instead of being refused (chitra 1.3.0). Every other frame is
+byte-identical to v1.9.0.
+
+Output was compared against v1.9.0 over 472 images × 6 flag sets (stdout, stderr and exit
+status). The images are every JPEG, GIF and BMP under `/usr/share`, every seventh PNG there,
+and the 7 fixtures.
+- **Toolchain alone**, deps held at the v1.9.0 tags: 2,832 of 2,832 are identical.
+- **With the new deps**: 2,820 of 2,832 are identical. The other 12 are the two PNGs past
+  16 MiB in the set (`tests/fixtures/oversize.png` and kitty's 3880×2168 `screenshot.png`),
+  under each flag set. v1.9.0 refused both; v1.9.1 renders them.
+
+**818 assertions** pass on x86_64 and under `cyrius test --aarch64` (decode 208 → 213).
+aarch64 frames match x86_64 in 240 of 240 runs. **8,011,000 fuzz iterations** are all clean,
+at 123 MB peak RSS. Every target and suite builds with zero warnings. The bench is unchanged
+within ~1 % (`docs/benchmarks.md` § v1.9.1).
+
+### Changed
+- **Toolchain `6.7.12` → `6.7.18`.**
+  - `lib/` re-vendored from clean (`rm -rf lib && mkdir lib && rm cyrius.lock && cyrius deps`).
+    It is still 40 files. 23 stdlib files change, plus the three dep bundles.
+  - 6.7.13–6.7.17's migration notes cover struct values, generics, multi-value returns,
+    receives and vector values. kii uses none of them. 6.7.18 changes no language rule.
+  - **The stdlib's sankoch moves 2.8.7 → 2.8.9.** 2.8.8 is a toolchain bump. 2.8.9 moves batch
+    inflate's 32-byte bit reader onto the stack, so a decode no longer keeps 32 B of the arena.
+    Inflate logic is unchanged, so the v1.6.4 audit's three CVE-class results still hold.
+  - `build/kii` 1,012,280 → 1,008,328 bytes (unstripped, DCE off; 1,004,104 with the deps held).
+    `--agnos` 1,026,520 → 1,022,600, `--aarch64` 1,237,312 → 1,237,464.
+- **`[deps.chitra]` `1.2.0` → `1.3.1`.** Nothing frozen moved: the 11 chitra names kii calls
+  and every `ChitraErrCode` value are as before.
+  - ⚠ **A PNG past 16 MiB of inflated scanlines decodes** (1.3.0). From v1.6.0 to v1.9.0 chitra
+    refused it from the header, and kii printed `image too large to decode (pixel data
+    inflates past the decompressor's 16 MiB ceiling)`. That covered any 8-bit RGB PNG above
+    ~5.6 MP and any RGBA one above ~4.2 MP. chitra now inflates to the exact size IHDR implies
+    (`zlib_decompress_capped`), up to its unchanged 4096² pixel cap.
+  - So `IMG_ERR_INFLATE_LIMIT` (17) is unreachable, as chitra's code 35 behind it is. kii keeps
+    the code, its map arm and its text: chitra keeps 35 defined, and the map stays total.
+  - **Checked against a decoder v1.9.0 already trusted.** Three large PNGs (`oversize.png`,
+    kitty's screenshot, a 3000×2000 plasma) were re-encoded as BMPs, whose path never inflates.
+    The screenshot has alpha, so its BMP is 32 bpp with an alpha mask, composited the way kii
+    does. v1.9.1's render of each PNG equals v1.9.0's render of its BMP in 24 of 24 cases
+    (8 flag sets each, including `--color tc --width 200` in both lanes).
+  - 1.3.1 unfilters non-interlaced rows in place and inflates a single IDAT chunk where it
+    lies, so a large PNG costs less than under 1.3.0. Below 16 MiB, output is byte-identical
+    (the corpus above).
+- **`[deps.darshana]` `1.3.0` → `1.6.0`.** Nothing kii calls changed. 1.4.0 adds two SGR
+  scanners and 1.6.0 a predicate. 1.5.0 makes `tty_isatty` per-fd, and console echo-off and
+  flush work, on agnos 1.57.13 and later. kii calls `tty_winsize`, not `tty_isatty`, and all
+  ten darshana functions it calls are body-identical. darshana's AGNOS arm needs cyrius ≥
+  6.7.11, which 6.7.18 is.
+- **`[deps.cmdit]` `1.4.0` → `1.5.0`.** 1.4.1 is a toolchain bump. 1.5.0 fixes bash and fish
+  file completion, which kii does not emit.
+  - **A command line over 2 MiB is read whole** (1.4.2), now that the stdlib's `args_init`
+    reads to EOF. Through v1.9.0 kii refused one with `kii: could not read the full command
+    line`. Measured with 25 arguments of 100,000 bytes under `ulimit -s 65536`: v1.9.0 prints
+    that line, v1.9.1 prints `kii: too many arguments (expected one image path)`. A command
+    line of exactly 2,097,152 bytes is still refused: it is the one length an older stdlib
+    cannot tell from a cut.
+- **`cyrius.lock`** regenerated from clean. It has four commit pins: chitra 1.3.1, cmdit 1.5.0,
+  darshana 1.6.0, and chitra's transitive sankoch, now 2.8.9 to match the stdlib leaf.
+
+### Security
+- ⚠ **What a valid PNG can cost rises, by chitra's design.** ADR 0002 bounded an input at
+  ~256 MB and ~5–6 s. Measured at v1.9.1 (peak RSS, wall clock, `--width 80`):
+
+  | Input | File | v1.9.0 | v1.9.1 |
+  |---|---:|---|---|
+  | 4096² black RGB8 | 49 KB | refused, 13 MB | 117 MB, 0.45 s |
+  | 4096² flat RGBA16, Adam7 | 147 KB | refused, 13 MB | 327 MB, 1.7 s |
+  | 4096² plasma RGBA16 | 97 MB | refused, 227 MB | 513 MB, 9.7 s |
+  | 4096² plasma RGBA16, Adam7 | 99 MB | refused, 227 MB | 643 MB, 10.5 s |
+  | 4096² noise RGBA16, Adam7, padded to 255 MB | 255 MB | refused, 517 MB | 913 MB, 7.2 s |
+
+  - The worst is a file at kii's 256 MB read cap that is also at chitra's pixel cap, Adam7,
+    16-bit. About 517 MB of it is the read, which v1.9.0 paid too: the stdlib's
+    `file_read_whole_max` grows its buffer, and the bump allocator keeps each one it outgrows.
+  - A small file buys up to ~327 MB and ~1.7 s (147 KB of valid Adam7 RGBA16).
+  - The caps are unchanged: the 256 MB read, and chitra's 4096² pixel, 256 MB raw-byte and
+    1100:1 ratio caps. Under `ulimit -v`, from 60 MB to 400 MB, the 97 MB file fails cleanly
+    with `out of memory or image too large`, exit 1.
+  - [ADR 0002](docs/adr/0002-security-model.md) gains a v1.9.1 amendment with these figures
+    and the decision. SECURITY.md's decompression line is rewritten.
+
+### Tests
+- `tests/decode.tcyr` 208 → 213. Group (e2) now pins that `oversize.png` decodes: `IMG_OK`,
+  2370×2370, source colour type 2, `seen_iend`, and every one of its 5,616,900 pixels opaque
+  black. A mutant expecting `0xFE000000` fails it with 5,616,900 mismatches. The
+  `DECOMPRESS_MAX_OUTPUT` = 16 MiB pin is gone, because the line that quoted it can no longer
+  print.
+
+### Docs
+- **Roadmap**: "PNG past 16 MiB inflated" is deleted from § Gated on upstream, since this
+  re-pin ships it. Progressive JPEG is the one gated item left.
+- `state.md`, the README, the getting-started diagnostics table, SECURITY.md, ADR 0002,
+  `docs/benchmarks.md` § v1.9.1 and `docs/doc-health.md` are refreshed.
+
 ## [1.9.0] - 2026-10-16
 
 **Dithering, and pixel-centre sampling.** `--dither ordered` (a 4×4 Bayer matrix) and

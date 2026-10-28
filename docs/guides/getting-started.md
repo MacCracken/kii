@@ -201,7 +201,7 @@ Reading and decoding the file:
 | `<path>: invalid PNG filter type (spec § 9 allows 0–4)` | Filter byte ∉ {0,1,2,3,4} |
 | `<path>: image dimensions are zero or past the policy ceiling (max 16.7M px / 65535 per side / 256 MB)` | A zero width or height, or dimensions or compression ratio past the bomb-defence caps |
 | `<path>: out of memory or image too large (possible decompression bomb)` | An allocation failed, or a PNG's compressed IDAT data past the 256 MB cap |
-| `<path>: image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)` | A valid PNG bigger than sankoch can inflate — about 5.6 megapixels of 8-bit RGB, 4.2 of RGBA (since v1.6.0; it used to read "malformed PNG"). Downscale it first, e.g. with ImageMagick |
+| `<path>: image too large to decode (pixel data inflates past the decompressor's 16 MiB ceiling)` | No longer printed. v1.6.0 to v1.9.0 refused a valid PNG above about 5.6 megapixels of 8-bit RGB (4.2 of RGBA) with it; since v1.9.1 such a PNG renders, up to the 16.7M px ceiling. A very large one can take ~0.5–0.9 GB and several seconds |
 | `<path>: image decode failed` | A decode error with no specific message. Not expected; please report it |
 
 After a successful decode:

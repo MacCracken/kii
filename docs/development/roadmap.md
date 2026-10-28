@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. kii is post-v1; current release **v1.9.0**.
+> below has shipped, it should not be here. kii is post-v1; current release **v1.9.1**.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
@@ -32,15 +32,6 @@ See [ADR 0007](../adr/0007-rendering-mode-taxonomy.md).
   "revisit only when a consumer demonstrably needs it". It reaches kii on a `[deps.chitra]`
   re-pin, as PNG, baseline JPEG, BMP and GIF did, and kii's side is diagnostics, not decode
   ([ADR 0009](../adr/0009-bmp-gif-via-chitra.md)).
-- **PNG past 16 MiB inflated.** `zlib_decompress` still stops at sankoch's 16 MiB
-  `DECOMPRESS_MAX_OUTPUT` (unchanged at 2.8.7). The limit is on inflated scanline bytes,
-  so a PNG above ~5.6 MP of 8-bit RGB (≈4.2 MP of RGBA; greyscale goes past 16 MP) is
-  refused.
-  Since v1.6.0 kii says so: `image too large to decode (… 16 MiB ceiling)`. sankoch 2.7.13
-  shipped `zlib_decompress_capped`, a caller-set ceiling, and chitra's roadmap pins using
-  it to chitra 1.3.0. kii takes it on that re-pin, and the diagnostic then fires only past
-  chitra's new ceiling. sankoch is a stdlib leaf, so re-check the cap at every toolchain
-  bump.
 
 ## Not scheduled (outside kii's control)
 

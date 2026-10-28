@@ -335,3 +335,41 @@ the rows are built. An early draft ran that pass for every mode and made the def
 lane ~19 % slower (0.355 → 0.423 s). It now runs only under `fs`. On RAMGON at
 `--width 200` all four are within noise (0.98–1.04 s per 5 renders), because chitra's decode
 dominates.
+
+## v1.9.1 — toolchain 6.7.12 → 6.7.18, deps to newest
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18` (sankoch **2.8.9** in the stdlib), chitra
+`1.3.1`, darshana `1.6.0`, cmdit `1.5.0`. The v1.9.0 bench (Cyrius 6.7.12, built from
+`git archive HEAD` with its vendored `lib/`) ran interleaved with the new one, three rounds
+each, at load average 0.3–0.9. Each figure is one full `kii-bench` run.
+
+| Bench | v1.9.1 (3 runs) | v1.9.0 (3 runs, same session) |
+|---|---:|---:|
+| `quantize_nearest_rgb @ 1024×1024` | 68 / 67 / 67 ns | 69 / 68 / 67 ns |
+| `end-to-end RAMGON.png → 80×24` | 192.3 / 192.4 / 192.9 ms | 191.0 / 194.1 / 193.5 ms |
+| `end-to-end RAMGON.png → 120×40` | 192.8 / 193.1 / 193.3 ms | 192.9 / 194.2 / 193.6 ms |
+| `end-to-end RAMGON.png → 200×60` | 194.0 / 194.1 / 194.1 ms | 194.5 / 195.4 / 195.6 ms |
+| `png_decode (256² class)` — archlinux-logo | 1.09 / 1.10 / 1.14 ms | 1.12 / 1.11 / 1.11 ms |
+| `png_decode (1024² class)` — starfield | SKIPPED | SKIPPED |
+| `png_decode (2048² class)` — elarun 2560×1600 | 359.1 / 359.5 / 359.6 ms | 359.5 / 361.0 / 361.5 ms |
+
+**Reading**: no change. Every row agrees within ~1 %, inside run-to-run noise. None of the
+bench fixtures crosses 16 MiB of scanlines, so chitra 1.3.x's in-place unfilter and
+single-IDAT inflate save memory here but no measurable time.
+
+**PNGs past 16 MiB** decode for the first time, so they have no v1.9.0 row. Peak RSS and wall
+clock for one `kii --width 80` render:
+
+| Input | File | v1.9.1 |
+|---|---:|---|
+| `tests/fixtures/oversize.png`, 2370² black RGB8 | 16 KB | 41 MB, 0.15 s |
+| kitty `screenshot.png`, 3880×2168 RGBA8 | 891 KB | 71 MB, 0.31 s |
+| 3000×2000 plasma RGB8 | 9.9 MB | 81 MB, 1.0 s |
+| 4096² plasma RGBA16 | 97 MB | 513 MB, 9.7 s |
+| 4096² plasma RGBA16, Adam7 | 99 MB | 643 MB, 10.5 s |
+| 4096² noise RGBA16, Adam7, padded to 255 MB | 255 MB | 913 MB, 7.2 s |
+
+The last row is the largest file but not the slowest: only 79 MB of it is IDAT, and the
+other 176 MB is one ancillary chunk that chitra CRC-checks and skips. Its memory is the
+highest because the read alone costs ~517 MB (v1.9.0 paid the same before refusing it). The
+worst-case bounds are recorded in [ADR 0002](adr/0002-security-model.md) § v1.9.1 amendment.

@@ -352,3 +352,38 @@ The new allocations are bounded by limits already in force:
 Every allocation is checked, and a failure is reported as an error (exit 1). The arithmetic
 is exact integers: the carried error stays within ±16·255 per channel, far inside an i64.
 The fuzz harness's emit surface now rotates through every tier × dither pair.
+
+
+## Amendment — v1.9.1 (a valid PNG can cost more, by chitra's design)
+
+chitra 1.3.0 drops the 16 MiB inflate ceiling recorded in the v1.6.4 amendment (item 3). A
+PNG past 16 MiB of scanlines is no longer refused from the header: chitra inflates through
+`zlib_decompress_capped` with the exact size IHDR implies as the ceiling, so the file decodes.
+`IMG_ERR_INFLATE_LIMIT` is unreachable from v1.9.1, as chitra's code 35 behind it is.
+
+The caps that bound an input are unchanged: kii's 256 MB read (`KII_MAX_RAW_BYTES`), chitra's
+4096² pixel cap, its 256 MB raw-byte cap and its 1100:1 compression-ratio cap. What changes
+is the cost inside them. § Consequences bounded a PNG at ~256 MB and ~5–6 s. Measured on the
+x86_64 dev host at v1.9.1 (peak RSS, wall clock, `--width 80`):
+
+| Input | File | v1.9.0 | v1.9.1 |
+|---|---:|---|---|
+| 4096² black RGB8 | 49 KB | refused, 13 MB | 117 MB, 0.45 s |
+| 4096² flat RGBA16, Adam7 | 147 KB | refused, 13 MB | 327 MB, 1.7 s |
+| 4096² plasma RGBA16 | 97 MB | refused, 227 MB | 513 MB, 9.7 s |
+| 4096² plasma RGBA16, Adam7 | 99 MB | refused, 227 MB | 643 MB, 10.5 s |
+| 4096² noise RGBA16, Adam7, padded to 255 MB | 255 MB | refused, 517 MB | 913 MB, 7.2 s |
+
+- **The worst case is ~0.9 GB and ~10 s.** The largest figure is a file at the read cap that is
+  also at the pixel cap, interlaced and 16-bit. About 517 MB of it is the read, which v1.9.0
+  paid too: the stdlib's `file_read_whole_max` grows its buffer, and the bump allocator keeps
+  each one it outgrows. The rest is chitra's working set, which its 1.3.1 notes put at ~3× the
+  RGBA8 output for a non-interlaced PNG and ~5× for Adam7, plus the compressed size when the
+  IDAT is split.
+- **A small file buys up to ~327 MB and ~1.7 s.** That is the amplification the ratio cap
+  allows at the pixel cap: 147 KB of valid, highly compressible Adam7 RGBA16.
+- **The decision.** kii takes chitra's posture rather than keeping a ceiling of its own.
+  Refusing ordinary photos (anything above ~5.6 MP of RGB) was the larger cost, and the
+  roadmap had pinned this re-pin as the fix since v1.6.3. A caller that must hold kii to a
+  smaller footprint can run it under `ulimit -v`. A failed allocation is reported as
+  `out of memory or image too large`, exit 1.

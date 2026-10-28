@@ -516,27 +516,36 @@ fn main() {
     assert_eq(kii_decode_image(&path_bz, &pstr_bz), IMG_ERR_DECOMPRESS,
       "bad-zlib IDAT → IMG_ERR_DECOMPRESS");
 
-    # (e2) v1.6.0 — a VALID PNG too large for the decompressor. Through v1.5.2
-    #     chitra's CHITRA_ERR_INFLATE_LIMIT (35, chitra 1.0.1) had no arm in
-    #     _kii_map_chitra_err, so this file fell to the generic fallback and kii
-    #     printed "malformed PNG (bad chunk, ordering, or palette)" for an image
-    #     ImageMagick reads without complaint. tests/fixtures/oversize.png is a
-    #     2370x2370 8-bit RGB PNG of black (16,853,070 bytes inflated, 16,447 on
-    #     disk) — just past sankoch's 16 MiB DECOMPRESS_MAX_OUTPUT, the bracket
-    #     chitra's own 1.0.1 notes measure (2200x2200 decodes, 2370x2370 does not).
-    test_group("v1.6.0 — a valid PNG over the decompressor ceiling → INFLATE_LIMIT");
+    # (e2) v1.9.1 — a VALID PNG past 16 MiB of scanlines decodes.
+    #     tests/fixtures/oversize.png is a 2370x2370 8-bit RGB PNG of black
+    #     (16,853,070 bytes inflated, 16,447 on disk), just past sankoch's 16 MiB
+    #     DECOMPRESS_MAX_OUTPUT. From v1.6.0 to v1.9.0 chitra refused it from the
+    #     header as CHITRA_ERR_INFLATE_LIMIT (35) and kii printed "image too
+    #     large to decode". chitra 1.3.0 inflates to the exact size IHDR implies
+    #     instead, so the file decodes; code 35 stays defined (chitra's enum is
+    #     frozen) but is unreachable, and kii keeps its arm so the map stays total.
+    test_group("v1.9.1 — a valid PNG past 16 MiB of scanlines decodes (chitra 1.3.0)");
     assert_eq(_kii_map_chitra_err(CHITRA_ERR_INFLATE_LIMIT), IMG_ERR_INFLATE_LIMIT,
-      "INFLATE_LIMIT → INFLATE_LIMIT (not the generic malformed fallback)");
+      "INFLATE_LIMIT → INFLATE_LIMIT (unreachable, still not the generic fallback)");
     var pstr_ol[160];
-    assert_eq(kii_decode_image("tests/fixtures/oversize.png", &pstr_ol), IMG_ERR_INFLATE_LIMIT,
-      "oversize.png (2370x2370 RGB) → IMG_ERR_INFLATE_LIMIT");
-    assert_eq(load64(&pstr_ol + STRUCT_FORMAT_OFFSET), KII_FMT_PNG,
-      "oversize.png is tagged PNG (the sniff ran before the refusal)");
-    # main.cyr's diagnostic names the ceiling as "16 MiB". Pin the number it
-    # quotes, so a sankoch that moves the ceiling fails here instead of
-    # leaving kii's message wrong.
-    assert_eq(DECOMPRESS_MAX_OUTPUT, 16777216,
-      "sankoch's DECOMPRESS_MAX_OUTPUT is still the 16 MiB main.cyr quotes");
+    assert_eq(kii_decode_image("tests/fixtures/oversize.png", &pstr_ol), IMG_OK,
+      "oversize.png (2370x2370 RGB) → IMG_OK");
+    assert_eq(load64(&pstr_ol + STRUCT_FORMAT_OFFSET), KII_FMT_PNG, "oversize.png is tagged PNG");
+    assert_eq(load64(&pstr_ol + STRUCT_WIDTH_OFFSET),  2370, "oversize width = 2370");
+    assert_eq(load64(&pstr_ol + STRUCT_HEIGHT_OFFSET), 2370, "oversize height = 2370");
+    assert_eq(load64(&pstr_ol + STRUCT_SRC_COLOR_TYPE_OFFSET), 2, "oversize src color_type = 2 (RGB)");
+    assert_eq(load64(&pstr_ol + STRUCT_PIXELS_SIZE_OFFSET), 2370 * 2370 * 4, "pixels size = 2370×2370×4");
+    assert_eq(load64(&pstr_ol + STRUCT_SEEN_IEND_OFFSET), 1, "oversize.png saw IEND");
+    # Every pixel, not a sample: the fixture is solid black, so each RGBA8
+    # word must read 0xFF000000 (R = G = B = 0, A = 255).
+    var olpx = load64(&pstr_ol + STRUCT_PIXELS_BUF_OFFSET);
+    var ol_bad = 0;
+    var ol_i = 0;
+    while (ol_i < 2370 * 2370) {
+        if (load32(olpx + ol_i * 4) != 0xFF000000) { ol_bad = ol_bad + 1; }
+        ol_i = ol_i + 1;
+    }
+    assert_eq(ol_bad, 0, "all 5,616,900 oversize pixels are opaque black");
 
     # (f) a missing path → OPEN.
     test_group("re-fold — kii_decode_image (missing path → OPEN)");
