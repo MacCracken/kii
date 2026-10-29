@@ -33,21 +33,24 @@ fn main() {
     # Until v1.8.0 kii_validate_color accepted 8 and 16 after an int parse.
     # Now cmdit refuses anything else during the parse, and kii_color_tier
     # maps the choice to quant.cyr's tier.
-    test_group("v1.8.0 — --color 8|16|256|tc");
-    var cvals[48];
+    # v2.2.0 adds none (KII_TIER_NONE), the ASCII lane's colourless form.
+    test_group("v1.8.0 — --color 8|16|256|tc, and none since v2.2.0");
+    var cvals[56];
     store64(&cvals + 0,  "8");
     store64(&cvals + 8,  "16");
     store64(&cvals + 16, "256");
     store64(&cvals + 24, "tc");
-    store64(&cvals + 32, "7");
-    store64(&cvals + 40, "24");
-    var ctiers[32];
+    store64(&cvals + 32, "none");
+    store64(&cvals + 40, "7");
+    store64(&cvals + 48, "24");
+    var ctiers[40];
     store64(&ctiers + 0,  KII_TIER_8);
     store64(&ctiers + 8,  KII_TIER_16);
     store64(&ctiers + 16, KII_TIER_256);
     store64(&ctiers + 24, KII_TIER_TC);
+    store64(&ctiers + 32, KII_TIER_NONE);
     var cv = 0;
-    while (cv < 6) {
+    while (cv < 7) {
         var fsc = cmdit_new("kii");
         kii_register_flags(fsc);
         var argvc[24];
@@ -55,7 +58,7 @@ fn main() {
         store64(&argvc + 8,  "--color");
         store64(&argvc + 16, load64(&cvals + cv * 8));
         var rc_c = cmdit_parse_argv(fsc, 3, &argvc);
-        if (cv < 4) {
+        if (cv < 5) {
             assert_eq(rc_c, CMDIT_OK, "a listed --color parses");
             assert_eq(kii_color_tier(fsc), load64(&ctiers + cv * 8), "--color maps to its tier");
         } else {
@@ -63,7 +66,7 @@ fn main() {
             assert_eq(cmdit_error(fsc), CMDIT_ERR_BAD_ENUM, "error = BAD_ENUM");
             assert_streq(kii_err_flag_name(fsc), "color", "BAD_ENUM names --color");
             assert_streq(kii_parse_error_line(cmdit_error(fsc), kii_err_flag_name(fsc)),
-              "kii: --color must be 8, 16, 256 or tc\n", "the --color line");
+              "kii: --color must be 8, 16, 256, tc or none\n", "the --color line");
         }
         cv = cv + 1;
     }
@@ -73,6 +76,47 @@ fn main() {
     store64(&argvcd + 0, "kii");
     assert_eq(cmdit_parse_argv(fscd, 1, &argvcd), CMDIT_OK, "no --color parses");
     assert_eq(kii_color_tier(fscd), KII_TIER_16, "the default tier is 16");
+
+    # ---- v2.2.0: --invert, and the settings only the ASCII lane takes ----
+    test_group("v2.2.0 — --invert / -i is a bool, off by default");
+    var argvi[24];
+    store64(&argvi + 0, "kii");
+    var fsi0 = cmdit_new("kii");
+    kii_register_flags(fsi0);
+    assert_eq(cmdit_parse_argv(fsi0, 1, &argvi), CMDIT_OK, "no --invert parses");
+    assert_eq(cmdit_get_bool(fsi0, KII_F_INVERT), 0, "--invert is off by default");
+    var fsi1 = cmdit_new("kii");
+    kii_register_flags(fsi1);
+    store64(&argvi + 8, "--invert");
+    assert_eq(cmdit_parse_argv(fsi1, 2, &argvi), CMDIT_OK, "--invert parses");
+    assert_eq(cmdit_get_bool(fsi1, KII_F_INVERT), 1, "--invert turns it on");
+    var fsi2 = cmdit_new("kii");
+    kii_register_flags(fsi2);
+    store64(&argvi + 8, "-i");
+    assert_eq(cmdit_parse_argv(fsi2, 2, &argvi), CMDIT_OK, "-i parses");
+    assert_eq(cmdit_get_bool(fsi2, KII_F_INVERT), 1, "-i is --invert");
+    var fsi3 = cmdit_new("kii");
+    kii_register_flags(fsi3);
+    store64(&argvi + 8, "--invert=1");
+    assert_eq(cmdit_parse_argv(fsi3, 2, &argvi), CMDIT_RESULT_ERR, "--invert=1 is refused");
+    assert_eq(cmdit_error(fsi3), CMDIT_ERR_UNEXPECTED_VALUE, "error = UNEXPECTED_VALUE");
+    assert_streq(kii_err_flag_name(fsi3), "invert", "the error names --invert");
+
+    test_group("v2.2.0 — --invert and --color none need --mode ascii");
+    assert_eq(kii_lane_conflict_line(KII_MODE_ASCII, KII_TIER_NONE, 1), 0, "ascii takes both");
+    assert_eq(kii_lane_conflict_line(KII_MODE_ASCII, KII_TIER_16, 0), 0, "ascii takes neither");
+    assert_eq(kii_lane_conflict_line(KII_MODE_HALFBLOCK, KII_TIER_16, 0), 0, "half-block without them");
+    assert_eq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_TC, 0), 0, "blocks without them");
+    assert_streq(kii_lane_conflict_line(KII_MODE_HALFBLOCK, KII_TIER_NONE, 0),
+      "kii: --color none applies to --mode ascii only\n", "half-block refuses --color none");
+    assert_streq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_NONE, 0),
+      "kii: --color none applies to --mode ascii only\n", "blocks refuses --color none");
+    assert_streq(kii_lane_conflict_line(KII_MODE_HALFBLOCK, KII_TIER_8, 1),
+      "kii: --invert applies to --mode ascii only\n", "half-block refuses --invert");
+    assert_streq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_256, 1),
+      "kii: --invert applies to --mode ascii only\n", "blocks refuses --invert");
+    assert_streq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_NONE, 1),
+      "kii: --color none applies to --mode ascii only\n", "both: the --color line is the one printed");
 
     # ---- v1.7.0: --mode is a cmdit enum ------------------------------
     # Until v1.7.0 kii validated --mode after the parse (kii_validate_mode)
@@ -424,7 +468,7 @@ fn main() {
     # v1.8.0: BAD_ENUM names the flag it came from (--color or --mode); with
     # no flag named it has nothing to say beyond the generic line.
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "mode"), "kii: --mode must be halfblock, ascii or blocks\n", "BAD_ENUM / mode");
-    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "color"), "kii: --color must be 8, 16, 256 or tc\n", "BAD_ENUM / color");
+    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "color"), "kii: --color must be 8, 16, 256, tc or none\n", "BAD_ENUM / color");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "dither"), "kii: --dither must be none, ordered or fs\n", "BAD_ENUM / dither");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, 0), "kii: argument parse error\n", "BAD_ENUM / no flag");
 

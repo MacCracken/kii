@@ -4,6 +4,84 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-29
+
+**The ASCII lane on light backgrounds, and without colour**
+([ADR 0007](docs/adr/0007-rendering-mode-taxonomy.md) and
+[ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md), § v2.2.0). Two opt-in
+settings for `--mode ascii`. Without them every frame in every lane is byte-identical to
+2.1.0: 5,192 of 5,192 corpus cases (472 images, 11 flag sets over the three lanes), with the
+same stderr and exit codes.
+
+### Added
+
+- **`--invert` / `-i`: dark is ink.** The ASCII lane has read light as ink, so on a light
+  terminal its art came out as a negative. With `--invert`, an opaque pixel's ink is its
+  negative's luminance, and partial alpha (128–254) composites over white rather than black.
+  A transparent pixel still has no ink, and each glyph keeps its cell's colour. An inverted
+  frame therefore draws exactly the glyphs of the image's negative (each channel `255 − c`,
+  alpha kept).
+  - Over the corpus's 422 PNG, GIF and BMP images, at `--width 40` and `120`, every inverted
+    frame draws its ImageMagick negative's glyphs exactly (843 frames, plus one both refuse as
+    too large). ImageMagick's decode was first checked against chitra's for each image.
+  - Glyph colours are unchanged in the 91 images without partial alpha. Of all 2,686,892
+    cells drawn in both frames, 206,559 (7.7 %) change colour, every one in the 331 images
+    with partial alpha, from the white composite.
+- **`--color none`: glyphs only.** A row is its glyphs and a newline. There are no colour
+  escapes and no closing reset, so the output is plain text, the `jp2a` kind, for files,
+  logs and mail.
+  - Because a glyph never depends on its colour, a colourless frame is the coloured frame
+    with its escapes removed. That holds in all 2,826 corpus cases tried (six flag sets: every
+    tier and dither, with and without `--invert`, both widths).
+  - `--dither` changes nothing at `none`, as at `tc`.
+  - The name is chafa's (`--colors none`). kii does not read `NO_COLOR`, as it does not read
+    `COLORTERM`; `--color none` is the explicit form.
+  - jp2a's default output is `--mode ascii --color none --invert`.
+- **Both are refused in the half-block and blocks lanes** (exit 2, with the help):
+  `kii: --invert applies to --mode ascii only` and
+  `kii: --color none applies to --mode ascii only`. Those lanes draw colours, not ink, and
+  refusing keeps both names free for a later meaning there.
+- `--verbose` reports `→ no color`, and `, inverted` under `--invert`. An unknown `--color`
+  now reads `kii: --color must be 8, 16, 256, tc or none`. `--help` shows both settings.
+- **Example 04**: the Arch logo as plain text (`docs/examples/04-ascii-plain-text/`).
+
+### Performance
+
+- **Without the new flags, CPU is unchanged** within run-to-run noise. Interleaved, fastest
+  run: RAMGON `--mode ascii --width 200` 221.42 → 221.35 ms; a 256-pixel icon there
+  5.03 → 5.04 ms; RAMGON in the half-block lane at `--width 120` 205.21 → 205.32 ms.
+  - A first draft folded the inverted and plain point-plane loops into one. It cost the icon
+    2.6 %, so the inverted loop is separate.
+- `--invert` costs 0.7–1.1 % on RAMGON, which has more cells with ink to match under it.
+- `--color none` is faster: the archlinux logo 5.90 → 5.39 ms.
+
+### Tests
+
+- **1,035 assertions**, up from 984.
+  - cli 206 → 226: `--color none`, `--invert` / `-i` / `--invert=1`, and every lane pairing
+    of the refusal.
+  - quant 171 → 172.
+  - render 243 → 263: the inverted area and point planes, white compositing, and composers
+    that refuse every code at `none`.
+  - ascii 67 → 77: inverted rows, and colourless rows with and without codes.
+- **A 16th fuzz surface** (50,000 iterations, 8,621,000 in all). A random image and its
+  negative are sampled through both plane builders: the inverted plane must equal the
+  negative's byte for byte. Each colourless row must equal the coloured row, at a random tier
+  and dither, with its escapes removed, and be exactly `cols` glyphs and a LF. It draws from
+  `_fuzz_rand`'s high bits.
+- Of 16 defects planted in the new code, the unit suite catches all 16. The fuzz surface
+  catches the 11 that change a frame; the other five are in the CLI and the escape
+  composers.
+- `scripts/check-builds-agree.sh` gains three ASCII lanes (`--invert`, `--color none`, both
+  with `--dither fs --verbose`) and four CLI cases: 144 → 175 cases.
+
+### Documentation
+
+- ADR 0007 amended: `--invert` and `--color none`, why both are refused in the other lanes,
+  and its old rejection of `--color none` revisited. ADR 0010 amended: the `none` tier, `NO_COLOR`,
+  and white compositing under `--invert`. ADR 0002: the emit surface does not grow.
+- The roadmap's 2.2.0 section is removed; 2.3.0 (Braille) is next.
+
 ## [2.1.0] - 2026-10-29
 
 **The half-block lane reuses its colour state**

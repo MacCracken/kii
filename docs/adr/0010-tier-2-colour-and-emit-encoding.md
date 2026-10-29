@@ -173,3 +173,35 @@ unchanged: the console's CP437 fonts cannot draw its glyphs anyway
 ([ADR 0012](0012-block-elements-lane.md)). The ASCII lane draws one colour a cell, always as
 a foreground, so it meets only the stuck bold. Clearing that (SGR 22 before a dim
 foreground that follows a bright one) is a roadmap candidate.
+
+## Amendment — v2.2.0 (a tier with no colour, and a light background)
+
+This ADR remains **Accepted**. `--color` gains a fifth value, and § 5's compositing rule gains
+a case. Without them every frame is byte-identical to 2.1.0.
+
+**1. `--color none`.** `--color` is the enum `8 | 16 | 256 | tc | none`, still defaulting to
+16. `none` (`KII_TIER_NONE`) is the tier with no colours, and it sends no SGR at all:
+- `_kii_sgr_fg` and `_kii_sgr_bg` refuse every code at this tier, including the default
+  colour's 39 and 49, so no lane can send an escape at it;
+- the ASCII lane, the one lane that takes it, drops the foreground escapes and the row's
+  closing SGR 0, which leaves glyphs and newlines ([ADR 0007](0007-rendering-mode-taxonomy.md)
+  § v2.2.0);
+- the half-block and blocks lanes refuse it as a usage error;
+- `--dither` changes nothing at this tier, since nothing is quantized, just as at `tc`.
+
+A frame at `none` sets nothing, so it resets nothing either: it shows in whatever attributes
+the terminal already has. An unknown `--color` now reads `kii: --color must be 8, 16, 256, tc
+or none`, and `--verbose` reports `→ no color`.
+
+**2. `NO_COLOR` is not read.** The [no-color.org](https://no-color.org) convention asks
+programs to drop colour when that variable is set. kii stays environment-blind for 0003's
+reason, the reason it does not read `COLORTERM`: the same command must give the same bytes
+everywhere. `--color none` is the explicit form. A caller that honours `NO_COLOR` can pass it.
+
+**3. § 5, transparency, under `--invert`.** Partial alpha (128–254) is composited over
+**white** when `--invert` is on, and over black otherwise, as before. `--invert` is the ASCII
+lane's light-background setting ([ADR 0007](0007-rendering-mode-taxonomy.md) § v2.2.0), so the
+image is taken to sit on white. The composite is `255 − ⌊((255 − c) a + 127) / 255⌋`, the
+negative's composite over black, negated back, which keeps an inverted frame exactly its
+negative's glyphs. The threshold (128) and the mask are unchanged, and a transparent pixel
+still has no ink and no colour.

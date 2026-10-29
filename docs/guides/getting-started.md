@@ -66,10 +66,11 @@ Options:
   -h, --help	show this help and exit
   -V, --version	print version and exit
   -w, --width <int>	output width in columns (0 = match terminal)
-  -c, --color <8|16|256|tc>	colour tier (default: 16)
+  -c, --color <8|16|256|tc|none>	colour tier (none: ASCII glyphs only) (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
   -m, --mode <halfblock|ascii|blocks>	render mode (default: halfblock)
   -d, --dither <none|ordered|fs>	dithering (default: none)
+  -i, --invert	ASCII lane: dark is ink, for light backgrounds
 
 Examples:
   kii --version                              # version + etymology
@@ -80,6 +81,8 @@ Examples:
   kii --verbose image.png                    # frame + dimensions/format on stderr
   kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
   kii --mode blocks image.png                # every Block Element: 8x8 shapes, 2 colours a cell
+  kii --mode ascii --invert image.png        # dark is ink, for a light terminal
+  kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
   kii --dither fs photo.jpg                  # error-diffused gradients (or ordered)
   kii image.png > frame.ansi                 # capture pure ANSI bytes
@@ -108,9 +111,14 @@ Examples:
     since each terminal's theme sets them).
   - `tc` — 24-bit truecolour (`\x1b[38;2;R;G;Bm`).
 
-  kii does not read `COLORTERM` or `TERM`: the tier is what you pass.
-  Within a row, an escape is written only when the colour changes, so a
-  tier-16 frame is far smaller than it was before v1.8.0.
+  - `none` (since v2.2.0, `--mode ascii` only) — no colour and no escape
+    at all: each row is its glyphs and a newline, the plain text of
+    `jp2a`, for pipes, logs and mail. It is the coloured frame with its
+    escapes taken out, glyph for glyph.
+
+  kii does not read `COLORTERM`, `TERM` or `NO_COLOR`: the tier is what
+  you pass. Within a row, an escape is written only when the colour
+  changes, so a tier-16 frame is far smaller than it was before v1.8.0.
 - **`--mode halfblock|ascii|blocks`** (`-m`) — The render lane.
   - `halfblock` (the default) draws every cell in two colours, one per
     half. Since v2.1.0 a cell is `▀` or `▄` (the same two colours either
@@ -118,7 +126,9 @@ Examples:
     whichever needs fewest escapes. It renders on any font that has
     `▀`, `▄` and `█`, which includes CP437 console fonts.
   - `ascii` draws a text glyph per cell, chosen by its shape, in one
-    colour ([ADR 0007](../adr/0007-rendering-mode-taxonomy.md)).
+    colour ([ADR 0007](../adr/0007-rendering-mode-taxonomy.md)). It
+    reads light as ink, for a dark terminal; `--invert` reverses that.
+    It is the only lane that takes `--invert` or `--color none`.
   - `blocks` (since v2.0.0, [ADR 0012](../adr/0012-block-elements-lane.md))
     samples each cell 8 × 8 and draws the Block Element (`▁`..`▇`,
     `▏`..`▉`, the quadrants, `▚ ▞`, `▀ ▄ ▌ ▐ █`) that fits it best, in
@@ -257,7 +267,9 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: short flags take no attached value and cannot be bundled (use -w 40 -v, not -w40 or -wv)` | `-w40`, `-wv`, `-v=1` and similar |
 | `kii: --verbose takes no value` | A switch given `=value`; the line names it (`--help`, `--version` likewise) |
 | `kii: flag takes no value` | The same, when no flag can be named |
-| `kii: --color must be 8, 16, 256 or tc` | Any other `--color` value (`8 or 16` before v1.8.0) |
+| `kii: --color must be 8, 16, 256, tc or none` | Any other `--color` value (`8 or 16` before v1.8.0; `none` since v2.2.0) |
+| `kii: --color none applies to --mode ascii only` | `--color none` in the half-block or blocks lane (since v2.2.0) |
+| `kii: --invert applies to --mode ascii only` | `--invert` in the half-block or blocks lane (since v2.2.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
 | `kii: --mode must be halfblock, ascii or blocks` | Any other `--mode` value |
 | `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |

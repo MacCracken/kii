@@ -312,6 +312,7 @@ fn main() {
     # v1.8.0: 256 and KII_TIER_TC (24) are tiers too.
     assert_eq(quant_set_tier(256), 256, "set 256 → 256");
     assert_eq(quant_set_tier(KII_TIER_TC), 24, "set truecolour → 24");
+    assert_eq(quant_set_tier(KII_TIER_NONE), 1, "set none → 1 (v2.2.0)");
     assert_eq(quant_set_tier(16), 16, "back to 16");
     # Any other value must be IGNORED, never widen the loop past the
     # palette table — the guard that keeps a bad tier from reading OOB.

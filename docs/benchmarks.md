@@ -550,3 +550,29 @@ which emits every row in process, 205.7 / 204.6 / 208.0 ms against 205.8 / 219.7
 The second 2.1.0 round ran slower on every row, including the ones the change cannot
 reach (`downscale_to_rgb` 113 → 244 µs, both decodes), so it is load from the shared host;
 the other two rounds match 2.0.1 within ~1 % on every row.
+
+## v2.2.0 — `--invert` and `--color none`
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`. CPU per run (user + system), interleaved
+rounds, fastest round:
+
+| Render | 2.1.0 | 2.2.0 |
+|---|---:|---:|
+| RAMGON, `--mode ascii --width 200` | 221.42 ms | 221.35 ms |
+| ui-icons 256 × 240, `--mode ascii --width 200` (point plane) | 5.03 ms | 5.04 ms |
+| archlinux-logo, `--mode ascii --width 200` | 5.84 ms | 5.88 ms |
+| RAMGON, `--width 120` (half-block) | 205.21 ms | 205.32 ms |
+
+A first draft built the point plane in one loop for both settings; the icon row then read
+5.16 ms (+2.6 %), so `--invert` has a loop of its own and the default loops are 2.1.0's.
+
+The new settings, 2.2.0 only (a quieter host, so not comparable with the table above):
+
+| Render | plain | `--invert` | `--color none` |
+|---|---:|---:|---:|
+| RAMGON, `--mode ascii --width 200` | 212.22 ms | 213.67 ms | 210.56 ms |
+| archlinux-logo, `--mode ascii --width 200` | 5.90 ms | — | 5.39 ms |
+
+`--invert` gives RAMGON more cells with ink to match (15,693 of 16,000, against 12,976).
+`--color none` quantizes nothing and writes fewer bytes: the logo at `--width 60` is
+1,830 bytes against 2,090.

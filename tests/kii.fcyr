@@ -80,6 +80,7 @@ var AREA_FUZZ_ITERS      = 100000;    # v1.11.0 — the ASCII lane's area sample
 var BLK_CELL_FUZZ_ITERS   = 200000;    # v2.0.0 — the blocks lane's shape choice vs brute force
 var BLK_FRAME_FUZZ_ITERS  = 20000;     # v2.0.0 — whole blocks frames, pad differential
 var HB_FUZZ_ITERS         = 200000;    # v2.1.0 — half-block rows decoded back to their colours
+var INV_FUZZ_ITERS        = 50000;     # v2.2.0 — --invert against the negative, --color none against the escapes
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -1200,6 +1201,170 @@ fn fuzz_halfblock_iter(q, out): i64 {
     return 0;
 }
 
+# ---- v2.2.0 --invert / --color none fuzz surface --------------------
+# Each iteration builds a random RGBA8 image X (1..48 a side; alpha all
+# opaque, drawn from the threshold's neighbourhood, or any byte) and its
+# negative N (each channel 255 - c, alpha kept), and samples both for a random
+# 1..24 x 1..8 cells (2 x 3 sub-samples a cell, so upscales, delegated frames
+# and tapped spans all occur). The checks:
+#   - X's plane with --invert on is N's plane with it off, byte for byte, and
+#     the masks agree, through both builders (the area loop, and
+#     _ascii_lum_plane for a delegated frame);
+#   - an opaque X keeps its samples under --invert;
+#   - at --color none, X's inverted rows are N's plain rows exactly, and each
+#     is `cols` printable glyphs and a LF, with no ESC;
+#   - at a random tier and dither, each coloured row with its escapes removed
+#     is the colourless row (under fs the codes come from _ascii_cell_codes).
+# Draws use bits 16 and up of _fuzz_rand, as the half-block surface's do. It
+# runs after every older surface.
+
+# The image at `pix` as a pstruct in `ps`. Returns 0.
+fn _fz_inv_ps(ps, pix, w, h): i64 {
+    var i = 0;
+    while (i < 160) { store64(ps + i, 0); i = i + 8; }
+    store64(ps + STRUCT_WIDTH_OFFSET, w);
+    store64(ps + STRUCT_HEIGHT_OFFSET, h);
+    store64(ps + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(ps + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(ps + STRUCT_PIXELS_BUF_OFFSET, pix);
+    store64(ps + STRUCT_PIXELS_SIZE_OFFSET, w * h * 4);
+    return 0;
+}
+
+# Sample `ps` for cols x rows cells with --invert set to `inv`, and leave its
+# plane in the pstruct as emit_ascii_shape would. Returns 0, or -1.
+fn _fz_inv_sample(ps, cols, rows, inv): i64 {
+    downscale_set_invert(inv);
+    if (downscale_area_to_rgb(ps, cols * 2, rows * 3) != 0) { return 0 - 1; }
+    if (load64(ps + STRUCT_LUMA_PLANE_OFFSET) == 0) {
+        var lum = _ascii_lum_plane(load64(ps + STRUCT_DOWNSCALED_BUF_OFFSET),
+            load64(ps + STRUCT_ALPHA_MASK_OFFSET), cols * 2, rows * 3);
+        if (lum == 0) { return 0 - 1; }
+        store64(ps + STRUCT_LUMA_PLANE_OFFSET, lum);
+    }
+    return 0;
+}
+
+# Row cy of the frame sampled into `ps`, into `out`, with cell codes `codes`
+# (or 0). Returns its length, or -1.
+fn _fz_inv_row(ps, codes, cols, rows, cy, out): i64 {
+    return emit_ascii_shape_row_buf(load64(ps + STRUCT_DOWNSCALED_BUF_OFFSET),
+        load64(ps + STRUCT_ALPHA_MASK_OFFSET), load64(ps + STRUCT_LUMA_PLANE_OFFSET),
+        codes, cols * 2, rows * 3, cy, cols, out, 0);
+}
+
+# The n bytes at `buf` with every ESC [ ... m removed, written back in place.
+# Returns the new length, or -1 if an escape is not closed.
+fn _fz_inv_strip(buf, n): i64 {
+    var i = 0;
+    var o = 0;
+    while (i < n) {
+        if (load8(buf + i) == 27) {
+            while (i < n && load8(buf + i) != 109) { i = i + 1; }
+            if (i >= n) { return 0 - 1; }
+            i = i + 1;
+        } else {
+            store8(buf + o, load8(buf + i));
+            o = o + 1;
+            i = i + 1;
+        }
+    }
+    return o;
+}
+
+fn fuzz_invert_iter(pix, neg, out_a, out_b): i64 {
+    var w = 1 + _fz_hb_rand(48);
+    var h = 1 + _fz_hb_rand(48);
+    var cols = 1 + _fz_hb_rand(24);
+    var rows = 1 + _fz_hb_rand(8);
+    var amode = _fz_hb_rand(3);
+    var n = w * h * 4;
+    var i = 0;
+    while (i < n) {
+        var v = _fz_hb_rand(256);
+        if (i % 4 == 3) {
+            if (amode == 0) { v = 255; }
+            if (amode == 1) {
+                var pick = _fz_hb_rand(6);
+                v = 255;
+                if (pick == 0) { v = 0; }
+                if (pick == 1) { v = KII_ALPHA_THRESHOLD - 1; }
+                if (pick == 2) { v = KII_ALPHA_THRESHOLD; }
+                if (pick == 3) { v = 200; }
+            }
+            store8(pix + i, v);
+            store8(neg + i, v);
+        } else {
+            store8(pix + i, v);
+            store8(neg + i, 255 - v);
+        }
+        i = i + 1;
+    }
+    var ps_x[160];
+    var ps_n[160];
+    var ps_o[160];
+    _fz_inv_ps(&ps_x, pix, w, h);
+    _fz_inv_ps(&ps_n, neg, w, h);
+    _fz_inv_ps(&ps_o, pix, w, h);
+    var bad = 0;
+    if (_fz_inv_sample(&ps_x, cols, rows, 1) != 0) { bad = 1; }
+    if (_fz_inv_sample(&ps_n, cols, rows, 0) != 0) { bad = 1; }
+    if (_fz_inv_sample(&ps_o, cols, rows, 0) != 0) { bad = 1; }
+    var ns = cols * 2 * rows * 3;
+    if (bad == 0) {
+        if (memeq(load64(&ps_x + STRUCT_LUMA_PLANE_OFFSET), load64(&ps_n + STRUCT_LUMA_PLANE_OFFSET), ns) == 0) { bad = 1; }
+        var mx = load64(&ps_x + STRUCT_ALPHA_MASK_OFFSET);
+        var mn = load64(&ps_n + STRUCT_ALPHA_MASK_OFFSET);
+        if ((mx == 0) != (mn == 0)) { bad = 1; }
+        if (mx != 0 && mn != 0 && memeq(mx, mn, ns) == 0) { bad = 1; }
+        if (amode == 0 && memeq(load64(&ps_x + STRUCT_DOWNSCALED_BUF_OFFSET),
+                load64(&ps_o + STRUCT_DOWNSCALED_BUF_OFFSET), ns * 3) == 0) { bad = 1; }
+    }
+    var tier = KII_TIER_8;
+    var tp = _fz_hb_rand(4);
+    if (tp == 1) { tier = KII_TIER_16; }
+    if (tp == 2) { tier = KII_TIER_256; }
+    if (tp == 3) { tier = KII_TIER_TC; }
+    var dither = _fz_hb_rand(3);       # KII_DITHER_NONE, _ORDERED, _FS
+    var codes = 0;
+    if (bad == 0 && dither == KII_DITHER_FS && tier != KII_TIER_TC) {
+        quant_set_tier(tier);
+        quant_set_dither(dither);
+        codes = _ascii_cell_codes(load64(&ps_x + STRUCT_DOWNSCALED_BUF_OFFSET),
+            load64(&ps_x + STRUCT_ALPHA_MASK_OFFSET), cols * 2, cols, rows);
+        if (codes == 0) { bad = 1; }
+    }
+    var cy = 0;
+    while (bad == 0 && cy < rows) {
+        quant_set_tier(KII_TIER_NONE);
+        var la = _fz_inv_row(&ps_x, 0, cols, rows, cy, out_a);
+        var lb = _fz_inv_row(&ps_n, 0, cols, rows, cy, out_b);
+        if (la != cols + 1 || lb != la || memeq(out_a, out_b, la) == 0) { bad = 1; }
+        if (bad == 0 && load8(out_a + cols) != 10) { bad = 1; }
+        var k = 0;
+        while (bad == 0 && k < cols) {
+            if (_fz_is_glyph(load8(out_a + k)) == 0) { bad = 1; }
+            k = k + 1;
+        }
+        quant_set_tier(tier);
+        quant_set_dither(dither);
+        var lc = 0;
+        if (bad == 0) { lc = _fz_inv_row(&ps_x, codes, cols, rows, cy, out_b); }
+        if (bad == 0 && lc < 0) { bad = 1; }
+        if (bad == 0) { lc = _fz_inv_strip(out_b, lc); }
+        if (bad == 0 && (lc != la || memeq(out_a, out_b, la) == 0)) { bad = 1; }
+        quant_set_dither(KII_DITHER_NONE);
+        cy = cy + 1;
+    }
+    quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
+    downscale_set_invert(0);
+    alloc_reset();                     # the samples, masks, planes and codes are scratch
+    crc32_table = 0;                   # as the decoder surfaces do after a reset
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -1540,6 +1705,17 @@ fn main(): i64 {
         if (fuzz_halfblock_iter(&hb_q, &hb_out) != 0) { hb_bad = hb_bad + 1; }
         hb_iter = hb_iter + 1;
     }
+    # v2.2.0: --invert and --color none. An image is at most 48 x 48 (9,216
+    # bytes, as the area surface's); a row at most 24 cells x 20 + 5 bytes.
+    var inv_neg[9216];
+    var inv_out_a[1024];
+    var inv_out_b[1024];
+    var inv_iter = 0;
+    var inv_bad  = 0;
+    while (inv_iter < INV_FUZZ_ITERS) {
+        if (fuzz_invert_iter(&area_pix, &inv_neg, &inv_out_a, &inv_out_b) != 0) { inv_bad = inv_bad + 1; }
+        inv_iter = inv_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -1617,11 +1793,16 @@ fn main(): i64 {
     vec_push(args_hb, hb_bad);
     fmt_printf("fuzz: %d iterations passed (half-block rows, decoded to their colours; bad=%d)\n", args_hb);
 
+    var args_inv = vec_new();
+    vec_push(args_inv, inv_iter);
+    vec_push(args_inv, inv_bad);
+    fmt_printf("fuzz: %d iterations passed (--invert vs the negative, --color none vs the escapes; bad=%d)\n", args_inv);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

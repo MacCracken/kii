@@ -11,7 +11,8 @@
 # not depend on the architecture.
 #
 # The cases are the fixtures under tests/fixtures in every lane, tier and dither,
-# plus the CLI's own paths: help, version, each kind of refusal. Every case names
+# and the ASCII lane's --invert and --color none (2.2.0), plus the CLI's own
+# paths: help, version, each kind of refusal. Every case names
 # its width or fails before rendering, so neither binary reads the terminal size.
 # 2.0.1 measured the same comparison over a 472-image corpus (CHANGELOG [2.0.1]);
 # this is the subset CI can carry.
@@ -31,10 +32,14 @@ LANES=("--width 40" "--width 80 --color 8" "--width 60 --color 256 --dither orde
        "--mode ascii --width 30" "--mode ascii --width 70 --color 256 --dither fs"
        "--mode blocks --width 40" "--mode blocks --width 30 --color 8 --dither ordered"
        "--mode blocks --width 60 --color tc" "--mode blocks --width 50 --color 256 --dither fs"
-       "--width 1" "--mode blocks --width 2" "--mode ascii --width 1")
+       "--width 1" "--mode blocks --width 2" "--mode ascii --width 1"
+       "--mode ascii --width 40 --invert" "--mode ascii --width 60 --color none"
+       "--mode ascii --width 30 --invert --color none --dither fs --verbose")
 CLI=("" "--help" "-h" "--version" "--bogus" "--width" "--width 0" "--width -3" "--width 99999"
      "--width abc" "--mode" "--mode block" "--color 7" "--dither x" "--width 40 $F"
-     "--width 40 /nonexistent.png" "--width 40 /dev/null" "--width 40 $F/RAMGON.png $F/color.gif")
+     "--width 40 /nonexistent.png" "--width 40 /dev/null" "--width 40 $F/RAMGON.png $F/color.gif"
+     "--width 40 --invert $F/RAMGON.png" "--mode blocks --color none --width 40 $F/RAMGON.png"
+     "--color mono" "--invert=1")
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

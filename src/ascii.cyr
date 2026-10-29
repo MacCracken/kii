@@ -24,11 +24,15 @@
 # 2x3 sub-samples per character cell. Since v1.11.0 each sub-sample is the
 # mean over its span (downscale_area_to_rgb), which also leaves the luminance
 # plane. Foreground is the cell's mean color quantized to the active tier.
+# v2.2.0 adds the lane's two own settings: --invert reads dark as ink (the
+# plane builders, downscale.cyr), and --color none drops the colour, leaving
+# glyphs and newlines only (emit_ascii_shape_row_buf).
 #
 # Stdlib (alloc/syscalls) + darshana (tty_*) auto-resolve; image.cyr gives
 # the pstruct contract; quant.cyr gives quantize_nearest_rgb (per-cell fg).
 
 include "src/image.cyr"
+include "src/downscale.cyr"   # _downscale_invert (--invert, v2.2.0)
 include "src/emit.cyr"   # _kii_write_all (shared stdout plumbing)
 include "src/quant.cyr"
 
@@ -129,13 +133,27 @@ fn _ascii_contrast_step(x, m): i64 {
 # plane, or 0 if it cannot be allocated.
 #
 # The luma is _ascii_luma's formula written out (a call per sample cost more
-# than the rest of the loop); tests/ascii.tcyr checks the two agree.
+# than the rest of the loop); tests/ascii.tcyr checks the two agree. Under
+# --invert (v2.2.0) an opaque sample holds its negative's luma,
+# (65280 - (54r + 183g + 19b)) >> 8, as the area sampler's plane does
+# (downscale.cyr); a transparent one is still 0.
 fn _ascii_lum_plane(rgb, mask, sub_w, sub_h): i64 {
     var n = sub_w * sub_h;
     var lum = alloc(n);
     if (lum == 0) { return 0; }
     var i = 0;
     var p = rgb;
+    # A loop of its own, so the default loops below stay as they were (one
+    # loop over both cases cost 2.6 % on a 256-pixel icon at --width 200).
+    if (_downscale_invert == 1) {
+        while (i < n) {
+            if (mask != 0 && load8(mask + i) != 0) { store8(lum + i, 0); }
+            else { store8(lum + i, (65280 - 54 * load8(p) - 183 * load8(p + 1) - 19 * load8(p + 2)) >> 8); }
+            p = p + 3;
+            i = i + 1;
+        }
+        return lum;
+    }
     if (mask == 0) {
         while (i < n) {
             store8(lum + i, (54 * load8(p) + 183 * load8(p + 1) + 19 * load8(p + 2)) >> 8);
@@ -348,6 +366,10 @@ fn _ascii_match(v): i64 {
 # the row takes each cell's six values, and `sub_h` the sub-sample height, so the
 # contrast pass (_ascii_contrast) can read the samples just outside the cell and
 # treat those past the frame's edge as dark.
+#
+# v2.2.0: at --color none the row is its glyphs and a newline, nothing else:
+# no fg escape and no closing SGR 0. It is the coloured row with its escapes
+# taken out, since a cell's glyph never depends on its colour.
 fn emit_ascii_shape_row_buf(rgb, mask, lum, codes, sub_w, sub_h, cy, cols, buf, pos): i64 {
     # The three sub-sample rows of this character row are fixed for the whole
     # row, so their base is computed once (O-3). The 6 samples are visited in
@@ -360,6 +382,8 @@ fn emit_ascii_shape_row_buf(rgb, mask, lum, codes, sub_w, sub_h, cy, cols, buf, 
     if (mask != 0) { m0 = mask + (cy * 3) * sub_w; }
     var vec[6];
     var cur_fg = 0 - 1;
+    var colour = 1;
+    if (quant_tier() == KII_TIER_NONE) { colour = 0; }
     var cx = 0;
     while (cx < cols) {
         var sumr = 0;
@@ -401,7 +425,7 @@ fn emit_ascii_shape_row_buf(rgb, mask, lum, codes, sub_w, sub_h, cy, cols, buf, 
             _ascii_contrast(&vec, lum, sub_w, sub_h, cx, cy);
             glyph = _ascii_match(&vec);
         }
-        if (glyph != 32) {
+        if (glyph != 32 && colour == 1) {
             var fg = 0;
             if (codes != 0) { fg = load32(codes + (cy * cols + cx) * 4); }
             else { fg = kii_color_code_at(sumr / opaque, sumg / opaque, sumb / opaque, cx, cy); }
@@ -414,6 +438,10 @@ fn emit_ascii_shape_row_buf(rgb, mask, lum, codes, sub_w, sub_h, cy, cols, buf, 
         store8(buf + pos, glyph);
         pos = pos + 1;
         cx = cx + 1;
+    }
+    if (colour == 0) {
+        store8(buf + pos, 10);                   # '\n', and no reset: nothing was set
+        return pos + 1;
     }
     return _kii_row_end(buf, pos);
 }
@@ -436,7 +464,8 @@ fn _ascii_frame_row(pstruct, sub_w, cy, buf, pos): i64 {
 # transparent. The cols × rows means then go through quantize_rgb_buf, which
 # applies the active dither. Only --dither fs needs this pass: without it
 # the row quantizes each cell itself (kii_color_code_at, which applies the
-# ordered offset), so none and ordered skip the extra pass and allocations.
+# ordered offset), so none and ordered skip the extra pass and allocations,
+# as do truecolour and --color none, which quantize nothing.
 # Returns the code buffer (4 bytes a cell), or 0 on an allocation failure.
 fn _ascii_cell_codes(rgb, mask, sub_w, cols, rows): i64 {
     var cells = cols * rows;
@@ -516,7 +545,7 @@ fn emit_ascii_shape(pstruct): i64 {
         store64(pstruct + STRUCT_LUMA_PLANE_OFFSET, lum);
     }
     var codes = 0;
-    if (quant_dither() == KII_DITHER_FS && quant_tier() != KII_TIER_TC) {
+    if (quant_dither() == KII_DITHER_FS && quant_tier() != KII_TIER_TC && quant_tier() != KII_TIER_NONE) {
         codes = _ascii_cell_codes(rgb, mask, sub_w, sub_w / 2, sub_h / 3);
         if (codes == 0) { return 0 - 1; }
     }

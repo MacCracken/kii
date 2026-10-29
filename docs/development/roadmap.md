@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.1.0**; 2.2.0 through
+> below has shipped, it should not be here. Current release **v2.2.0**; 2.3.0 through
 > 2.6.0 are pinned below.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
@@ -22,17 +22,6 @@ Two rules hold for every 2.x release:
 - **kii stays environment-blind.** No lane, tier or protocol is picked from `TERM`,
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
-
-## 2.2.0 — the ASCII lane on light backgrounds, and without colour
-
-The ASCII lane reads brightness as ink, which assumes light text on a dark terminal. On a
-light background its art comes out as a negative.
-- **`--invert`**: darkness is ink. It applies to the ASCII lane only; half-block and blocks
-  draw colours, not ink.
-- **A colourless ASCII form** (`--color mono` or similar, named when scoped): glyphs only,
-  no SGR at all, the classic `jp2a` output for pipes, logs and mail.
-- An ADR amendment to [0007](../adr/0007-rendering-mode-taxonomy.md), and to
-  [0010](../adr/0010-tier-2-colour-and-emit-encoding.md) for the tier.
 
 ## 2.3.0 — the Braille lane (`--mode braille`)
 

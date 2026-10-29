@@ -27,9 +27,9 @@ Decisions about kii — what we chose, the context, and the consequences we acce
 | [0004](0004-half-block-floor-glyph.md) | Accepted (amended v2.0.0: Block Elements arrive opt-in, not as a successor; v2.1.0: `▀`/`▄`/`█`/space chosen per cell, bright colours kept in the fg at tier 16) | Half-block (`▀`/`▄`) as the floor glyph |
 | [0005](0005-nearest-neighbor-downscale.md) | Accepted (amended v1.9.0: pixel-centre sampling; v1.11.0: the ASCII lane samples areas) | Nearest-neighbor downscale (no Lanczos / bilinear at v1.0) |
 | [0006](0006-adopt-chitra-decoder.md) | Accepted | Adopt the chitra distlib; delete the in-repo PNG decoder (completes 0001) |
-| [0007](0007-rendering-mode-taxonomy.md) | Accepted | Rendering-mode taxonomy: half-block + character-glyph (`--mode ascii`) lanes |
+| [0007](0007-rendering-mode-taxonomy.md) | Accepted (amended v2.2.0: `--invert` and `--color none`, the ASCII lane's own, refused in the other lanes) | Rendering-mode taxonomy: half-block + character-glyph (`--mode ascii`) lanes |
 | [0008](0008-jpeg-via-chitra.md) | Accepted | JPEG via chitra 0.3.0: signature-based format dispatch + JPEG validation posture (realizes 0006) |
 | [0009](0009-bmp-gif-via-chitra.md) | Accepted | BMP + GIF via chitra 1.0.0: the re-pin that needed no decode change — a rendered format must be a nameable format (extends 0008) |
-| [0010](0010-tier-2-colour-and-emit-encoding.md) | Accepted (amended v2.1.0: what the Linux console does with 90–107) | Tier 2 colour (`--color 256` / `tc`) and how a frame is encoded: real 8/16-colour SGR, elision, transparency (supersedes part of 0003) |
+| [0010](0010-tier-2-colour-and-emit-encoding.md) | Accepted (amended v2.1.0: what the Linux console does with 90–107; v2.2.0: `--color none`, and partial alpha over white under `--invert`) | Tier 2 colour (`--color 256` / `tc`) and how a frame is encoded: real 8/16-colour SGR, elision, transparency (supersedes part of 0003) |
 | [0011](0011-dithering.md) | Accepted | Dithering: `--dither none \| ordered \| fs` in the quantize layer, default `none` (extends 0003, 0005, 0010) |
 | [0012](0012-block-elements-lane.md) | Accepted | The Block Elements lane, `--mode blocks`: 8 × 8 samples a cell, the least-error split in two colours, complements for fewer escapes, shades as a dither (amends 0004; extends 0005, 0007, 0011) |

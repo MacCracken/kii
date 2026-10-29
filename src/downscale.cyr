@@ -54,7 +54,8 @@ include "src/image.cyr"
 # transparent: downscale marks it in the mask, and emit draws it in the
 # terminal's default colours (ADR 0010). 128 is chafa's default threshold
 # (0.5). A pixel at or above it is opaque; partial alpha there is composited
-# over black, as all alpha was from v1.6.4 to v1.7.0.
+# over black, as all alpha was from v1.6.4 to v1.7.0 (over white under
+# --invert since v2.2.0, _over_bg below).
 var KII_ALPHA_THRESHOLD = 128;
 
 # Composite one channel byte over black: c * a / 255, rounded. Exact at the
@@ -70,6 +71,37 @@ var KII_ALPHA_THRESHOLD = 128;
 # alpha of an opaque pixel.
 fn _over_black(c, a): i64 {
     return (c * a + 127) / 255;
+}
+
+# ---- --invert (v2.2.0) ------------------------------------------------
+# Off, the ASCII lane reads light as ink: light glyphs on a dark terminal.
+# On, it reads dark as ink, for a light terminal, and takes the image to sit
+# on white: partial alpha composites over white (_over_bg), and the
+# luminance plane holds each opaque pixel's negative. Both are the plain
+# lane's values for the image's negative (r, g, b -> 255 - r, 255 - g,
+# 255 - b, alpha kept), so an inverted frame draws exactly the glyphs the
+# negative draws, in the image's own colours. main sets it from --invert,
+# which only the ASCII lane takes (ADR 0007 § v2.2.0), so the half-block and
+# blocks lanes never see it on. Both plane builders read it: the area loop
+# below and, for a point-sampled frame, ascii.cyr's _ascii_lum_plane.
+var _downscale_invert = 0;
+
+# Set --invert: 1 turns it on, anything else off. Returns the setting.
+fn downscale_set_invert(n): i64 {
+    _downscale_invert = 0;
+    if (n == 1) { _downscale_invert = 1; }
+    return _downscale_invert;
+}
+
+fn downscale_invert(): i64 { return _downscale_invert; }
+
+# Composite one channel byte over the background --invert implies: black
+# (_over_black) when it is off, white when it is on. Over white is the
+# negative's composite over black, negated back, which is what makes the
+# inverted plane the negative's plane exactly. a = 255 returns c either way.
+fn _over_bg(c, a): i64 {
+    if (_downscale_invert == 1) { return 255 - _over_black(255 - c, a); }
+    return _over_black(c, a);
 }
 
 # Downscale the decoded source pixel buffer to a packed RGB-triple
@@ -136,7 +168,8 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
     # now the only path). sy is constant across a scanline; integer
     # truncation keeps both sy and sx strictly below the source size, so the
     # read never passes the buffer's end. A transparent pixel is marked in
-    # the mask and stored as black; partial alpha composites over black.
+    # the mask and stored as black; partial alpha composites over black (over
+    # white under --invert, _over_bg).
     var dy = 0;
     var op = out_buf;
     var mp = mask;
@@ -160,9 +193,9 @@ fn downscale_to_rgb(pstruct, dst_w, dst_h): i64 {
                     store8(mp, 1);
                     any_transparent = 1;
                 } else {
-                    store8(op, _over_black(load8(sp), a));
-                    store8(op + 1, _over_black(load8(sp + 1), a));
-                    store8(op + 2, _over_black(load8(sp + 2), a));
+                    store8(op, _over_bg(load8(sp), a));
+                    store8(op + 1, _over_bg(load8(sp + 1), a));
+                    store8(op + 2, _over_bg(load8(sp + 2), a));
                     store8(mp, 0);
                 }
             }
@@ -324,9 +357,9 @@ fn downscale_area_to_rgb(pstruct, dst_w, dst_h): i64 {
                         nop = nop + 1;
                     } else {
                         if (a >= KII_ALPHA_THRESHOLD) {
-                            sr = sr + _over_black(load8(sp), a);
-                            sg = sg + _over_black(load8(sp + 1), a);
-                            sb = sb + _over_black(load8(sp + 2), a);
+                            sr = sr + _over_bg(load8(sp), a);
+                            sg = sg + _over_bg(load8(sp + 1), a);
+                            sb = sb + _over_bg(load8(sp + 2), a);
                             nop = nop + 1;
                         }
                     }
@@ -349,8 +382,12 @@ fn downscale_area_to_rgb(pstruct, dst_w, dst_h): i64 {
                 store8(op + 2, (sb + h) / nop);
                 store8(mp, 0);
                 # Floor, as _ascii_luma's >> 8, so a one-pixel span gives the
-                # point lane's value exactly.
-                store8(lp, (54 * sr + 183 * sg + 19 * sb) / (256 * n));
+                # point lane's value exactly. Under --invert the sum is the
+                # negative's: each opaque tap gives 255 * 256 less its own
+                # (54 + 183 + 19 is 256), and a transparent tap still adds nothing.
+                var s = 54 * sr + 183 * sg + 19 * sb;
+                if (_downscale_invert == 1) { s = nop * 65280 - s; }
+                store8(lp, s / (256 * n));
             }
             op = op + 3;
             mp = mp + 1;

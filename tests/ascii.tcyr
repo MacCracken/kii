@@ -435,6 +435,69 @@ fn test_ascii_cell_codes() {
     return 0;
 }
 
+# v2.2.0: --invert reads dark as ink, and --color none leaves the glyphs alone.
+# The row is test_ascii_shape_row_buf's: cell 0 black, cell 1 white.
+fn test_ascii_invert_and_none() {
+    var rgb[36];
+    var z = 0;
+    while (z < 36) { store8(&rgb + z, 0); z = z + 1; }
+    var sy = 0;
+    while (sy < 3) {
+        var o = (sy * 4 + 2) * 3;
+        z = 0;
+        while (z < 6) { store8(&rgb + o + z, 255); z = z + 1; }
+        sy = sy + 1;
+    }
+    var out[64];
+    quant_set_tier(16);
+    quant_set_dither(KII_DITHER_NONE);
+    downscale_set_invert(1);
+    var lum = _ascii_lum_plane(&rgb, 0, 4, 3);
+    assert_eq(load8(lum) * 1000 + load8(lum + 2), 255000, "inverted plane: black → 255, white → 0");
+    var pos = emit_ascii_shape_row_buf(&rgb, 0, lum, 0, 4, 3, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "\x1b[30m@ \x1b[0m\n"), 1, "inverted: the black cell is ink, in black (30)");
+    # A grey sample's ink is its negative's luma: (65280 - 256 * 100) >> 8.
+    var grey[18];
+    z = 0;
+    while (z < 18) { store8(&grey + z, 100); z = z + 1; }
+    var gl = _ascii_lum_plane(&grey, 0, 2, 3);
+    assert_eq(load8(gl), 155, "grey 100 → ink 155");
+    assert_eq(load8(gl), (54 * 155 + 183 * 155 + 19 * 155) >> 8, "...which is the negative's own luma");
+    # Transparent samples stay 0, inverted or not.
+    var mask[12];
+    z = 0;
+    while (z < 12) { store8(&mask + z, 0); z = z + 1; }
+    sy = 0;
+    while (sy < 3) { store8(&mask + sy * 4, 1); store8(&mask + sy * 4 + 1, 1); sy = sy + 1; }
+    lum = _ascii_lum_plane(&rgb, &mask, 4, 3);
+    assert_eq(load8(lum), 0, "a transparent sample has no ink when dark is ink");
+    pos = emit_ascii_shape_row_buf(&rgb, &mask, lum, 0, 4, 3, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "  \x1b[0m\n"), 1, "a transparent black cell is a space when inverted");
+    downscale_set_invert(0);
+
+    # --color none: the glyphs and a newline, no escape at all, no reset.
+    quant_set_tier(KII_TIER_NONE);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), 0, 4, 3, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, " @\n"), 1, "none: ' @' and LF");
+    downscale_set_invert(1);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), 0, 4, 3, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "@ \n"), 1, "none + invert: '@ ' and LF (jp2a's default)");
+    downscale_set_invert(0);
+    # Cell codes, if any are given, are not read: there is nothing to colour.
+    var codes[8];
+    store32(&codes, 1); store32(&codes + 4, 2);
+    pos = emit_ascii_shape_row_buf(&rgb, 0, _ascii_lum_plane(&rgb, 0, 4, 3), &codes, 4, 3, 0, 2, &out, 0);
+    assert_eq(_bytes_are(&out, pos, " @\n"), 1, "none ignores cell codes");
+    # Three white cells: the same glyphs as at tier 16, without the escapes.
+    var white[54];
+    z = 0;
+    while (z < 54) { store8(&white + z, 255); z = z + 1; }
+    pos = emit_ascii_shape_row_buf(&white, 0, _ascii_lum_plane(&white, 0, 6, 3), 0, 6, 3, 0, 3, &out, 0);
+    assert_eq(_bytes_are(&out, pos, "@@@\n"), 1, "none: '@@@' and LF, where tier 16 wrote 97 and a reset");
+    quant_set_tier(16);
+    return 0;
+}
+
 # emit_ascii_shape rejects an un-run pipeline (null downscaled buf).
 fn test_ascii_shape_guards() {
     var pstruct[160];
@@ -452,6 +515,7 @@ fn main() {
     test_ascii_shape_row_buf();
     test_ascii_shape_tiers();
     test_ascii_cell_codes();
+    test_ascii_invert_and_none();
     test_ascii_shape_guards();
     return assert_summary();
 }

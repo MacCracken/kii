@@ -1,0 +1,18 @@
+Frame: 30 rows of exactly 60 characters, each ended by a newline: 1,830 bytes,
+with no ESC byte anywhere (the same command without --color none writes 2,090,
+with the colour escapes). SHA-256 of the frame begins ac90d3487cb771fb.
+
+Rows 1–12, exactly (trailing spaces included):
+
+                                                            
+                             ..                             
+                             ||                             
+                            ||||                            
+                           .||||:                           
+                          .||||||.                          
+                         .||||||||.                         
+                        .||||||||||.                        
+                        ||||||||||||.                       
+                       `^||||||||||||.                      
+                      ||.`^|||||||||||.                     
+                     |||||x_*x|||||||||.                    

@@ -20,10 +20,12 @@ include "src/palette.cyr"
 include "src/image.cyr"
 
 # ---- active colour tier -------------------------------------------
-# The `--color` tier: 8, 16 (the default), 256, or KII_TIER_TC (24-bit
-# truecolour, v1.8.0). Tiers 8 and 16 choose from the Linux-console palette
-# in palette.cyr; 256 from the xterm 6x6x6 cube and grey ramp; truecolour
-# keeps the pixel's own RGB. See ADR 0010.
+# The `--color` tier: 8, 16 (the default), 256, KII_TIER_TC (24-bit
+# truecolour, v1.8.0) or KII_TIER_NONE (v2.2.0). Tiers 8 and 16 choose from
+# the Linux-console palette in palette.cyr; 256 from the xterm 6x6x6 cube and
+# grey ramp; truecolour keeps the pixel's own RGB. None sends no colour at all:
+# the ASCII lane draws its glyphs in the terminal's own, and the escape
+# composers refuse every code (emit.cyr). See ADR 0010.
 #
 # Tier 8 / 16 history: quantize_nearest_rgb is allowed to choose
 # from 16 (default) or 8 entries. P-1 (v1.5.1) — `--color 8` was parsed and
@@ -46,16 +48,18 @@ var KII_TIER_8   = 8;
 var KII_TIER_16  = 16;
 var KII_TIER_256 = 256;
 var KII_TIER_TC  = 24;     # truecolour: 24 bits per pixel
+var KII_TIER_NONE = 1;     # no colour: one, the terminal's own (--color none, v2.2.0)
 var _quant_tier = 16;
 
-# Set the active tier. Accepts only 8, 16, 256 or KII_TIER_TC; anything
-# else is ignored so a bad value can never widen the loop past the palette.
-# Returns the tier actually in force.
+# Set the active tier. Accepts only 8, 16, 256, KII_TIER_TC or
+# KII_TIER_NONE; anything else is ignored so a bad value can never widen the
+# loop past the palette. Returns the tier actually in force.
 fn quant_set_tier(n): i64 {
     if (n == KII_TIER_8)   { _quant_tier = n; }
     if (n == KII_TIER_16)  { _quant_tier = n; }
     if (n == KII_TIER_256) { _quant_tier = n; }
     if (n == KII_TIER_TC)  { _quant_tier = n; }
+    if (n == KII_TIER_NONE) { _quant_tier = n; }
     return _quant_tier;
 }
 

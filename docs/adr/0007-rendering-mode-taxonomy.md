@@ -251,3 +251,86 @@ half-block rows) and the area sampler's tap tables, but samples each cell 8 × 8
 from the decoded pixels and draws a Block Element in two colours rather than a glyph in
 one. An unknown `--mode` value now reads `kii: --mode must be halfblock, ascii or blocks`.
 The half-block and ASCII lanes are byte-identical to 1.11.0.
+
+## Amendment — v2.2.0 (the ASCII lane's ink and colour)
+
+This ADR remains **Accepted**. The ASCII lane gains two settings of its own, `--invert` and
+`--color none`, and the half-block and blocks lanes refuse both. Without them, every frame in
+every lane is byte-identical to 2.1.0 (5,192 of 5,192 corpus cases, 11 flag sets over the three
+lanes).
+
+**1. `--invert` (`-i`): dark is ink.** Since v1.3.0 the lane has read light as ink, which
+suits light glyphs on a dark terminal; on a light one its art comes out as a negative. With
+`--invert`:
+- each opaque pixel's ink is its negative's luminance, `(65280 − (54 r + 183 g + 19 b)) / 256`
+  rather than `(54 r + 183 g + 19 b) / 256`, in both plane builders (the area sampler and, for
+  a frame with no reduction, `_ascii_lum_plane`);
+- partial alpha (128–254) is composited over white rather than black
+  ([ADR 0010](0010-tier-2-colour-and-emit-encoding.md) § v2.2.0), since the image now sits on
+  a light terminal;
+- a transparent pixel still has no ink, and each glyph keeps its cell's mean colour.
+
+Together these make the inverted plane exactly the plain plane of the image's negative (each
+channel `255 − c`, alpha kept). Compositing over white is the negative's composite over black,
+negated back (`255 − ⌊((255 − c) a + 127) / 255⌋`), and the area sampler takes the negative's sum
+per tap, where it knows how many taps are opaque. So an inverted frame draws exactly the glyphs
+its negative draws, in the image's own colours.
+
+Two simpler forms were rejected:
+- **`255 − Y` on the finished plane.** A sample whose span is partly transparent holds its
+  opaque taps' luma over all its taps, so subtracting from 255 would count the transparent
+  taps as full ink. White on half-transparent paper would read as half ink.
+- **Inverting only the plane, still compositing over black.** The anti-aliased edge of a white
+  icon on transparency would be grey, which is ink when dark is ink: the frame would gain an
+  outline the image does not have.
+
+Measured on the corpus: 422 images, the PNG, GIF and BMP files at 8 bits or fewer. For each,
+ImageMagick's decode was first checked against chitra's by a truecolour round trip, and
+matched for all 422. At `--width 40` and `120` every inverted frame draws exactly its
+negative's glyphs (843 frames, and one that both refuse as too large). Colours:
+- In the 91 images without partial alpha, every glyph keeps its colour.
+- Of all 2,686,892 cells drawn in both frames, 206,559 change colour. Every one is in the 331
+  images with partial alpha, where the colour now composites over white.
+
+A 16th fuzz surface checks the identity byte for byte on 50,000 random images, through both
+plane builders.
+
+**2. `--color none`: glyphs only.** The tier is [ADR 0010](0010-tier-2-colour-and-emit-encoding.md)
+§ v2.2.0's. In this lane a row at `none` is its glyphs and a newline: no foreground escape and no
+closing SGR 0, so the output is plain text for pipes, logs and mail. A cell's glyph never
+depends on its colour, so the colourless frame is the coloured one with its escapes removed.
+On the corpus that holds for all 2,826 cases: 472 images under six flag sets (tiers 8, 16,
+256 and tc, each dither, with and without `--invert`, widths 40 and 120), of which 2,733
+render and 93 are refused alike. The fuzz surface checks it on every row at a random tier
+and dither.
+
+**3. Refused in the other lanes.** `--invert` or `--color none` with `--mode halfblock` or
+`blocks` is a usage error (exit 2):
+- `kii: --invert applies to --mode ascii only`
+- `kii: --color none applies to --mode ascii only`
+
+Those lanes draw colours, not ink. A negative half-block image, or a one-colour half-block
+lane, would be a feature of its own. Refusing both settings keeps the names free for one.
+Ignoring them would mean a later release changes what an accepted command draws.
+
+**4. § Alternatives, revisited.** The rejected alternative "Make ASCII a `--color` value (e.g.
+`--color none`)" was about selecting the lane by its colour. `--color none` does not select a
+lane: `--mode` still does, and `none` is the colour axis at zero colours.
+- A separate `--no-color` switch was the other way. It would allow the meaningless
+  `--color 256 --no-color`.
+- The name is chafa's (`--colors none`).
+- jp2a's default output is, in kii's terms, `--mode ascii --color none --invert`: jp2a reads
+  dark as ink unless given its own `--invert`.
+
+**Effect on speed.** Without the new flags, CPU is unchanged within run-to-run noise. Interleaved
+runs, fastest of each:
+- `--mode ascii --width 200`: RAMGON 221.42 → 221.35 ms; a 256-pixel icon, which takes the point
+  plane, 5.03 → 5.04 ms. A first draft folded the inverted and plain point-plane loops into one
+  loop, and cost the icon 2.6 %.
+- The half-block lane: RAMGON at `--width 120`, 205.21 → 205.32 ms.
+
+The new flags, in two later sets of runs:
+- **`--invert`** costs RAMGON 0.7–1.1 % (213.7 against 212.2 ms, and 224.6 against 222.1 ms on
+  a busier host), because more of its cells have ink to match: 15,693 of 16,000, against 12,976.
+- **`--color none`** is faster, since no cell is quantized and fewer bytes are written: RAMGON
+  212.2 → 210.6 ms, and the archlinux logo 5.90 → 5.39 ms.

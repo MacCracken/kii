@@ -10,7 +10,7 @@ example is a directory with:
   representative
 
 Every example is run from the kii repo root (`cd kii && ./build/kii ...`).
-All three were last run against their `expected.txt` at v2.1.0. Byte-exact
+All four were last run against their `expected.txt` at v2.2.0. Byte-exact
 reproduction across minor cuts is part of the [v1.0 stable-emit contract](../adr/0003-color-tier-discipline.md);
 when a release changes emitted bytes on purpose, as v1.6.4 did for
 transparent pixels, v1.8.0 for the emit encoding, v1.9.0 for sampling and
@@ -24,6 +24,7 @@ the CHANGELOG lists it and the affected example says so.
 | [`01-ramgon-fixed-width/`](01-ramgon-fixed-width/) | Happy path — RAMGON.png → 80-column ANSI frame |
 | [`02-archlinux-logo-palette/`](02-archlinux-logo-palette/) | Palette PNG (color_type=3) — different code path, same output shape |
 | [`03-not-a-png-rejection/`](03-not-a-png-rejection/) | Error path — non-PNG input rejected with diagnostic on stderr |
+| [`04-ascii-plain-text/`](04-ascii-plain-text/) | `--mode ascii --color none` (v2.2.0) — plain-text art, no escapes |
 
 ## Adding an example
 

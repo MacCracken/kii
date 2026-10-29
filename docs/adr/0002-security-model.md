@@ -474,3 +474,17 @@ keep their size. The choice reads only the row's two source rows, as before. A f
 (200,000 random rows at every tier, with transparent pixels) reads each row back and fails
 it on any escape that is not one kii writes at that tier, any other glyph, or a row that is
 not exactly its cells, the reset and LF.
+
+## Amendment — v2.2.0 (`--invert` and `--color none`)
+
+The emit surface does not grow.
+- **`--color none` narrows it.** A row is only the ASCII lane's printable glyphs and a LF.
+  There is no ESC byte at all, and the escape composers refuse every code at that tier, so no
+  other lane can send one.
+- **`--invert` reads nothing new.** Its plane is built from the same taps and the same
+  bounds. It changes only the arithmetic on a pixel's value: a channel's composite over
+  white, and the negative's sum.
+- **Both are refused outside `--mode ascii`.** That is a usage error, exit 2, before anything
+  is decoded.
+
+The 16th fuzz surface fails a colourless row that is not exactly `cols` glyphs and a LF.

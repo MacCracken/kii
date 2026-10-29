@@ -89,9 +89,12 @@ var EMIT_CELL_MAX = 41;
 # quant.cyr: a palette index, a packed truecolour 0xRRGGBB, or
 # KII_COLOR_DEFAULT) at the active tier. Returns the new pos, or -1 if the
 # code is not a colour of that tier (darshana's composers refuse it too).
+# --color none (v2.2.0) has no colours, so it refuses every code, the
+# default's 39 included: that tier sends no SGR at all.
 fn _kii_sgr_fg(buf, pos, code): i64 {
-    if (code == KII_COLOR_DEFAULT) { return tty_sgr_buf(buf, pos, 39); }
     var tier = quant_tier();
+    if (tier == KII_TIER_NONE) { return 0 - 1; }
+    if (code == KII_COLOR_DEFAULT) { return tty_sgr_buf(buf, pos, 39); }
     if (tier == KII_TIER_TC) {
         return tty_fg_rgb_buf(buf, pos, (code >> 16) & 255, (code >> 8) & 255, code & 255);
     }
@@ -104,8 +107,9 @@ fn _kii_sgr_fg(buf, pos, code): i64 {
 
 # The background twin of _kii_sgr_fg: SGR 49, 48;2, 48;5, 40–47 or 100–107.
 fn _kii_sgr_bg(buf, pos, code): i64 {
-    if (code == KII_COLOR_DEFAULT) { return tty_sgr_buf(buf, pos, 49); }
     var tier = quant_tier();
+    if (tier == KII_TIER_NONE) { return 0 - 1; }
+    if (code == KII_COLOR_DEFAULT) { return tty_sgr_buf(buf, pos, 49); }
     if (tier == KII_TIER_TC) {
         return tty_bg_rgb_buf(buf, pos, (code >> 16) & 255, (code >> 8) & 255, code & 255);
     }

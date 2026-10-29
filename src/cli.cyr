@@ -58,17 +58,18 @@ var KII_EXIT_USAGE = 2;
 # a flag before kii_register_flags gets 0, never a crash or a wrong entry.
 # --help/--version are auto-registered by cmdit_new (cmdit_parse returns
 # CMDIT_HELP / CMDIT_VERSION), so kii does not track their indices —
-# width/color/verbose/mode take indices 2/3/4/5 (cmdit's auto help/version
-# are 0/1).
+# width/color/verbose/mode/dither/invert take indices 2..7 (cmdit's auto
+# help/version are 0/1).
 var KII_F_WIDTH   = 0 - 1;
 var KII_F_COLOR   = 0 - 1;
 var KII_F_VERBOSE = 0 - 1;
 var KII_F_MODE    = 0 - 1;
 var KII_F_DITHER  = 0 - 1;
+var KII_F_INVERT  = 0 - 1;
 
 # Register kii's flag surface into a cmdit context `fs` (caller owns
 # cmdit_new + cmdit_parse). cmdit_new already registered --help/-h (h=104)
-# and --version/-V (V=86), so kii adds width/color/verbose/mode. Short codes
+# and --version/-V (V=86), so kii adds width/color/verbose/mode/dither/invert. Short codes
 # are ASCII bytes: w = 119, c = 99 (mirror chafa's `-w`/`-c`). Defaults:
 # --width 0 is the M6 sentinel for "match terminal"; --color 16 picks the
 # higher fidelity tier within v1.0 scope. cmdit_bool takes no default (always 0).
@@ -85,7 +86,10 @@ fn kii_register_flags(fs): i64 {
     # value fails the parse with CMDIT_ERR_BAD_ENUM. kii_color_tier maps the
     # chosen index to quant.cyr's tier. The default stays 16, and kii does not
     # look at COLORTERM: output must not depend on the environment.
-    KII_F_COLOR   = cmdit_enum(fs,  99, "color",   "16", "8|16|256|tc", "colour tier");
+    # v2.2.0 adds none: no escapes at all, the ASCII lane's glyphs alone
+    # (chafa's `--colors none`). kii does not read NO_COLOR either; none is
+    # its explicit form, and only --mode ascii takes it (kii_lane_conflict_line).
+    KII_F_COLOR   = cmdit_enum(fs,  99, "color",   "16", "8|16|256|tc|none", "colour tier (none: ASCII glyphs only)");
     # `v` (118) was reserved for --verbose at M1; activated at M5
     # alongside the ANSI emit. With the frame now occupying stdout,
     # the M4 dimensions / format summary moves behind this flag and
@@ -103,6 +107,11 @@ fn kii_register_flags(fs): i64 {
     # error (Floyd-Steinberg). No effect at --color tc, where nothing is
     # quantized. kii_dither_mode maps the choice to quant.cyr's mode.
     KII_F_DITHER  = cmdit_enum(fs, 100, "dither", "none", "none|ordered|fs", "dithering");
+    # --invert / -i (105): v2.2.0. The ASCII lane reads dark as ink, for a
+    # light terminal (jp2a's -i, the other way round: jp2a's default is
+    # dark ink). Only --mode ascii takes it; the half-block and blocks lanes
+    # draw colours, not ink, so main refuses it there (kii_lane_conflict_line).
+    KII_F_INVERT  = cmdit_bool(fs, 105, "invert", "ASCII lane: dark is ink, for light backgrounds");
     return 0;
 }
 
@@ -116,14 +125,15 @@ fn kii_dither_mode(fs): i64 {
 }
 
 # The tier the parsed --color selects, in the order of its choices string
-# ("8|16|256|tc"): KII_TIER_8, KII_TIER_16, KII_TIER_256 or KII_TIER_TC
-# (quant.cyr). An unset or unknown choice — which the parse has already
-# refused — gives the default, 16.
+# ("8|16|256|tc|none"): KII_TIER_8, KII_TIER_16, KII_TIER_256, KII_TIER_TC
+# or KII_TIER_NONE (quant.cyr). An unset or unknown choice — which the parse
+# has already refused — gives the default, 16.
 fn kii_color_tier(fs): i64 {
     var i = cmdit_get_enum(fs, KII_F_COLOR);
     if (i == 0) { return KII_TIER_8; }
     if (i == 2) { return KII_TIER_256; }
     if (i == 3) { return KII_TIER_TC; }
+    if (i == 4) { return KII_TIER_NONE; }
     return KII_TIER_16;
 }
 
@@ -132,6 +142,19 @@ fn kii_color_tier(fs): i64 {
 var KII_MODE_HALFBLOCK = 0;
 var KII_MODE_ASCII     = 1;
 var KII_MODE_BLOCKS    = 2;
+
+# The usage line for a setting the chosen lane cannot honour, "kii: " prefix
+# and newline included, or 0 when the combination is valid (v2.2.0).
+# --invert and --color none act on ink and glyphs, which only the ASCII lane
+# draws: the half-block and blocks lanes draw colours. Refusing them there,
+# rather than ignoring them, keeps both free to mean something in those
+# lanes later without changing what an accepted command draws.
+fn kii_lane_conflict_line(mode, tier, invert): i64 {
+    if (mode == KII_MODE_ASCII) { return 0; }
+    if (tier == KII_TIER_NONE) { return "kii: --color none applies to --mode ascii only\n"; }
+    if (invert == 1) { return "kii: --invert applies to --mode ascii only\n"; }
+    return 0;
+}
 
 # Frame-size predicate (P(-1), v1.6.4): 1 if a `cols` x `rows` character
 # frame is within KII_MAX_CELLS, 0 if not. Division form, so the check cannot
@@ -176,7 +199,7 @@ fn kii_parse_error_line(err, flag): i64 {
     if (err == CMDIT_ERR_ARGV)             { return "kii: could not read the full command line\n"; }
     if (err == CMDIT_ERR_OUT_OF_RANGE)     { return "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n"; }
     if (err == CMDIT_ERR_BAD_ENUM && flag != 0) {
-        if (streq(flag, "color") == 1) { return "kii: --color must be 8, 16, 256 or tc\n"; }
+        if (streq(flag, "color") == 1) { return "kii: --color must be 8, 16, 256, tc or none\n"; }
         if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock, ascii or blocks\n"; }
         if (streq(flag, "dither") == 1) { return "kii: --dither must be none, ordered or fs\n"; }
     }
