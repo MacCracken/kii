@@ -440,3 +440,26 @@ two tables it builds per frame. The emit surface is unchanged.
   output row; at any geometry kii produces that is about 6 MiB at most, because an axis being
   reduced is shorter than its source, which is at most 65,535 pixels. Each allocation is
   checked, and a failure is the existing `downscale failed (out of memory)`, exit 1.
+
+## Amendment — v2.0.0 (the blocks lane)
+
+[ADR 0012](0012-block-elements-lane.md) adds `--mode blocks`. It reads the decoded pixels
+itself, through the area sampler's tap tables, and it adds 32 glyphs to the emit surface.
+- **Reads.** Every tap is a source index below its axis's length (§ v1.11.0 amendment): 64
+  samples a cell, at most 16 pixels each. The column taps are built once a frame; the row
+  taps once per cell row, from the same formula (`_area_taps_from`).
+- **Allocations.** Per frame: 21 bytes a cell (the record 5, the two colour fields 6, their
+  masks 2, their codes 8), so at most 21 MiB under `KII_MAX_CELLS`. The column taps take 320
+  bytes a column, at most 32 MB at `--width 100000`, and the row taps 320 bytes in all.
+  `blk_prepare` refuses a geometry whose sizes would pass `ALLOC_MAX` before multiplying
+  them. Each allocation is checked, and a failure is `blocks render failed (out of memory)`,
+  exit 1.
+- **Work.** At most 16 pixel reads per sample, and per axis the spans do not overlap (§ v1.11.0
+  amendment). The largest frame the cell cap allows, 1.05 M cells from a 4000 × 4000 PNG,
+  takes 3.84 s and 132.7 MB, against 0.65 s and 126.7 MB in the half-block lane.
+- **Emit surface.** Besides the SGR set of the v1.8.0 amendment, a row holds only the space
+  and the 32 Block Elements (`E2 96 80`..`E2 96 9F`). A fuzz surface checks every row of 20,000
+  random frames for exactly that, at every tier and dither, and renders each frame from
+  copies of the image between pads of 0 and of 255, which must give the same bytes.
+- **The shape choice** is checked by a second fuzz surface against a brute-force reference
+  that scores every split from its own mask (200,000 random cells).

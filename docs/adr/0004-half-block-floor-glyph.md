@@ -158,3 +158,19 @@ or 1-bit imagery, not 16-color photographic).
 This ADR remains **Accepted**. One correction: § Trigger for revisit cited the roadmap's
 "§ Roadmap ahead", a section that no longer exists. The Block Elements item now sits under
 roadmap § 2.0 — open, still unpinned. The citation was corrected in place.
+
+## Amendment — v2.0.0 (the Block Elements lane, opt-in)
+
+This ADR remains **Accepted**, and half-block remains the default. § Trigger for revisit
+expected the full Block Elements vocabulary to supersede it. At 2.0.0 the vocabulary
+arrived as an opt-in lane instead, `--mode blocks`
+([ADR 0012](0012-block-elements-lane.md)), on the user's decision of 2026-10-28.
+- **Why not the default.** CP437 carries `▀▄█▌▐░▒▓` and none of the quadrants or eighths,
+  so a console font of that lineage cannot draw a blocks frame. That keeps § Positive's
+  "universal terminal-font support" argument for half-block as strong as when this ADR was
+  written. (§ Positive's claim that Linux console fonts carry "the full Block Elements range
+  by default" is too broad for fonts of CP437 lineage; it is left as written.)
+- **The `▀ / ▄` choice** that § Negative named as a possible optimization is what the blocks
+  lane does for every complementary pair. Bringing it to the half-block lane is pinned to
+  2.1.0: visually identical frames in fewer bytes, but different bytes for the default lane.
+- **Braille**, which § Decision placed post-v2, is pinned to 2.3.0 as its own lane.

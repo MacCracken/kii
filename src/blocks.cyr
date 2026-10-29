@@ -1,0 +1,837 @@
+# blocks.cyr — the Block Elements lane (`--mode blocks`, v2.0.0, ADR 0012).
+#
+# A third render lane beside half-block (the default, ADR 0004) and ASCII
+# (ADR 0007). Each character cell is sampled as an 8 x 8 grid and drawn with
+# one of the 32 Unicode Block Elements (U+2580..U+259F) or a space, in two
+# colours: the glyph's ink in the foreground, the rest in the background.
+#
+#   1. Sampling. The cell's 64 samples come from the source through the area
+#      sampler's tap tables (_area_taps, src/downscale.cyr): each is the mean
+#      of its span's opaque pixels, read whole up to KII_AREA_TAPS pixels a
+#      side and by evenly spaced taps beyond. A sample is transparent when
+#      more than half its pixels are: the lane's shapes are binary per
+#      sample, so a coverage of one half or more rounds to opaque.
+#   2. Shape. An opaque cell is split into two regions by one of 19 shapes
+#      (the half blocks, four quadrants, the diagonal, the lower and the left
+#      eighths), and the split that leaves the least squared error, with
+#      each region drawn in its mean colour, wins. That is the split whose
+#      between-region term |S_M|^2 / n_M + |S_rest|^2 / n_rest is largest,
+#      which needs only the region sums, kept per row, per column and per
+#      quadrant. The comparison is exact (cross-multiplied integers). A cell
+#      no split improves (all 64 samples alike) stays one colour. Ties go to
+#      the earlier shape in _BLK_SPLITS.
+#   3. Colour. Every cell's two colours are quantized together as two fields
+#      (foreground and background), through quantize_rgb_buf, so --color and
+#      --dither apply as they do in the half-block lane.
+#   4. Glyph. Several Block Elements are complements of each other (▀ ▄,
+#      ▌ ▐, ▇ ▔, ▉ ▕, ▘ ▟, ▝ ▙, ▖ ▜, ▗ ▛, ▚ ▞, and the space and █), so a split
+#      can be drawn with either colour in front. The row picks whichever
+#      needs fewer colour escapes after the cell before it. A split whose two
+#      colours quantize to the same one is drawn flat: a space when the
+#      background is already that colour, █ when the foreground is.
+#   5. Shades. ░ ▒ ▓ draw a 1/4, 1/2 or 3/4 mix of the foreground over the
+#      background. They are the lane's dither, so they are used only under
+#      --dither ordered or fs, at tiers 8 and 16: a cell drawn flat takes the
+#      mix of two of the four palette colours nearest its mean, if one is
+#      nearer that mean than the flat colour. At 256 colours and truecolour
+#      the palette is fine enough without them.
+#
+# Transparency. A cell with no opaque sample is a space on the terminal's
+# default background. A cell with both is drawn with the glyph whose ink best
+# covers its opaque samples, in their mean colour, over the default
+# background: each sample on the wrong side costs as much as the largest
+# colour error (3 * 255^2), plus the colour error of the opaque samples under
+# the ink.
+#
+# Every step is integer arithmetic, so every target draws the same bytes.
+# Multi-source: the shape search follows chafa's symbol matching (two
+# colours per cell, mean per region, least error), the per-cell colour choice
+# notcurses' quadrant blitter, and the complement trick ADR 0004 noted for
+# ▀ / ▄; the shade mixes are kii's own.
+
+include "src/image.cyr"
+include "src/downscale.cyr"   # _area_taps, KII_AREA_TAPS, _over_black, KII_ALPHA_THRESHOLD
+include "src/emit.cyr"        # _kii_sgr_fg / _bg, _kii_row_end, _kii_emit_frame, EMIT_CELL_MAX
+include "src/quant.cyr"
+
+# ---- the glyphs -----------------------------------------------------------
+# One id per glyph. _BLK_B2 holds the third UTF-8 byte (every Block Element is
+# E2 96 xx, xx = 0x80 + codepoint - 0x2580; 0 for the space), _BLK_MASK the ink
+# over the 8 x 8 samples (bit y * 8 + x, y = 0 at the top; 0 for the shades,
+# which are mixes, not shapes), and _BLK_FLIP the complement drawn with the
+# colours swapped (-1 when Unicode has none).
+var BLK_SPACE = 0;
+var BLK_FULL  = 1;     # █
+var BLK_LHALF = 2;     # ▄ lower half
+var BLK_UHALF = 3;     # ▀ upper half
+var BLK_LEFT  = 4;     # ▌ left half
+var BLK_RIGHT = 5;     # ▐ right half
+var BLK_UL    = 6;     # ▘
+var BLK_UR    = 7;     # ▝
+var BLK_LL    = 8;     # ▖
+var BLK_LR    = 9;     # ▗
+var BLK_NUL   = 10;    # ▟ all but upper left
+var BLK_NUR   = 11;    # ▙ all but upper right
+var BLK_NLL   = 12;    # ▜ all but lower left
+var BLK_NLR   = 13;    # ▛ all but lower right
+var BLK_DIAG  = 14;    # ▚ upper left + lower right
+var BLK_ADIAG = 15;    # ▞ upper right + lower left
+var BLK_H1    = 16;    # ▁ ▂ ▃ (16..18): the lower 1/8, 2/8, 3/8
+var BLK_H5    = 19;    # ▅ ▆ ▇ (19..21): the lower 5/8, 6/8, 7/8
+var BLK_UEIGHTH = 22;  # ▔ upper 1/8
+var BLK_V1    = 23;    # ▏ ▎ ▍ (23..25): the left 1/8, 2/8, 3/8
+var BLK_V5    = 26;    # ▋ ▊ ▉ (26..28): the left 5/8, 6/8, 7/8
+var BLK_REIGHTH = 29;  # ▕ right 1/8
+var BLK_LIGHT = 30;    # ░ 1/4 foreground
+var BLK_MEDIUM = 31;   # ▒ 1/2
+var BLK_DARK  = 32;    # ▓ 3/4
+var BLK_COUNT = 33;
+
+var _BLK_B2[33];
+var _BLK_MASK[33];
+var _BLK_FLIP[33];
+var _blk_inited = 0;
+
+# The ink of the rectangle x in [x0, x1), y in [y0, y1).
+fn _blk_rect(x0, x1, y0, y1): i64 {
+    var m = 0;
+    var y = y0;
+    while (y < y1) {
+        var x = x0;
+        while (x < x1) { m = m | (1 << (y * 8 + x)); x = x + 1; }
+        y = y + 1;
+    }
+    return m;
+}
+
+fn _blk_def(id, b2, mask, flip): i64 {
+    store64(&_BLK_B2 + id * 8, b2);
+    store64(&_BLK_MASK + id * 8, mask);
+    store64(&_BLK_FLIP + id * 8, flip);
+    return 0;
+}
+
+fn _blk_init(): i64 {
+    if (_blk_inited == 1) { return 0; }
+    var all = 0 - 1;
+    var ul = _blk_rect(0, 4, 0, 4);
+    var ur = _blk_rect(4, 8, 0, 4);
+    var ll = _blk_rect(0, 4, 4, 8);
+    var lr = _blk_rect(4, 8, 4, 8);
+    _blk_def(BLK_SPACE, 0,    0,  BLK_FULL);
+    _blk_def(BLK_FULL,  0x88, all, BLK_SPACE);
+    _blk_def(BLK_LHALF, 0x84, ll | lr, BLK_UHALF);
+    _blk_def(BLK_UHALF, 0x80, ul | ur, BLK_LHALF);
+    _blk_def(BLK_LEFT,  0x8C, ul | ll, BLK_RIGHT);
+    _blk_def(BLK_RIGHT, 0x90, ur | lr, BLK_LEFT);
+    _blk_def(BLK_UL,    0x98, ul, BLK_NUL);
+    _blk_def(BLK_UR,    0x9D, ur, BLK_NUR);
+    _blk_def(BLK_LL,    0x96, ll, BLK_NLL);
+    _blk_def(BLK_LR,    0x97, lr, BLK_NLR);
+    _blk_def(BLK_NUL,   0x9F, ur | ll | lr, BLK_UL);
+    _blk_def(BLK_NUR,   0x99, ul | ll | lr, BLK_UR);
+    _blk_def(BLK_NLL,   0x9C, ul | ur | lr, BLK_LL);
+    _blk_def(BLK_NLR,   0x9B, ul | ur | ll, BLK_LR);
+    _blk_def(BLK_DIAG,  0x9A, ul | lr, BLK_ADIAG);
+    _blk_def(BLK_ADIAG, 0x9E, ur | ll, BLK_DIAG);
+    # ▁ ▂ ▃ ▅ ▆ ▇: the lower k eighths, U+2580 + k. ▇'s complement is ▔.
+    var k = 1;
+    while (k < 8) {
+        if (k != 4) {
+            var id = BLK_H1 + k - 1;
+            if (k > 4) { id = BLK_H5 + k - 5; }
+            var flip = 0 - 1;
+            if (k == 7) { flip = BLK_UEIGHTH; }
+            _blk_def(id, 0x80 + k, _blk_rect(0, 8, 8 - k, 8), flip);
+        }
+        k = k + 1;
+    }
+    _blk_def(BLK_UEIGHTH, 0x94, _blk_rect(0, 8, 0, 1), BLK_H5 + 2);
+    # ▏ ▎ ▍ ▋ ▊ ▉: the left k eighths, U+2590 - k. ▉'s complement is ▕.
+    k = 1;
+    while (k < 8) {
+        if (k != 4) {
+            var vid = BLK_V1 + k - 1;
+            if (k > 4) { vid = BLK_V5 + k - 5; }
+            var vflip = 0 - 1;
+            if (k == 7) { vflip = BLK_REIGHTH; }
+            _blk_def(vid, 0x90 - k, _blk_rect(0, k, 0, 8), vflip);
+        }
+        k = k + 1;
+    }
+    _blk_def(BLK_REIGHTH, 0x95, _blk_rect(7, 8, 0, 8), BLK_V5 + 2);
+    # The shades swap with each other: ░ in a over b reads as ▓ in b over a.
+    _blk_def(BLK_LIGHT,  0x91, 0, BLK_DARK);
+    _blk_def(BLK_MEDIUM, 0x92, 0, BLK_MEDIUM);
+    _blk_def(BLK_DARK,   0x93, 0, BLK_LIGHT);
+    _blk_inited = 1;
+    return 0;
+}
+
+fn blk_glyph_b2(id): i64 { return load64(&_BLK_B2 + id * 8); }
+fn blk_glyph_mask(id): i64 { return load64(&_BLK_MASK + id * 8); }
+fn blk_glyph_flip(id): i64 { return load64(&_BLK_FLIP + id * 8); }
+
+# The splits an opaque cell is scored on, in tie order: the halves, the
+# quadrants, the diagonal, then the eighths from the lower and the left edge.
+var _BLK_SPLITS[19];
+var BLK_SPLIT_COUNT = 19;
+var _blk_splits_inited = 0;
+
+fn _blk_splits_init(): i64 {
+    if (_blk_splits_inited == 1) { return 0; }
+    var ids = &_BLK_SPLITS;
+    store64(ids,       BLK_LHALF);
+    store64(ids + 8,   BLK_LEFT);
+    store64(ids + 16,  BLK_UL);
+    store64(ids + 24,  BLK_UR);
+    store64(ids + 32,  BLK_LL);
+    store64(ids + 40,  BLK_LR);
+    store64(ids + 48,  BLK_DIAG);
+    var i = 0;
+    while (i < 6) {
+        store64(ids + 56 + i * 8, BLK_H1 + i);    # ▁ ▂ ▃ ▅ ▆ ▇
+        store64(ids + 104 + i * 8, BLK_V1 + i);   # ▏ ▎ ▍ ▋ ▊ ▉
+        i = i + 1;
+    }
+    _blk_splits_inited = 1;
+    return 0;
+}
+
+fn blk_split_id(i): i64 {
+    if (_blk_splits_inited == 0) { _blk_splits_init(); }
+    return load64(&_BLK_SPLITS + i * 8);
+}
+
+# ---- one cell's samples ---------------------------------------------------
+# _blk_smp holds the cell's 64 samples, R G B per sample in row-major order
+# (sample i = y * 8 + x), and _blk_opq the bit set of the opaque ones. Both are
+# what _blk_choose reads, so tests and the fuzz harness can fill them directly.
+var _blk_smp[192];
+var _blk_opq = 0;
+
+fn blk_set_sample(i, r, g, b): i64 {
+    store64(&_blk_smp + i * 24, r);
+    store64(&_blk_smp + i * 24 + 8, g);
+    store64(&_blk_smp + i * 24 + 16, b);
+    return 0;
+}
+
+fn blk_set_opaque(mask): i64 { _blk_opq = mask; return 0; }
+
+# Fill the samples of cell (cx, cy) from the source. `xt` is the column tap
+# table for the whole cols * 8 sample grid, `yt` the row taps of this cell's 8
+# sample rows (_area_taps / _area_taps_from), `k` their width. Returns the
+# number of opaque samples.
+fn _blk_sample(pixels, xt, yt, k, cx, cy): i64 {
+    var opq = 0;
+    var nopaque = 0;
+    var sy = 0;
+    while (sy < 8) {
+        var ye = yt + sy * (k + 1) * 8;
+        var ny = load64(ye);
+        var sx = 0;
+        while (sx < 8) {
+            var xe = xt + (cx * 8 + sx) * (k + 1) * 8;
+            var nx = load64(xe);
+            var sr = 0;
+            var sg = 0;
+            var sb = 0;
+            var nop = 0;
+            var yi = 0;
+            while (yi < ny) {
+                var rowp = pixels + load64(ye + 8 + yi * 8);
+                var xi = 0;
+                while (xi < nx) {
+                    var sp = rowp + load64(xe + 8 + xi * 8);
+                    var a = load8(sp + 3);
+                    if (a == 255) {
+                        sr = sr + load8(sp);
+                        sg = sg + load8(sp + 1);
+                        sb = sb + load8(sp + 2);
+                        nop = nop + 1;
+                    } else {
+                        if (a >= KII_ALPHA_THRESHOLD) {
+                            sr = sr + _over_black(load8(sp), a);
+                            sg = sg + _over_black(load8(sp + 1), a);
+                            sb = sb + _over_black(load8(sp + 2), a);
+                            nop = nop + 1;
+                        }
+                    }
+                    xi = xi + 1;
+                }
+                yi = yi + 1;
+            }
+            var i = sy * 8 + sx;
+            var p = &_blk_smp + i * 24;
+            # Opaque when at least half the span is (nop > 0 since nx, ny >= 1).
+            if (nop > 0 && 2 * nop >= nx * ny) {
+                var h = nop / 2;
+                store64(p, (sr + h) / nop);
+                store64(p + 8, (sg + h) / nop);
+                store64(p + 16, (sb + h) / nop);
+                opq = opq | (1 << i);
+                nopaque = nopaque + 1;
+            } else {
+                store64(p, 0); store64(p + 8, 0); store64(p + 16, 0);
+            }
+            sx = sx + 1;
+        }
+        sy = sy + 1;
+    }
+    _blk_opq = opq;
+    return nopaque;
+}
+
+# ---- the shape --------------------------------------------------------------
+# _blk_choose's result: the glyph id, the ink colour and the other colour
+# (rounded means), and the cell's mean. For a cell with transparent samples
+# the other colour is unused (the background is the terminal's default).
+var _blk_res_id = 0;
+var _blk_res_fg[3];
+var _blk_res_bg[3];
+var _blk_res_mean[3];
+
+# The per-row, per-column and per-quadrant sums of an opaque cell (i64 R G B
+# triples), and its total.
+var _blk_rows[24];
+var _blk_cols[24];
+var _blk_quads[12];
+var _blk_t0 = 0;
+var _blk_t1 = 0;
+var _blk_t2 = 0;
+
+# The best split so far: its id, its between-region term as num / den, and
+# the sums of its ink region.
+var _blk_b_id = 0;
+var _blk_b_num = 0;
+var _blk_b_den = 1;
+var _blk_b_s0 = 0;
+var _blk_b_s1 = 0;
+var _blk_b_s2 = 0;
+var _blk_b_n = 64;
+
+# Score the split with ink sums (s0, s1, s2) over n samples (0 < n < 64)
+# against the best so far. |S|^2 <= 3 * (64 * 255)^2 < 2^30, so num < 2^37,
+# den <= 32 * 32, and the cross products stay below 2^48.
+fn _blk_try(id, s0, s1, s2, n): i64 {
+    var nn = 64 - n;
+    var u0 = _blk_t0 - s0;
+    var u1 = _blk_t1 - s1;
+    var u2 = _blk_t2 - s2;
+    var num = (s0 * s0 + s1 * s1 + s2 * s2) * nn + (u0 * u0 + u1 * u1 + u2 * u2) * n;
+    var den = n * nn;
+    if (num * _blk_b_den > _blk_b_num * den) {
+        _blk_b_id = id;
+        _blk_b_num = num;
+        _blk_b_den = den;
+        _blk_b_s0 = s0;
+        _blk_b_s1 = s1;
+        _blk_b_s2 = s2;
+        _blk_b_n = n;
+    }
+    return 0;
+}
+
+# Score the split `id` whose ink is the rows y0..7 (y0 > 0) of _blk_rows.
+fn _blk_try_rows(id, y0): i64 {
+    var s0 = 0;
+    var s1 = 0;
+    var s2 = 0;
+    var y = y0;
+    while (y < 8) {
+        s0 = s0 + load64(&_blk_rows + y * 24);
+        s1 = s1 + load64(&_blk_rows + y * 24 + 8);
+        s2 = s2 + load64(&_blk_rows + y * 24 + 16);
+        y = y + 1;
+    }
+    return _blk_try(id, s0, s1, s2, (8 - y0) * 8);
+}
+
+# Score the split `id` whose ink is the columns 0..x1-1 (x1 < 8) of _blk_cols.
+fn _blk_try_cols(id, x1): i64 {
+    var s0 = 0;
+    var s1 = 0;
+    var s2 = 0;
+    var x = 0;
+    while (x < x1) {
+        s0 = s0 + load64(&_blk_cols + x * 24);
+        s1 = s1 + load64(&_blk_cols + x * 24 + 8);
+        s2 = s2 + load64(&_blk_cols + x * 24 + 16);
+        x = x + 1;
+    }
+    return _blk_try(id, s0, s1, s2, x1 * 8);
+}
+
+fn _blk_quad(q, c): i64 { return load64(&_blk_quads + q * 24 + c * 8); }
+
+# Round s / n half up, for s >= 0 and n > 0.
+fn _blk_mean(s, n): i64 { return (2 * s + n) / (2 * n); }
+
+# The best shape for an opaque cell: the split with the largest between-region
+# term, or one colour when no split beats it.
+fn _blk_choose_opaque(): i64 {
+    var i = 0;
+    while (i < 24) { store64(&_blk_rows + i * 8, 0); store64(&_blk_cols + i * 8, 0); i = i + 1; }
+    i = 0;
+    while (i < 12) { store64(&_blk_quads + i * 8, 0); i = i + 1; }
+    var t0 = 0;
+    var t1 = 0;
+    var t2 = 0;
+    i = 0;
+    while (i < 64) {
+        var y = i >> 3;
+        var x = i & 7;
+        var p = &_blk_smp + i * 24;
+        var r = load64(p);
+        var g = load64(p + 8);
+        var b = load64(p + 16);
+        var ro = &_blk_rows + y * 24;
+        store64(ro, load64(ro) + r); store64(ro + 8, load64(ro + 8) + g); store64(ro + 16, load64(ro + 16) + b);
+        var co = &_blk_cols + x * 24;
+        store64(co, load64(co) + r); store64(co + 8, load64(co + 8) + g); store64(co + 16, load64(co + 16) + b);
+        var q = 0;
+        if (x >= 4) { q = 1; }
+        if (y >= 4) { q = q + 2; }
+        var qo = &_blk_quads + q * 24;
+        store64(qo, load64(qo) + r); store64(qo + 8, load64(qo + 8) + g); store64(qo + 16, load64(qo + 16) + b);
+        t0 = t0 + r;
+        t1 = t1 + g;
+        t2 = t2 + b;
+        i = i + 1;
+    }
+    _blk_t0 = t0;
+    _blk_t1 = t1;
+    _blk_t2 = t2;
+    # One colour: |T|^2 / 64.
+    _blk_b_id = BLK_SPACE;
+    _blk_b_num = t0 * t0 + t1 * t1 + t2 * t2;
+    _blk_b_den = 64;
+    _blk_b_n = 64;
+    _blk_try_rows(BLK_LHALF, 4);
+    _blk_try_cols(BLK_LEFT, 4);
+    var qi = 0;
+    while (qi < 4) {
+        _blk_try(BLK_UL + qi, _blk_quad(qi, 0), _blk_quad(qi, 1), _blk_quad(qi, 2), 16);
+        qi = qi + 1;
+    }
+    _blk_try(BLK_DIAG, _blk_quad(0, 0) + _blk_quad(3, 0), _blk_quad(0, 1) + _blk_quad(3, 1),
+        _blk_quad(0, 2) + _blk_quad(3, 2), 32);
+    var k = 1;
+    while (k < 4) { _blk_try_rows(BLK_H1 + k - 1, 8 - k); k = k + 1; }
+    k = 5;
+    while (k < 8) { _blk_try_rows(BLK_H5 + k - 5, 8 - k); k = k + 1; }
+    k = 1;
+    while (k < 4) { _blk_try_cols(BLK_V1 + k - 1, k); k = k + 1; }
+    k = 5;
+    while (k < 8) { _blk_try_cols(BLK_V5 + k - 5, k); k = k + 1; }
+    _blk_res_id = _blk_b_id;
+    store64(&_blk_res_mean,      _blk_mean(t0, 64));
+    store64(&_blk_res_mean + 8,  _blk_mean(t1, 64));
+    store64(&_blk_res_mean + 16, _blk_mean(t2, 64));
+    if (_blk_b_id == BLK_SPACE) {
+        var c = 0;
+        while (c < 3) {
+            store64(&_blk_res_fg + c * 8, load64(&_blk_res_mean + c * 8));
+            store64(&_blk_res_bg + c * 8, load64(&_blk_res_mean + c * 8));
+            c = c + 1;
+        }
+        return 0;
+    }
+    var n = _blk_b_n;
+    store64(&_blk_res_fg,      _blk_mean(_blk_b_s0, n));
+    store64(&_blk_res_fg + 8,  _blk_mean(_blk_b_s1, n));
+    store64(&_blk_res_fg + 16, _blk_mean(_blk_b_s2, n));
+    store64(&_blk_res_bg,      _blk_mean(t0 - _blk_b_s0, 64 - n));
+    store64(&_blk_res_bg + 8,  _blk_mean(t1 - _blk_b_s1, 64 - n));
+    store64(&_blk_res_bg + 16, _blk_mean(t2 - _blk_b_s2, 64 - n));
+    return 0;
+}
+
+# The cost of one sample on the wrong side of a glyph in a cell with
+# transparency: the largest colour error a sample can have.
+var BLK_COVER_COST = 195075;    # 3 * 255^2
+
+# The glyph for a cell with both opaque and transparent samples: ink should
+# cover the opaque ones. Error = BLK_COVER_COST per sample on the wrong side
+# + the squared error of the opaque samples under the ink about their mean,
+# compared exactly as (cost * n + sq * n - |S|^2) / n. Every shape glyph is a
+# candidate (the space and █ too), in id order; ties keep the earlier.
+fn _blk_choose_mixed(): i64 {
+    var opq = _blk_opq;
+    var best_id = 0 - 1;
+    var best_num = 0;
+    var best_den = 1;
+    var bs0 = 0;
+    var bs1 = 0;
+    var bs2 = 0;
+    var bn = 0;
+    var id = 0;
+    while (id < BLK_LIGHT) {
+        var ink = blk_glyph_mask(id);
+        var s0 = 0;
+        var s1 = 0;
+        var s2 = 0;
+        var sq = 0;
+        var n = 0;
+        var wrong = 0;
+        var i = 0;
+        while (i < 64) {
+            var on = (ink >> i) & 1;
+            var op = (opq >> i) & 1;
+            if (on != op) { wrong = wrong + 1; }
+            if (on == 1 && op == 1) {
+                var p = &_blk_smp + i * 24;
+                var r = load64(p);
+                var g = load64(p + 8);
+                var b = load64(p + 16);
+                s0 = s0 + r; s1 = s1 + g; s2 = s2 + b;
+                sq = sq + r * r + g * g + b * b;
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        var den = n;
+        if (den == 0) { den = 1; }
+        var num = BLK_COVER_COST * wrong * den;
+        if (n > 0) { num = num + sq * n - (s0 * s0 + s1 * s1 + s2 * s2); }
+        if (best_id < 0 || num * best_den < best_num * den) {
+            best_id = id;
+            best_num = num;
+            best_den = den;
+            bs0 = s0; bs1 = s1; bs2 = s2;
+            bn = n;
+        }
+        id = id + 1;
+    }
+    _blk_res_id = best_id;
+    var c = 0;
+    while (c < 3) {
+        store64(&_blk_res_fg + c * 8, 0);
+        store64(&_blk_res_bg + c * 8, 0);
+        store64(&_blk_res_mean + c * 8, 0);
+        c = c + 1;
+    }
+    if (bn > 0) {
+        store64(&_blk_res_fg,      _blk_mean(bs0, bn));
+        store64(&_blk_res_fg + 8,  _blk_mean(bs1, bn));
+        store64(&_blk_res_fg + 16, _blk_mean(bs2, bn));
+    }
+    return 0;
+}
+
+# The cell's kind, as the frame records it.
+var BLK_KIND_OPAQUE = 0;
+var BLK_KIND_CLEAR  = 1;       # no opaque sample: a space on the default background
+var BLK_KIND_MIXED  = 2;       # the glyph's ink over the default background
+
+# Choose the cell from _blk_smp / _blk_opq. Returns its kind; the glyph and
+# colours are in _blk_res_*.
+fn blk_choose(): i64 {
+    if (_blk_inited == 0) { _blk_init(); }
+    if (_blk_opq == 0) {
+        _blk_res_id = BLK_SPACE;
+        var c = 0;
+        while (c < 3) {
+            store64(&_blk_res_fg + c * 8, 0);
+            store64(&_blk_res_bg + c * 8, 0);
+            store64(&_blk_res_mean + c * 8, 0);
+            c = c + 1;
+        }
+        return BLK_KIND_CLEAR;
+    }
+    if (_blk_opq == 0 - 1) {
+        _blk_choose_opaque();
+        return BLK_KIND_OPAQUE;
+    }
+    _blk_choose_mixed();
+    if (_blk_res_id == BLK_SPACE) { return BLK_KIND_CLEAR; }
+    return BLK_KIND_MIXED;
+}
+
+# ---- the frame --------------------------------------------------------------
+# The lane's state, an array of i64 slots: the per-cell records (glyph id,
+# kind, mean R G B: 5 bytes a cell), the foreground and background colour
+# fields and their masks (quantize_rgb_buf's input), their codes, and whether
+# shades are in use.
+var BLK_ST_COLS   = 0;
+var BLK_ST_ROWS   = 8;
+var BLK_ST_REC    = 16;
+var BLK_ST_FG     = 24;
+var BLK_ST_BG     = 32;
+var BLK_ST_FGMASK = 40;
+var BLK_ST_BGMASK = 48;
+var BLK_ST_FGCODE = 56;
+var BLK_ST_BGCODE = 64;
+var BLK_ST_SHADES = 72;
+var BLK_ST_SIZE   = 80;
+var BLK_REC_BYTES = 5;
+
+# 1 if the shades are in use: under --dither ordered or fs, at tiers 8 and 16.
+fn blk_shades_on(): i64 {
+    if (quant_dither() == KII_DITHER_NONE) { return 0; }
+    if (quant_tier() == KII_TIER_8 || quant_tier() == KII_TIER_16) { return 1; }
+    return 0;
+}
+
+# Build the lane's state for a cols x rows frame from pstruct's decoded RGBA8:
+# every cell's glyph and colours, quantized at the active tier and dither.
+# Returns the state, or 0 on a bad pstruct, a bad geometry or an allocation
+# failure.
+fn blk_prepare(pstruct, cols, rows): i64 {
+    _blk_init();
+    var src_w  = load64(pstruct + STRUCT_WIDTH_OFFSET);
+    var src_h  = load64(pstruct + STRUCT_HEIGHT_OFFSET);
+    var pixels = load64(pstruct + STRUCT_PIXELS_BUF_OFFSET);
+    if (pixels == 0 || src_w <= 0 || src_h <= 0) { return 0; }
+    if (load64(pstruct + STRUCT_BIT_DEPTH_OFFSET) != 8 || load64(pstruct + STRUCT_COLOR_TYPE_OFFSET) != 6) { return 0; }
+    if (load64(pstruct + STRUCT_PIXELS_SIZE_OFFSET) < src_w * src_h * 4) { return 0; }
+    if (cols <= 0 || rows <= 0) { return 0; }
+    # Every per-cell buffer is at most 5 bytes a cell, and the column taps
+    # 8 * (KII_AREA_TAPS + 1) * 8 bytes a column: refuse a geometry whose sizes
+    # would pass ALLOC_MAX before multiplying them. The row taps are built per
+    # cell row, so they take 8 entries whatever the height.
+    var k = KII_AREA_TAPS;
+    if (cols > ALLOC_MAX / (64 * (k + 1))) { return 0; }
+    if (rows > (ALLOC_MAX / 12) / cols) { return 0; }
+    var cells = cols * rows;
+    var st = alloc(BLK_ST_SIZE);
+    var xt = alloc(cols * 8 * (k + 1) * 8);
+    var yt = alloc(8 * (k + 1) * 8);
+    var rec = alloc(cells * BLK_REC_BYTES);
+    var fg = alloc(cells * 3);
+    var bg = alloc(cells * 3);
+    var fgm = alloc(cells);
+    var bgm = alloc(cells);
+    var fgc = alloc(cells * 4);
+    var bgc = alloc(cells * 4);
+    if (st == 0 || xt == 0 || yt == 0 || rec == 0 || fg == 0 || bg == 0) { return 0; }
+    if (fgm == 0 || bgm == 0 || fgc == 0 || bgc == 0) { return 0; }
+    _area_taps(xt, cols * 8, src_w, k, 4);
+    var cy = 0;
+    while (cy < rows) {
+        _area_taps_from(yt, cy * 8, 8, rows * 8, src_h, k, src_w * 4);
+        var cx = 0;
+        while (cx < cols) {
+            var ci = cy * cols + cx;
+            _blk_sample(pixels, xt, yt, k, cx, cy);
+            var kind = blk_choose();
+            var r = rec + ci * BLK_REC_BYTES;
+            store8(r, _blk_res_id);
+            store8(r + 1, kind);
+            store8(r + 2, load64(&_blk_res_mean));
+            store8(r + 3, load64(&_blk_res_mean + 8));
+            store8(r + 4, load64(&_blk_res_mean + 16));
+            var c = 0;
+            while (c < 3) {
+                store8(fg + ci * 3 + c, load64(&_blk_res_fg + c * 8));
+                store8(bg + ci * 3 + c, load64(&_blk_res_bg + c * 8));
+                c = c + 1;
+            }
+            store8(fgm + ci, kind == BLK_KIND_CLEAR);
+            store8(bgm + ci, kind != BLK_KIND_OPAQUE);
+            cx = cx + 1;
+        }
+        cy = cy + 1;
+    }
+    if (quantize_rgb_buf(fg, fgm, cols, rows, fgc) != 0) { return 0; }
+    if (quantize_rgb_buf(bg, bgm, cols, rows, bgc) != 0) { return 0; }
+    store64(st + BLK_ST_COLS, cols);
+    store64(st + BLK_ST_ROWS, rows);
+    store64(st + BLK_ST_REC, rec);
+    store64(st + BLK_ST_FG, fg);
+    store64(st + BLK_ST_BG, bg);
+    store64(st + BLK_ST_FGMASK, fgm);
+    store64(st + BLK_ST_BGMASK, bgm);
+    store64(st + BLK_ST_FGCODE, fgc);
+    store64(st + BLK_ST_BGCODE, bgc);
+    store64(st + BLK_ST_SHADES, blk_shades_on());
+    return st;
+}
+
+# ---- shades -----------------------------------------------------------------
+# The shade that draws a flat cell of mean (m0, m1, m2) best: the 1/4, 1/2 or
+# 3/4 mix of two of the four palette colours nearest the mean (ties to the
+# lower index), if one is nearer the mean than `q`, the colour the cell would
+# be drawn in. Errors are kept x16 so the quarters stay integers. Returns 1 and
+# sets _blk_sh_* when a shade wins, else 0.
+var _blk_sh_id = 0;
+var _blk_sh_fg = 0;
+var _blk_sh_bg = 0;
+
+fn _blk_pal(code, c): i64 { return _quant_code_channel(code, c); }
+
+fn _blk_shade(m0, m1, m2, q): i64 {
+    var npal = quant_tier();
+    var near[32];                     # the four nearest codes (4 i64s)
+    var neard[32];                    # and their squared distances
+    var j = 0;
+    while (j < 4) { store64(&near + j * 8, 0 - 1); store64(&neard + j * 8, 0); j = j + 1; }
+    var i = 0;
+    while (i < npal) {
+        var d0 = m0 - _blk_pal(i, 0);
+        var d1 = m1 - _blk_pal(i, 1);
+        var d2 = m2 - _blk_pal(i, 2);
+        var d = d0 * d0 + d1 * d1 + d2 * d2;
+        # Insert into the sorted four (strictly nearer moves ahead).
+        var pos = 4;
+        while (pos > 0 && (load64(&near + (pos - 1) * 8) < 0 || d < load64(&neard + (pos - 1) * 8))) { pos = pos - 1; }
+        if (pos < 4) {
+            var s = 3;
+            while (s > pos) {
+                store64(&near + s * 8, load64(&near + (s - 1) * 8));
+                store64(&neard + s * 8, load64(&neard + (s - 1) * 8));
+                s = s - 1;
+            }
+            store64(&near + pos * 8, i);
+            store64(&neard + pos * 8, d);
+        }
+        i = i + 1;
+    }
+    var e0 = 4 * m0 - 4 * _blk_pal(q, 0);
+    var e1 = 4 * m1 - 4 * _blk_pal(q, 1);
+    var e2 = 4 * m2 - 4 * _blk_pal(q, 2);
+    var best = e0 * e0 + e1 * e1 + e2 * e2;
+    var found = 0;
+    var a = 0;
+    while (a < 4) {
+        var b = a + 1;
+        while (b < 4) {
+            var ca = load64(&near + a * 8);
+            var cb = load64(&near + b * 8);
+            var w = 1;
+            while (w < 4) {
+                var x0 = 4 * m0 - (w * _blk_pal(ca, 0) + (4 - w) * _blk_pal(cb, 0));
+                var x1 = 4 * m1 - (w * _blk_pal(ca, 1) + (4 - w) * _blk_pal(cb, 1));
+                var x2 = 4 * m2 - (w * _blk_pal(ca, 2) + (4 - w) * _blk_pal(cb, 2));
+                var e = x0 * x0 + x1 * x1 + x2 * x2;
+                if (e < best) {
+                    best = e;
+                    found = 1;
+                    _blk_sh_id = BLK_LIGHT + w - 1;     # ░ ▒ ▓: a over b at w quarters
+                    _blk_sh_fg = ca;
+                    _blk_sh_bg = cb;
+                }
+                w = w + 1;
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    return found;
+}
+
+# ---- the row ----------------------------------------------------------------
+# Emit one cell: glyph `id` with foreground `fg` and background `bg`. The space
+# needs only the background and █ only the foreground; every other glyph needs
+# both. An escape is written only when the colour differs from the one this
+# row last set (_blk_cur_*). Returns the new pos, or -1.
+var _blk_cur_fg = 0;
+var _blk_cur_bg = 0;
+
+fn _blk_needs_fg(id): i64 { return id != BLK_SPACE; }
+fn _blk_needs_bg(id): i64 { return id != BLK_FULL; }
+
+# How many escapes drawing (id, fg, bg) would write.
+fn _blk_cost(id, fg, bg): i64 {
+    var n = 0;
+    if (_blk_needs_fg(id) == 1 && fg != _blk_cur_fg) { n = n + 1; }
+    if (_blk_needs_bg(id) == 1 && bg != _blk_cur_bg) { n = n + 1; }
+    return n;
+}
+
+fn _blk_emit(buf, pos, id, fg, bg): i64 {
+    if (_blk_needs_fg(id) == 1 && fg != _blk_cur_fg) {
+        pos = _kii_sgr_fg(buf, pos, fg);
+        if (pos < 0) { return 0 - 1; }
+        _blk_cur_fg = fg;
+    }
+    if (_blk_needs_bg(id) == 1 && bg != _blk_cur_bg) {
+        pos = _kii_sgr_bg(buf, pos, bg);
+        if (pos < 0) { return 0 - 1; }
+        _blk_cur_bg = bg;
+    }
+    if (id == BLK_SPACE) {
+        store8(buf + pos, 32);
+        return pos + 1;
+    }
+    store8(buf + pos, 0xE2);
+    store8(buf + pos + 1, 0x96);
+    store8(buf + pos + 2, blk_glyph_b2(id));
+    return pos + 3;
+}
+
+# Draw a flat cell in colour q: a space when the background is already q, █
+# when only the foreground is, else a space after a background escape (one
+# escape either way, and the space is one byte, not three).
+fn _blk_emit_flat(buf, pos, q): i64 {
+    if (_blk_cur_bg != q && _blk_cur_fg == q) { return _blk_emit(buf, pos, BLK_FULL, q, 0); }
+    return _blk_emit(buf, pos, BLK_SPACE, 0, q);
+}
+
+# Draw (id, a, b) or its complement (flip, b, a), whichever writes fewer
+# escapes; a tie keeps (id, a, b). Returns the new pos, or -1.
+fn _blk_emit_either(buf, pos, id, a, b): i64 {
+    var flip = blk_glyph_flip(id);
+    if (flip >= 0 && _blk_cost(flip, b, a) < _blk_cost(id, a, b)) {
+        return _blk_emit(buf, pos, flip, b, a);
+    }
+    return _blk_emit(buf, pos, id, a, b);
+}
+
+# emit_blocks_row_buf — render character row `cy` of the frame `st`
+# (blk_prepare) into `buf` at `pos`, in the (src, w, row, buf, pos) shape
+# _kii_emit_frame calls. The row's colour state starts unknown, so every row
+# is self-contained. Returns the new pos, or -1.
+fn emit_blocks_row_buf(st, cols, cy, buf, pos): i64 {
+    _blk_init();
+    var rec = load64(st + BLK_ST_REC);
+    var fgc = load64(st + BLK_ST_FGCODE);
+    var bgc = load64(st + BLK_ST_BGCODE);
+    var shades = load64(st + BLK_ST_SHADES);
+    _blk_cur_fg = 0 - 1;
+    _blk_cur_bg = 0 - 1;
+    var cx = 0;
+    while (cx < cols) {
+        var ci = cy * cols + cx;
+        var r = rec + ci * BLK_REC_BYTES;
+        var id = load8(r);
+        var kind = load8(r + 1);
+        var a = load32(fgc + ci * 4);
+        var b = load32(bgc + ci * 4);
+        if (kind == BLK_KIND_CLEAR) {
+            pos = _blk_emit(buf, pos, BLK_SPACE, 0, KII_COLOR_DEFAULT);
+        } else {
+            if (kind == BLK_KIND_MIXED) {
+                pos = _blk_emit(buf, pos, id, a, KII_COLOR_DEFAULT);
+            } else {
+                if (id == BLK_SPACE || a == b) {
+                    # Flat at this tier: one colour, or a shade under dither.
+                    var q = a;
+                    if (id == BLK_SPACE) { q = b; }
+                    if (shades == 1 && _blk_shade(load8(r + 2), load8(r + 3), load8(r + 4), q) == 1) {
+                        pos = _blk_emit_either(buf, pos, _blk_sh_id, _blk_sh_fg, _blk_sh_bg);
+                    } else {
+                        pos = _blk_emit_flat(buf, pos, q);
+                    }
+                } else {
+                    pos = _blk_emit_either(buf, pos, id, a, b);
+                }
+            }
+        }
+        if (pos < 0) { return 0 - 1; }
+        cx = cx + 1;
+    }
+    return _kii_row_end(buf, pos);
+}
+
+# emit_blocks — render a cols x rows frame of the decoded image in pstruct to
+# fd 1. Returns 0, -1 when the state cannot be built (a bad pstruct or
+# geometry, or an allocation failure), or -2 when a write to stdout fails.
+# Each cell is at most EMIT_CELL_MAX bytes (two truecolour escapes and a
+# 3-byte glyph), as in the half-block lane.
+fn emit_blocks(pstruct, cols, rows): i64 {
+    var st = blk_prepare(pstruct, cols, rows);
+    if (st == 0) { return 0 - 1; }
+    return _kii_emit_frame(&emit_blocks_row_buf, st, cols, rows, cols * (EMIT_CELL_MAX + 1) + 16);
+}

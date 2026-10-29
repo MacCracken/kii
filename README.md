@@ -6,9 +6,9 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v1.11.0** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, two render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v2.0.0** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, three render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
 
-`kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal:
+`kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal (or, on request, text glyphs or the full Block Elements set):
 
 ```
 $ kii tests/fixtures/RAMGON.png        # renders half-block ANSI to the terminal
@@ -88,6 +88,12 @@ shared substrate, which is the point:
   most ~3 % more at up to 200 columns, and more on very wide frames (+23 % at 400)
   ([ADR 0005](docs/adr/0005-nearest-neighbor-downscale.md) § v1.11.0 amendment). Reduced ASCII
   frames change; half-block frames are byte-identical.
+- **v2.0.0** — a third lane, `--mode blocks`: every cell sampled 8 × 8 and drawn as the Block
+  Element that fits it best (eighths, quadrants, diagonals, halves) in two colours, with
+  `░ ▒ ▓` as colour mixes under `--dither`. Lower per-pixel error than half-block on every
+  test image, and smaller frames at 16 colours. Opt-in, because CP437-era console fonts lack
+  the quadrants and eighths ([ADR 0012](docs/adr/0012-block-elements-lane.md)). Half-block and
+  ASCII frames are byte-identical to 1.11.0.
 
 ### Supported input formats
 
@@ -102,7 +108,7 @@ All four arrive from the [`chitra`](https://github.com/MacCracken/chitra) substr
 
 - **Animated GIF beyond frame 1** — kii is a still-frame renderer; chitra decodes the first frame by design (chitra ADR 0005)
 - **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra is baseline-only)
-- **Sixel / Kitty / iTerm2 image protocols** — tier 3, open for 2.0
+- **Sixel / Kitty / iTerm2 image protocols** — tier 3, pinned to 2.4.0–2.6.0 ([roadmap](docs/development/roadmap.md))
 
 ## Usage
 
@@ -114,7 +120,7 @@ kii [OPTIONS] <image>
 |---|---|---|
 | `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000; negative values are refused. |
 | `-c, --color <8\|16\|256\|tc>` | `16` | Colour tier. `16` uses the 16 ANSI colours (SGR 30–37 / 90–97), `8` the normal-intensity half only (30–37, for the strictest terminals), `256` the xterm 6×6×6 cube and grey ramp, `tc` 24-bit truecolour. kii never reads `COLORTERM`: the tier is what you ask for. |
-| `-m, --mode <M>` | `halfblock` | `halfblock` emits `▀` cells at double vertical resolution; `ascii` emits text glyphs chosen by shape. |
+| `-m, --mode <M>` | `halfblock` | `halfblock` emits `▀` cells at double vertical resolution; `ascii` emits text glyphs chosen by shape; `blocks` (v2.0.0) emits whichever Block Element fits each cell's 8 × 8 samples best, in two colours (needs a font with the quadrants and eighths). |
 | `-d, --dither <none\|ordered\|fs>` | `none` | Dithering at tiers 8, 16 and 256. `ordered` adds a 4×4 Bayer pattern; `fs` diffuses each pixel's error (Floyd-Steinberg). Both turn bands into a mix of two neighbouring colours, and make the frame larger. No effect at `tc`. |
 | `-v, --verbose` | off | Print a dimensions/format summary to **stderr** after the frame. |
 | `-h, --help` | — | Show help and exit. |
@@ -124,6 +130,7 @@ kii [OPTIONS] <image>
 kii photo.jpg                      # any of the four formats, detected by signature
 kii --width 120 image.png          # explicit width; height follows the aspect ratio
 kii --mode ascii image.png         # text-glyph art instead of half-blocks
+kii --mode blocks image.png        # eighths, quadrants and diagonals: finer edges
 kii --color 8 image.png            # 8-colour tier for the strictest terminals
 kii --color tc photo.jpg           # 24-bit truecolour
 kii --dither fs photo.jpg          # smooth gradients in 16 colours (or --dither ordered)
@@ -177,6 +184,7 @@ Per AGNOS `feedback_redesign_dont_reinvent` the convergent shape comes from mult
 | Dithering (v1.9.0) | Floyd & Steinberg (1976); Bayer (1973) ordered matrix | `chafa` (`--dither ordered\|diffusion`), `libcaca` (`ordered2/4/8`, `fstein`) |
 | Character-glyph matching (`--mode ascii`) | Alex Harri, ["ASCII characters are not pixels"](https://alexharri.com/blog/ascii-rendering): shape vectors (v1.3.1), per-dimension normalization and contrast enhancement (v1.10.0), several samples per region (supersampling; kii averages each region's area, v1.11.0) | `chafa` (`--symbols`), `jp2a` (the luminance ramp v1.3.0 started from) |
 | Half-block glyph quantization | `chafa` source `chafa-canvas.c` glyph-selection routines | Various ASCII-art-converter tutorials; Unicode Block Elements block (`U+2580`-`U+259F`) spec |
+| Block Elements lane (`--mode blocks`, v2.0.0) | `chafa`'s `block` symbols: two colours per cell, each region's mean, least error | notcurses' quadrant blitter (per-cell colour pair); the complement choice ADR 0004 noted for `▀`/`▄` |
 
 ## Building
 
@@ -193,10 +201,10 @@ truth, so read it there.
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 877 assertions across 5 suites (cli/quant/render/ascii/decode)
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 12 fuzz surfaces, 8,151,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area)
+cyrius test                           # 964 assertions across 6 suites (cli/quant/render/ascii/blocks/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 14 fuzz surfaces, 8,371,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area/blocks ×2)
 ./scripts/gen-shape-table.sh --check                            # the ASCII glyph table is the generator's output (needs ImageMagick 7 + Liberation Mono)
-cyrius bench tests/kii.bcyr                                     # 11 benches (quantize, end-to-end, ASCII sampling, decode-latency)
+cyrius bench tests/kii.bcyr                                     # 13 benches (quantize, end-to-end, ASCII sampling, blocks, decode-latency)
 ```
 
 Benchmark results are captured per release in [`docs/benchmarks.md`](docs/benchmarks.md).

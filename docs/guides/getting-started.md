@@ -68,7 +68,7 @@ Options:
   -w, --width <int>	output width in columns (0 = match terminal)
   -c, --color <8|16|256|tc>	colour tier (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
-  -m, --mode <halfblock|ascii>	render mode (default: halfblock)
+  -m, --mode <halfblock|ascii|blocks>	render mode (default: halfblock)
   -d, --dither <none|ordered|fs>	dithering (default: none)
 
 Examples:
@@ -79,6 +79,7 @@ Examples:
   kii art.bmp                                # ...as do BMP and GIF (first frame)
   kii --verbose image.png                    # frame + dimensions/format on stderr
   kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
+  kii --mode blocks image.png                # every Block Element: 8x8 shapes, 2 colours a cell
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
   kii --dither fs photo.jpg                  # error-diffused gradients (or ordered)
   kii image.png > frame.ansi                 # capture pure ANSI bytes
@@ -110,6 +111,21 @@ Examples:
   kii does not read `COLORTERM` or `TERM`: the tier is what you pass.
   Within a row, an escape is written only when the colour changes, so a
   tier-16 frame is far smaller than it was before v1.8.0.
+- **`--mode halfblock|ascii|blocks`** (`-m`) — The render lane.
+  - `halfblock` (the default) draws every cell as `▀` in two colours,
+    one per half. It renders on any font that has `▀` and `▄`.
+  - `ascii` draws a text glyph per cell, chosen by its shape, in one
+    colour ([ADR 0007](../adr/0007-rendering-mode-taxonomy.md)).
+  - `blocks` (since v2.0.0, [ADR 0012](../adr/0012-block-elements-lane.md))
+    samples each cell 8 × 8 and draws the Block Element (`▁`..`▇`,
+    `▏`..`▉`, the quadrants, `▚ ▞`, `▀ ▄ ▌ ▐ █`) that fits it best, in
+    two colours. Edges and outlines follow the image at an eighth of a
+    cell, and a 16-colour frame is usually smaller than half-block's.
+    It needs a font with the quadrants and eighths: most terminal fonts
+    have them, but a Linux console font descended from CP437 may not.
+    Under `--dither ordered` or `fs` at 8 or 16 colours it also draws
+    `░ ▒ ▓` as mixes of two colours. Very thin coloured detail averages
+    to a dimmer colour than the half-block lane's single pixel shows.
 - **`--dither none|ordered|fs`** (`-d`) — Dithering, since v1.9.0
   ([ADR 0011](../adr/0011-dithering.md)). The default `none` maps each
   pixel to its nearest colour, so a gradient becomes flat bands.
@@ -119,7 +135,7 @@ Examples:
     and lower neighbours, which gives an irregular mix that follows the
     source more closely.
 
-  Both work at tiers 8, 16 and 256 and in both `--mode`s. At `tc` there
+  Both work at tiers 8, 16 and 256 and in every `--mode`. At `tc` there
   is nothing to dither, and the flag changes nothing. A dithered frame
   is larger, because a pattern of two colours breaks the runs that
   escape elision skips: about 1.4–1.6× at tier 8, 1.8–2× at tier 16,
@@ -213,6 +229,7 @@ After a successful decode:
 | `<path>: downscale failed (out of memory)` | The resampled buffer could not be allocated; in the `--mode ascii` lane (v1.11.0), also its luminance plane or sample tables |
 | `<path>: quantization failed (OOM)` | The palette-index buffer could not be allocated |
 | `<path>: ANSI emit failed (downscale or quantize not run)` | Internal ordering error in the half-block lane. Not expected; please report it |
+| `<path>: blocks render failed (out of memory)` | The `--mode blocks` lane (v2.0.0) could not allocate its per-cell records, colour fields or tap table |
 | `<path>: ANSI emit failed (downscale not run)` | The same, in the `--mode ascii` lane, which also prints it when the lane's luminance plane (v1.10.0; built here only for a frame that is not reduced, since v1.11.0) or, under `--dither fs`, its cell colours cannot be allocated |
 | `<path>: failed to write frame to stdout` | write(2) to stdout failed — e.g. the destination filesystem is full |
 
@@ -239,7 +256,7 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: flag takes no value` | The same, when no flag can be named |
 | `kii: --color must be 8, 16, 256 or tc` | Any other `--color` value (`8 or 16` before v1.8.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
-| `kii: --mode must be halfblock or ascii` | Any other `--mode` value |
+| `kii: --mode must be halfblock, ascii or blocks` | Any other `--mode` value |
 | `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |
 | `kii: missing image path` | No path given |
 | `kii: too many arguments (expected one image path)` | More than one path |

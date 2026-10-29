@@ -462,3 +462,51 @@ downscale a decoded RAMGON to the ASCII lane's grid:
 
 At 80 columns every span is over 4 pixels, so each sample takes 16 taps. At 200 columns the
 spans are about 3 × 4 pixels, so they are read whole and every source pixel is read once.
+
+## v2.0.0 — the Block Elements lane
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`. CPU per run (user + system), three
+interleaved rounds, minimum shown; tier 16, no dither.
+
+| Render | half-block | `--mode blocks` |
+|---|---:|---:|
+| archlinux-logo 256², `--width 80` | 1.92 ms | 9.26 ms |
+| archlinux-logo 256², `--width 200` | 3.05 ms | 38.22 ms |
+| RAMGON 1152×925, `--width 80` | 205.8 ms | 220.1 ms |
+| RAMGON, `--width 200` | 208.3 ms | 261.8 ms |
+| kitty screenshot 3880×2168, `--width 80` | 332.7 ms | 347.3 ms |
+| 4000×4000 PNG at the cell cap (`--width 1448`, 1.05 M cells), wall | 0.65 s | 3.84 s |
+
+- **About 2–3 µs a cell.** Variant builds put about half in the shape choice (scoring 19
+  splits from the cell's row, column and quadrant sums) and most of the rest in sampling
+  (64 samples through the area taps). Skipping the three divisions of a one-pixel sample
+  saved 1 % and was not kept.
+- **Peak RSS** at the cell cap is 132.7 MB against 126.7 MB: the lane keeps 21 bytes a
+  cell and one cell row of row taps, not the samples.
+- **The half-block and ASCII lanes are unchanged**: byte-identical to v1.11.0 on the
+  corpus. Two interleaved rounds of `kii-bench` against v1.11.0 put the existing rows within
+  run-to-run noise: RAMGON 80×24 194.0 and 200.4 ms against 193.1 and 194.1, the 2048² decode
+  359.1–362.8 against 361.0–361.8, the area sampler 1.64 against 1.64–1.65 ms.
+
+**`kii-bench`**, two new rows, decode excluded (a decoded RAMGON drawn as a blocks frame,
+every row into the scratch line):
+
+| Frame | time |
+|---|---:|
+| 80 × 32 cells (`--width 80`) | 13.9–14.0 ms |
+| 200 × 80 cells (`--width 200`) | 52.8–53.2 ms |
+
+**Bytes and fidelity.** The frame rasterized (8 × 16 pixels a cell) against the source
+box-filtered to the same size, at `--width 80`; RMS error per channel:
+
+| Image | half-block RMS / bytes | blocks RMS / bytes |
+|---|---:|---:|
+| RAMGON | 38.9 / 14,553 | 32.1 / 8,080 |
+| RAMGON, `--color tc` | 28.0 / 94,244 | 18.0 / 94,298 |
+| archlinux-logo | 19.1 / 6,150 | 17.9 / 5,577 |
+| kitty screenshot | 57.1 / 7,288 | 36.5 / 5,260 |
+| kitty screenshot, `--color tc` | 47.7 / 12,939 | 24.4 / 30,761 |
+
+Over the corpus's 2,280 rendered blocks frames (5 flag sets across tiers and dithers), the
+lane writes 0.63× the half-block lane's bytes. At truecolour it can write more, when most
+cells carry two distinct colours.

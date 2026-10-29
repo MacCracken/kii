@@ -1,0 +1,519 @@
+# tests/blocks.tcyr — the Block Elements lane (--mode blocks, v2.0.0, ADR 0012).
+# Covers the glyph table, the shape choice for opaque cells (against a
+# brute-force reference over the same splits), cells with transparency, the
+# sampler's half-coverage rule, whole rows at each tier with the complement
+# and flat-cell choices, the shades, and the guards. Standalone suite.
+include "src/blocks.cyr"
+include "lib/assert.cyr"
+
+# ---- helpers ----------------------------------------------------------------
+
+# Every sample of the cell to (r, g, b), all opaque.
+fn _bk_fill(r, g, b): i64 {
+    var i = 0;
+    while (i < 64) { blk_set_sample(i, r, g, b); i = i + 1; }
+    blk_set_opaque(0 - 1);
+    return 0;
+}
+
+# The samples x in [x0, x1), y in [y0, y1) to (r, g, b).
+fn _bk_rect(x0, x1, y0, y1, r, g, b): i64 {
+    var y = y0;
+    while (y < y1) {
+        var x = x0;
+        while (x < x1) { blk_set_sample(y * 8 + x, r, g, b); x = x + 1; }
+        y = y + 1;
+    }
+    return 0;
+}
+
+fn _bk_fg(c): i64 { return load64(&_blk_res_fg + c * 8); }
+fn _bk_bg(c): i64 { return load64(&_blk_res_bg + c * 8); }
+fn _bk_rgb_is(p, r, g, b): i64 {
+    if (load64(p) != r || load64(p + 8) != g || load64(p + 16) != b) { return 0; }
+    return 1;
+}
+
+fn _bk_popcount(m): i64 {
+    var n = 0;
+    var i = 0;
+    while (i < 64) { n = n + ((m >> i) & 1); i = i + 1; }
+    return n;
+}
+
+# The brute-force reference for an opaque cell: for one colour and each split
+# in _BLK_SPLITS order, the between-region term |S_M|^2/n_M + |S_rest|^2/n_rest
+# from the samples and the split's own mask; the first largest wins.
+fn _bk_ref_choose(): i64 {
+    var t0 = 0;
+    var t1 = 0;
+    var t2 = 0;
+    var i = 0;
+    while (i < 64) {
+        t0 = t0 + load64(&_blk_smp + i * 24);
+        t1 = t1 + load64(&_blk_smp + i * 24 + 8);
+        t2 = t2 + load64(&_blk_smp + i * 24 + 16);
+        i = i + 1;
+    }
+    var best = BLK_SPACE;
+    var bnum = t0 * t0 + t1 * t1 + t2 * t2;
+    var bden = 64;
+    var s = 0;
+    while (s < BLK_SPLIT_COUNT) {
+        var id = blk_split_id(s);
+        var m = blk_glyph_mask(id);
+        var a0 = 0;
+        var a1 = 0;
+        var a2 = 0;
+        var n = 0;
+        i = 0;
+        while (i < 64) {
+            if (((m >> i) & 1) == 1) {
+                a0 = a0 + load64(&_blk_smp + i * 24);
+                a1 = a1 + load64(&_blk_smp + i * 24 + 8);
+                a2 = a2 + load64(&_blk_smp + i * 24 + 16);
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        var u0 = t0 - a0;
+        var u1 = t1 - a1;
+        var u2 = t2 - a2;
+        var num = (a0 * a0 + a1 * a1 + a2 * a2) * (64 - n) + (u0 * u0 + u1 * u1 + u2 * u2) * n;
+        var den = n * (64 - n);
+        if (num * bden > bnum * den) { best = id; bnum = num; bden = den; }
+        s = s + 1;
+    }
+    return best;
+}
+
+var _bk_seed = 7;
+fn _bk_rand(): i64 {
+    _bk_seed = (_bk_seed * 1103515245 + 12345) & 2147483647;
+    return _bk_seed >> 8;
+}
+
+# A w x h RGBA8 image in a fresh pstruct, all opaque black.
+fn _bk_image(ps, w, h): i64 {
+    var z = 0;
+    while (z < 160) { store64(ps + z, 0); z = z + 8; }
+    var buf = alloc(w * h * 4);
+    var i = 0;
+    while (i < w * h) {
+        store8(buf + i * 4, 0); store8(buf + i * 4 + 1, 0);
+        store8(buf + i * 4 + 2, 0); store8(buf + i * 4 + 3, 255);
+        i = i + 1;
+    }
+    store64(ps + STRUCT_WIDTH_OFFSET, w);
+    store64(ps + STRUCT_HEIGHT_OFFSET, h);
+    store64(ps + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(ps + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(ps + STRUCT_PIXELS_BUF_OFFSET, buf);
+    store64(ps + STRUCT_PIXELS_SIZE_OFFSET, w * h * 4);
+    return 0;
+}
+
+# Paint the pixels x in [x0, x1), y in [y0, y1) of pstruct's image.
+fn _bk_paint(ps, x0, x1, y0, y1, r, g, b, a): i64 {
+    var w = load64(ps + STRUCT_WIDTH_OFFSET);
+    var pix = load64(ps + STRUCT_PIXELS_BUF_OFFSET);
+    var y = y0;
+    while (y < y1) {
+        var x = x0;
+        while (x < x1) {
+            var p = pix + (y * w + x) * 4;
+            store8(p, r); store8(p + 1, g); store8(p + 2, b); store8(p + 3, a);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+# Render row cy of a cols x rows frame of pstruct's image and compare it with
+# `expect` byte for byte.
+var _bk_buf[512];
+fn _bk_row_is(ps, cols, rows, cy, expect): i64 {
+    var st = blk_prepare(ps, cols, rows);
+    if (st == 0) { return 0; }
+    var n = emit_blocks_row_buf(st, cols, cy, &_bk_buf, 0);
+    if (n != strlen(expect)) { return 0; }
+    return memeq(&_bk_buf, expect, n);
+}
+
+# ---- the glyph table ----------------------------------------------------------
+fn test_blocks_glyphs() {
+    test_group("v2.0.0 — the 32 Block Elements and the space");
+    _blk_init();
+    assert_eq(blk_glyph_b2(BLK_SPACE), 0, "the space has no Block Element byte");
+    var seen = 0;
+    var ok = 1;
+    var id = 1;
+    while (id < BLK_COUNT) {
+        var b2 = blk_glyph_b2(id);
+        if (b2 < 0x80 || b2 > 0x9F) { ok = 0; }
+        else {
+            if (((seen >> (b2 - 0x80)) & 1) == 1) { ok = 0; }
+            seen = seen | (1 << (b2 - 0x80));
+        }
+        id = id + 1;
+    }
+    assert_eq(ok, 1, "ids 1..32 are distinct codepoints in U+2580..U+259F");
+    assert_eq(seen, 4294967295, "and they cover all 32");
+    assert_eq(_bk_popcount(blk_glyph_mask(BLK_FULL)), 64, "█ inks 64 samples");
+    assert_eq(_bk_popcount(blk_glyph_mask(BLK_UHALF)) * 1000 + _bk_popcount(blk_glyph_mask(BLK_RIGHT)), 32032, "▀ and ▐ ink 32");
+    assert_eq(_bk_popcount(blk_glyph_mask(BLK_LR)) * 1000 + _bk_popcount(blk_glyph_mask(BLK_NLR)), 16048, "▗ inks 16, ▛ 48");
+    assert_eq(_bk_popcount(blk_glyph_mask(BLK_DIAG)), 32, "▚ inks 32");
+    var k = 1;
+    var eighths = 1;
+    while (k < 8) {
+        if (k != 4) {
+            var hid = BLK_H1 + k - 1;
+            var vid = BLK_V1 + k - 1;
+            if (k > 4) { hid = BLK_H5 + k - 5; vid = BLK_V5 + k - 5; }
+            if (_bk_popcount(blk_glyph_mask(hid)) != 8 * k) { eighths = 0; }
+            if (_bk_popcount(blk_glyph_mask(vid)) != 8 * k) { eighths = 0; }
+            # The lower k eighths are the bottom k rows; the left k, the left k columns.
+            if (((blk_glyph_mask(hid) >> 63) & 1) != 1) { eighths = 0; }
+            if ((blk_glyph_mask(vid) & 1) != 1) { eighths = 0; }
+        }
+        k = k + 1;
+    }
+    assert_eq(eighths, 1, "▁..▇ and ▏..▉ ink k eighths from the bottom and the left");
+    assert_eq(blk_glyph_mask(BLK_UEIGHTH), 255, "▔ is the top row");
+    assert_eq(blk_glyph_b2(BLK_LHALF) * 1000 + blk_glyph_b2(BLK_V1), 132143, "▄ is U+2584, ▏ U+258F");
+    var flips = 0;
+    var comp = 1;
+    id = 0;
+    while (id < BLK_LIGHT) {
+        var f = blk_glyph_flip(id);
+        if (f >= 0) {
+            flips = flips + 1;
+            if (blk_glyph_mask(f) != 0 - 1 - blk_glyph_mask(id)) { comp = 0; }
+            if (blk_glyph_flip(f) != id) { comp = 0; }
+        }
+        id = id + 1;
+    }
+    assert_eq(flips, 20, "20 shape glyphs have a complement");
+    assert_eq(comp, 1, "each complement inks exactly the rest, and flips back");
+    assert_eq(blk_glyph_flip(BLK_LIGHT) * 100 + blk_glyph_flip(BLK_MEDIUM), BLK_DARK * 100 + BLK_MEDIUM,
+      "░ swaps with ▓, ▒ with itself");
+    assert_eq(blk_glyph_flip(BLK_H1), 0 - 1, "▁ has no complement (no upper 7/8)");
+    return 0;
+}
+
+# ---- opaque cells ---------------------------------------------------------------
+fn test_blocks_choose_opaque() {
+    test_group("v2.0.0 — an opaque cell's shape and colours");
+    _bk_fill(40, 80, 120);
+    assert_eq(blk_choose(), BLK_KIND_OPAQUE, "an opaque cell is OPAQUE");
+    assert_eq(_blk_res_id, BLK_SPACE, "one colour: no split beats it");
+    assert_eq(_bk_rgb_is(&_blk_res_fg, 40, 80, 120) + _bk_rgb_is(&_blk_res_bg, 40, 80, 120), 2, "both colours are the cell's");
+    _bk_fill(0, 0, 200);
+    _bk_rect(0, 8, 5, 8, 200, 0, 0);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_H1 + 2, "the bottom 3 rows red -> ▃");
+    assert_eq(_bk_rgb_is(&_blk_res_fg, 200, 0, 0) + _bk_rgb_is(&_blk_res_bg, 0, 0, 200), 2, "▃: ink red, the rest blue");
+    _bk_fill(0, 0, 200);
+    _bk_rect(0, 8, 0, 1, 200, 0, 0);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_H5 + 2, "the top row red -> ▇ (inked blue; ▔ is its complement)");
+    assert_eq(_bk_rgb_is(&_blk_res_fg, 0, 0, 200), 1, "▇: ink is the blue below");
+    _bk_fill(10, 10, 10);
+    _bk_rect(0, 5, 0, 8, 250, 250, 250);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_V5, "the left 5 columns light -> ▋");
+    _bk_fill(10, 10, 10);
+    _bk_rect(4, 8, 0, 4, 250, 250, 250);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_UR, "the upper right quadrant -> ▝");
+    _bk_fill(10, 10, 10);
+    _bk_rect(0, 4, 0, 4, 250, 250, 250);
+    _bk_rect(4, 8, 4, 8, 250, 250, 250);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_DIAG, "upper left and lower right -> ▚");
+    _bk_fill(250, 250, 250);
+    _bk_rect(0, 4, 0, 4, 10, 10, 10);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_UL, "all but the upper left -> ▘, the single corner");
+    assert_eq(_bk_rgb_is(&_blk_res_fg, 10, 10, 10), 1, "▘: ink is the dark corner");
+    # Rounding: the bottom half 1 and 2 alternating by row (mean 1.5 -> 2), the top 0.
+    _bk_fill(0, 0, 0);
+    _bk_rect(0, 8, 4, 8, 1, 1, 1);
+    _bk_rect(0, 8, 5, 6, 2, 2, 2);
+    _bk_rect(0, 8, 7, 8, 2, 2, 2);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_LHALF, "a dim bottom half -> ▄");
+    assert_eq(_bk_fg(0), 2, "its mean 1.5 rounds half up to 2");
+    assert_eq(load64(&_blk_res_mean), 1, "the cell mean 48/64 rounds to 1");
+    # A sample-level checkerboard: every split's two regions have the same mean,
+    # so no split beats one colour (ties keep it).
+    var i = 0;
+    while (i < 64) {
+        var v = 0;
+        if (((i >> 3) + (i & 7)) % 2 == 0) { v = 200; }
+        blk_set_sample(i, v, v, v);
+        i = i + 1;
+    }
+    blk_set_opaque(0 - 1);
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_SPACE, "a checkerboard ties every split: one colour");
+    assert_eq(_bk_fg(0), 100, "drawn in its mean");
+    # The prefix and suffix sums against the brute-force reference.
+    var agree = 0;
+    var trial = 0;
+    while (trial < 400) {
+        var mode = trial % 4;
+        i = 0;
+        while (i < 64) {
+            if (mode == 0) { blk_set_sample(i, _bk_rand() & 255, _bk_rand() & 255, _bk_rand() & 255); }
+            else { blk_set_sample(i, 30, 60, 90); }
+            i = i + 1;
+        }
+        if (mode != 0) {
+            # A random split's ink in another colour, plus noise on a few samples.
+            var sid = blk_split_id(_bk_rand() % BLK_SPLIT_COUNT);
+            var m = blk_glyph_mask(sid);
+            i = 0;
+            while (i < 64) {
+                if (((m >> i) & 1) == 1) { blk_set_sample(i, 200, 150, 10); }
+                if (mode == 2 && _bk_rand() % 8 == 0) { blk_set_sample(i, _bk_rand() & 255, 0, 0); }
+                i = i + 1;
+            }
+        }
+        blk_set_opaque(0 - 1);
+        blk_choose();
+        if (_blk_res_id == _bk_ref_choose()) { agree = agree + 1; }
+        trial = trial + 1;
+    }
+    assert_eq(agree, 400, "the fast choice equals the brute-force one on 400 cells");
+    return 0;
+}
+
+# ---- cells with transparency ------------------------------------------------------
+fn test_blocks_choose_mixed() {
+    test_group("v2.0.0 — cells with transparent samples");
+    _bk_fill(0, 0, 0);
+    blk_set_opaque(0);
+    assert_eq(blk_choose(), BLK_KIND_CLEAR, "no opaque sample -> CLEAR");
+    assert_eq(_blk_res_id, BLK_SPACE, "drawn as a space");
+    _bk_fill(0, 0, 0);
+    _bk_rect(0, 8, 4, 8, 200, 100, 50);
+    blk_set_opaque(blk_glyph_mask(BLK_LHALF));
+    assert_eq(blk_choose(), BLK_KIND_MIXED, "the bottom half opaque -> MIXED");
+    assert_eq(_blk_res_id, BLK_LHALF, "inked ▄ over the default background");
+    assert_eq(_bk_rgb_is(&_blk_res_fg, 200, 100, 50), 1, "in the opaque half's colour");
+    blk_set_opaque(blk_glyph_mask(BLK_UL));
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_UL, "the upper left quadrant opaque -> ▘");
+    _bk_fill(9, 9, 9);
+    blk_set_opaque(0 - 1 - 1);
+    assert_eq(blk_choose(), BLK_KIND_MIXED, "all but one sample opaque -> MIXED");
+    assert_eq(_blk_res_id, BLK_FULL, "█: one sample on the wrong side beats any other glyph");
+    blk_set_opaque(1);
+    assert_eq(blk_choose(), BLK_KIND_CLEAR, "one opaque sample -> the space, CLEAR");
+    # Covering the opaque samples beats matching colours: the bottom half opaque
+    # in two colours is still ▄ (0 wrong), in their mean.
+    _bk_fill(0, 0, 0);
+    _bk_rect(0, 8, 4, 6, 200, 0, 0);
+    _bk_rect(0, 8, 6, 8, 0, 0, 200);
+    blk_set_opaque(blk_glyph_mask(BLK_LHALF));
+    blk_choose();
+    assert_eq(_blk_res_id, BLK_LHALF, "two colours in the opaque half: still ▄");
+    assert_eq(_bk_rgb_is(&_blk_res_fg, 100, 0, 100), 1, "in their mean");
+    return 0;
+}
+
+# ---- sampling ---------------------------------------------------------------------
+fn test_blocks_sampling() {
+    test_group("v2.0.0 — a sample is opaque when half its pixels are");
+    var ps[160];
+    _bk_image(&ps, 8, 16);                      # one cell: each sample is 1 x 2 pixels
+    _bk_paint(&ps, 0, 1, 0, 1, 0, 0, 0, 0);     # sample 0: one of two transparent
+    _bk_paint(&ps, 1, 2, 0, 2, 0, 0, 0, 0);     # sample 1: both transparent
+    _bk_paint(&ps, 2, 3, 0, 1, 200, 100, 0, 255);
+    _bk_paint(&ps, 2, 3, 1, 2, 100, 50, 1, 255);
+    var k = KII_AREA_TAPS;
+    var xt = alloc(8 * (k + 1) * 8);
+    var yt = alloc(8 * (k + 1) * 8);
+    _area_taps(xt, 8, 8, k, 4);
+    _area_taps_from(yt, 0, 8, 8, 16, k, 8 * 4);
+    var n = _blk_sample(load64(&ps + STRUCT_PIXELS_BUF_OFFSET), xt, yt, k, 0, 0);
+    assert_eq(n, 63, "63 of 64 samples opaque");
+    assert_eq(_blk_opq & 3, 1, "half covered is opaque, none covered is not");
+    assert_eq(_bk_rgb_is(&_blk_smp + 2 * 24, 150, 75, 1), 1, "a sample is its pixels' mean, rounded half up");
+    assert_eq(_bk_rgb_is(&_blk_smp, 0, 0, 0), 1, "the half-covered sample takes its opaque pixel");
+    return 0;
+}
+
+# ---- rows -------------------------------------------------------------------------
+fn test_blocks_rows() {
+    test_group("v2.0.0 — rows: complements, flat cells, transparency, tiers");
+    quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
+    var ps[160];
+    # Two cells (16 x 16 pixels, each sample 1 x 2). Cell 0: the bottom half
+    # white; cell 1: all white. ▄ in white over black, then █ (the foreground
+    # is already white, so no escape).
+    _bk_image(&ps, 16, 16);
+    _bk_paint(&ps, 0, 8, 8, 16, 255, 255, 255, 255);
+    _bk_paint(&ps, 8, 16, 0, 16, 255, 255, 255, 255);
+    assert_eq(_bk_row_is(&ps, 2, 1, 0, "\x1b[97m\x1b[40m\xe2\x96\x84\xe2\x96\x88\x1b[0m\n"), 1,
+      "▄ then a flat white cell as █, reusing the foreground");
+    # Cell 1 the top half white: ▄ would need both escapes, its complement ▀
+    # in white over black needs none.
+    _bk_image(&ps, 16, 16);
+    _bk_paint(&ps, 0, 8, 8, 16, 255, 255, 255, 255);
+    _bk_paint(&ps, 8, 16, 0, 8, 255, 255, 255, 255);
+    assert_eq(_bk_row_is(&ps, 2, 1, 0, "\x1b[97m\x1b[40m\xe2\x96\x84\xe2\x96\x80\x1b[0m\n"), 1,
+      "the complement ▀ keeps both colours");
+    # A flat cell when only the background matches is a space.
+    _bk_image(&ps, 16, 16);
+    _bk_paint(&ps, 0, 8, 8, 16, 255, 255, 255, 255);
+    assert_eq(_bk_row_is(&ps, 2, 1, 0, "\x1b[97m\x1b[40m\xe2\x96\x84 \x1b[0m\n"), 1,
+      "a flat black cell after ▄ is a space on the black background");
+    # Transparency: a clear cell, then an opaque red one.
+    _bk_image(&ps, 16, 16);
+    _bk_paint(&ps, 0, 8, 0, 16, 0, 0, 0, 0);
+    _bk_paint(&ps, 8, 16, 0, 16, 255, 0, 0, 255);
+    assert_eq(_bk_row_is(&ps, 2, 1, 0, "\x1b[49m \x1b[41m \x1b[0m\n"), 1,
+      "a clear cell is a space on the default background");
+    # A cell whose top half is transparent: ▄ over the default background.
+    _bk_image(&ps, 8, 16);
+    _bk_paint(&ps, 0, 8, 0, 8, 0, 0, 0, 0);
+    _bk_paint(&ps, 0, 8, 8, 16, 255, 255, 255, 255);
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[97m\x1b[49m\xe2\x96\x84\x1b[0m\n"), 1,
+      "the opaque bottom half: ▄ over the default background");
+    # Truecolour and 256: the same ▄, other escapes.
+    _bk_image(&ps, 8, 16);
+    _bk_paint(&ps, 0, 8, 8, 16, 10, 20, 30, 255);
+    quant_set_tier(KII_TIER_TC);
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[38;2;10;20;30m\x1b[48;2;0;0;0m\xe2\x96\x84\x1b[0m\n"), 1,
+      "truecolour ▄");
+    quant_set_tier(KII_TIER_256);
+    # (10, 20, 30) is nearest grey 18 (233); black is cube 16.
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[38;5;233m\x1b[48;5;16m\xe2\x96\x84\x1b[0m\n"), 1,
+      "256: ▄ in grey 233 over cube 16");
+    quant_set_tier(KII_TIER_16);
+    return 0;
+}
+
+# ---- flat cells -------------------------------------------------------------------
+# _blk_emit_flat from each colour state, at tier 16.
+fn _bk_flat_is(cur_fg, cur_bg, q, expect): i64 {
+    _blk_cur_fg = cur_fg;
+    _blk_cur_bg = cur_bg;
+    var n = _blk_emit_flat(&_bk_buf, 0, q);
+    if (n != strlen(expect)) { return 0; }
+    return memeq(&_bk_buf, expect, n);
+}
+
+fn test_blocks_flat() {
+    test_group("v2.0.0 — a flat cell is a space or █, whichever needs no escape");
+    quant_set_tier(KII_TIER_16);
+    assert_eq(_bk_flat_is(15, 15, 15, " "), 1, "both colours already q: a space");
+    assert_eq(_bk_flat_is(3, 15, 15, " "), 1, "the background q: a space");
+    assert_eq(_bk_flat_is(15, 1, 15, "\xe2\x96\x88"), 1, "only the foreground q: █, and no background escape");
+    assert_eq(_bk_flat_is(3, 1, 15, "\x1b[107m "), 1, "neither: one background escape and a space");
+    assert_eq(_bk_flat_is(0 - 1, 0 - 1, 0, "\x1b[40m "), 1, "a row's first cell: a background escape and a space");
+    # Under fs a one-colour cell takes the background field's code: its two
+    # fields diffuse apart. Here the ▄ before it leaves the foreground field's
+    # error 0 and the background's +4, so grey 13 is grey 232 in one field and
+    # 233 in the other; the cell is drawn in 233.
+    quant_set_tier(KII_TIER_256);
+    quant_set_dither(KII_DITHER_FS);
+    var ps[160];
+    _bk_image(&ps, 16, 16);
+    _bk_paint(&ps, 0, 8, 0, 8, 4, 4, 4, 255);
+    _bk_paint(&ps, 8, 16, 0, 16, 13, 13, 13, 255);
+    assert_eq(_bk_row_is(&ps, 2, 1, 0, "\x1b[48;5;16m \x1b[48;5;233m \x1b[0m\n"), 1,
+      "fs at 256: the one-colour cell is drawn in its background field's code");
+    quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
+    return 0;
+}
+
+# ---- shades -----------------------------------------------------------------------
+fn test_blocks_shades() {
+    test_group("v2.0.0 — ░ ▒ ▓ mix two palette colours under dither, at tiers 8 and 16");
+    var ps[160];
+    _bk_image(&ps, 8, 16);
+    _bk_paint(&ps, 0, 8, 0, 16, 42, 42, 42, 255);
+    quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
+    assert_eq(blk_shades_on(), 0, "no shades under --dither none");
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[40m \x1b[0m\n"), 1, "none: grey 42 is drawn black, the nearest");
+    quant_set_dither(KII_DITHER_ORDERED);
+    assert_eq(blk_shades_on(), 1, "shades under --dither ordered at tier 16");
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[30m\x1b[100m\xe2\x96\x92\x1b[0m\n"), 1,
+      "ordered: grey 42 is ▒, black over dark grey (42.5)");
+    quant_set_dither(KII_DITHER_FS);
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[30m\x1b[100m\xe2\x96\x92\x1b[0m\n"), 1, "fs: the same ▒");
+    # A quarter mix: grey 21 is 1/4 dark grey over black, ░ in dark grey.
+    _bk_paint(&ps, 0, 8, 0, 16, 21, 21, 21, 255);
+    quant_set_dither(KII_DITHER_ORDERED);
+    var st = blk_prepare(&ps, 1, 1);
+    var n = emit_blocks_row_buf(st, 1, 0, &_bk_buf, 0);
+    assert(n > 3, "grey 21 renders");
+    assert_eq(memeq(&_bk_buf + n - 8, "\xe2\x96\x91\x1b[0m\n", 8) + memeq(&_bk_buf + n - 8, "\xe2\x96\x93\x1b[0m\n", 8), 1,
+      "grey 21 is a quarter mix (░, or ▓ with the colours swapped)");
+    # The search directly. (0, 24, 170) is best as 3/4 blue over cyan, the
+    # fourth-nearest colour; (0, 85, 255) ties two mixes and keeps the first,
+    # 3/4 bright blue over blue.
+    assert_eq(_blk_shade(0, 24, 170, 4), 1, "(0, 24, 170): a shade beats flat blue");
+    assert_eq(_blk_sh_id * 10000 + _blk_sh_fg * 100 + _blk_sh_bg, BLK_DARK * 10000 + 4 * 100 + 6,
+      "▓ blue over cyan, the fourth nearest");
+    assert_eq(_blk_shade(0, 85, 255, 12), 1, "(0, 85, 255): a shade beats flat bright blue");
+    assert_eq(_blk_sh_id * 10000 + _blk_sh_fg * 100 + _blk_sh_bg, BLK_DARK * 10000 + 12 * 100 + 4,
+      "of two equal mixes the first found: ▓ bright blue over blue");
+    assert_eq(_blk_shade(85, 85, 85, 8), 0, "a palette colour's own error is 0: no shade");
+    # Pure palette colours never take a shade: black is black.
+    _bk_paint(&ps, 0, 8, 0, 16, 0, 0, 0, 255);
+    assert_eq(_bk_row_is(&ps, 1, 1, 0, "\x1b[40m \x1b[0m\n"), 1, "a palette colour stays flat");
+    quant_set_tier(KII_TIER_8);
+    assert_eq(blk_shades_on(), 1, "shades at tier 8 too");
+    quant_set_tier(KII_TIER_256);
+    assert_eq(blk_shades_on(), 0, "no shades at tier 256");
+    quant_set_tier(KII_TIER_TC);
+    assert_eq(blk_shades_on(), 0, "no shades at truecolour");
+    quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
+    return 0;
+}
+
+# ---- guards -----------------------------------------------------------------------
+fn test_blocks_guards() {
+    test_group("v2.0.0 — the lane refuses what it cannot draw");
+    var ps[160];
+    var z = 0;
+    while (z < 160) { store64(&ps + z, 0); z = z + 8; }
+    assert_eq(blk_prepare(&ps, 4, 4), 0, "no pixels -> 0");
+    assert_eq(emit_blocks(&ps, 4, 4), 0 - 1, "emit_blocks -> -1");
+    _bk_image(&ps, 4, 4);
+    assert_eq(blk_prepare(&ps, 0, 4), 0, "0 columns -> 0");
+    assert_eq(blk_prepare(&ps, 4, 0), 0, "0 rows -> 0");
+    assert_eq(blk_prepare(&ps, 4611686018427387902, 4611686018427387902), 0, "a wrapping geometry -> 0");
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 63);
+    assert_eq(blk_prepare(&ps, 4, 4), 0, "a pixel buffer one byte short -> 0");
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 64);
+    store64(&ps + STRUCT_COLOR_TYPE_OFFSET, 2);
+    assert_eq(blk_prepare(&ps, 4, 4), 0, "not RGBA8 -> 0");
+    store64(&ps + STRUCT_COLOR_TYPE_OFFSET, 6);
+    assert(blk_prepare(&ps, 4, 4) != 0, "restored -> a frame (an upscale: 4 x 4 pixels to 32 x 32 samples)");
+    return 0;
+}
+
+fn main() {
+    test_blocks_glyphs();
+    test_blocks_choose_opaque();
+    test_blocks_choose_mixed();
+    test_blocks_sampling();
+    test_blocks_rows();
+    test_blocks_flat();
+    test_blocks_shades();
+    test_blocks_guards();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(SYS_EXIT, exit_code);

@@ -162,3 +162,18 @@ works on runs of equal colour, and the 8/16-colour floor exists for slow links.
   and [`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md) § 6, which deferred C-7
   (sampling) to the same release. The sampling change is recorded in
   [0005](0005-nearest-neighbor-downscale.md)'s v1.9.0 amendment, not here.
+
+## Amendment — v2.0.0 (dithering in the blocks lane)
+
+This ADR remains **Accepted**. § Alternatives rejected shade glyphs as a dither for the
+quantize layer because they are "a glyph choice … and belong to a rendering mode". The
+blocks lane ([ADR 0012](0012-block-elements-lane.md)) is that rendering mode, and it uses
+them that way:
+- **Its two colour fields** (each cell's ink colour, and its other colour) go through
+  `quantize_rgb_buf` like any field: ordered offsets by cell position, Floyd-Steinberg error
+  carried from cell to cell within each field.
+- **Under `ordered` or `fs`, at tiers 8 and 16, a cell drawn flat may become `░`, `▒` or `▓`**:
+  a 1/4, 1/2 or 3/4 mix of two of the four palette colours nearest its mean, when that mix is
+  strictly nearer the mean than the flat colour.
+- **Under `none` no shade is drawn**, so this ADR's promise holds in every lane: `none` maps
+  each colour to its nearest on its own.

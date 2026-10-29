@@ -230,9 +230,15 @@ fn _area_bound(i, w, n): i64 {
 # a source of size w, a count c <= k and then c sample offsets (source index
 # times `unit` bytes), in an entry of k + 1 i64s.
 fn _area_taps(tbl, n, w, k, unit): i64 {
-    var i = 0;
-    while (i < n) {
-        var e = tbl + i * (k + 1) * 8;
+    return _area_taps_from(tbl, 0, n, n, w, k, unit);
+}
+
+# The same for positions i0 .. i0 + count - 1 only, written from the start of
+# `tbl` (v2.0.0: the blocks lane builds its row taps one cell row at a time).
+fn _area_taps_from(tbl, i0, count, n, w, k, unit): i64 {
+    var i = i0;
+    while (i < i0 + count) {
+        var e = tbl + (i - i0) * (k + 1) * 8;
         var a = _area_bound(i, w, n);
         var b = _area_bound(i + 1, w, n);
         if (b <= a) {

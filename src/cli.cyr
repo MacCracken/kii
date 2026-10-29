@@ -93,10 +93,11 @@ fn kii_register_flags(fs): i64 {
     KII_F_VERBOSE = cmdit_bool(fs, 118, "verbose", "print decode summary to stderr after the frame");
     # --mode / -m (109): rendering lane. "halfblock" (default) = the ▀ fg/bg
     # floor; "ascii" = text-glyph art (shape-vector matching since v1.3.1,
-    # colored fg). See ADR 0007. A cmdit enum since v1.7.0: any other value
+    # colored fg), ADR 0007; "blocks" = every Block Element, an 8 x 8 shape
+    # per cell in two colours (v2.0.0, ADR 0012). A cmdit enum since v1.7.0: any other value
     # fails the parse with CMDIT_ERR_BAD_ENUM, and cmdit_get_enum gives the
     # choice's index (KII_MODE_*), in the order of the choices string.
-    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii", "render mode");
+    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii|blocks", "render mode");
     # --dither / -d (100): v1.9.0 (ADR 0011). none (the default) quantizes
     # each pixel on its own; ordered adds a 4x4 Bayer offset; fs diffuses the
     # error (Floyd-Steinberg). No effect at --color tc, where nothing is
@@ -127,9 +128,10 @@ fn kii_color_tier(fs): i64 {
 }
 
 # --mode's choices, as cmdit_get_enum(fs, KII_F_MODE) indexes them (the
-# order of "halfblock|ascii" in kii_register_flags).
+# order of "halfblock|ascii|blocks" in kii_register_flags).
 var KII_MODE_HALFBLOCK = 0;
 var KII_MODE_ASCII     = 1;
+var KII_MODE_BLOCKS    = 2;
 
 # Frame-size predicate (P(-1), v1.6.4): 1 if a `cols` x `rows` character
 # frame is within KII_MAX_CELLS, 0 if not. Division form, so the check cannot
@@ -175,7 +177,7 @@ fn kii_parse_error_line(err, flag): i64 {
     if (err == CMDIT_ERR_OUT_OF_RANGE)     { return "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n"; }
     if (err == CMDIT_ERR_BAD_ENUM && flag != 0) {
         if (streq(flag, "color") == 1) { return "kii: --color must be 8, 16, 256 or tc\n"; }
-        if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock or ascii\n"; }
+        if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock, ascii or blocks\n"; }
         if (streq(flag, "dither") == 1) { return "kii: --dither must be none, ordered or fs\n"; }
     }
     return "kii: argument parse error\n";

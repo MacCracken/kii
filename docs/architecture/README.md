@@ -4,7 +4,7 @@ Non-obvious constraints, quirks, and invariants that a reader cannot derive from
 
 Not decisions (those live in [`../adr/`](../adr/)) and not guides (those live in [`../guides/`](../guides/)). An item here describes *how the world is*, not *what we chose* or *how to do something*.
 
-## Module map (v1.11.0)
+## Module map (v2.0.0)
 
 The pipeline runs top to bottom; each module owns one stage. The shared `pstruct` (function-scope `var pstruct[160]` in `src/main.cyr`) carries data between stages via byte-offset slots declared in `src/image.cyr`. kii has no decoder of its own: since the v1.2.0 re-fold every format is parsed inside `chitra` ([ADR 0006](../adr/0006-adopt-chitra-decoder.md)), and `src/image.cyr` (`src/png.cyr` until v1.7.0) is the adapter that feeds it. Redrawn at v1.6.4; the v0.7.0 map showed the in-repo chunk walk, sankoch inflate and filter undo that the re-fold deleted.
 
@@ -34,7 +34,9 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
              │           alpha < 128 → the transparency mask, partial
              │           alpha over black
      ┌───────┴──────────────────────┐
-     ▼ --mode halfblock (default)   ▼ --mode ascii
+     ▼ --mode halfblock (default)   ▼ --mode ascii   (--mode blocks: blocks.cyr,
+                                                       8×8 samples a cell from the
+                                                       decoded pixels, v2.0.0)
   quant.cyr  quantize_downscaled   ascii.cyr  emit_ascii_shape
   (a 32-bit colour code per pixel   2×3 shape match picks the glyph;
    for the --color tier, dithered   the cell's mean colour goes through
@@ -61,6 +63,7 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
 | `src/downscale.cyr` | The RGB resamplers over chitra's RGBA8 (the only pixel format since v1.7.0 removed the per-colour-type dispatch), with `_over_black` compositing alpha over black (v1.6.4). `downscale_to_rgb`: nearest-neighbour, sampling each span's centre since v1.9.0, for the half-block lane. `downscale_area_to_rgb` (v1.11.0): the ASCII lane's area sampler, each sample the mean of its span (whole up to 4 pixels, 4 taps beyond, via `_area_bound` / `_area_taps`), which also writes the luminance plane; with no reduction it hands off to `downscale_to_rgb` (ADR 0005 amendments) | M5(b), area v1.11.0 |
 | `src/emit.cyr` | Half-block ANSI emit (darshana composers) + `_kii_compute_target_geometry` + `_kii_compute_fit_geometry` + `_kii_term_envelope` (v1.6.0) + `_kii_write_all`; the frame loop and row ending both lanes share, `_kii_emit_frame` and `_kii_row_end` (v1.7.0); the tier-aware SGR composers `_kii_sgr_fg` / `_kii_sgr_bg` and the row's elision and transparency glyph rules (v1.8.0) | M5(c) + M6(a)(b) |
 | `src/ascii.cyr` | The `--mode ascii` lane: `_ascii_lum_plane` (the frame's luminance, once per frame) and `_ascii_contrast` (directional then global contrast enhancement, v1.10.0), `_ascii_match`, `emit_ascii_shape`; `_ascii_cell_codes`, the cell-colour field `--dither fs` needs (v1.9.0) | v1.3.0, shape-vector v1.3.1 |
+| `src/blocks.cyr` | The `--mode blocks` lane (v2.0.0, ADR 0012): the 32 Block Elements (`_BLK_B2`, `_BLK_MASK`, `_BLK_FLIP`), `_blk_sample` (8 × 8 samples a cell through the area taps), `blk_choose` (the least-error split from row / column / quadrant sums; transparency), `blk_prepare` (every cell, then both colour fields through `quantize_rgb_buf`), `_blk_shade` (░ ▒ ▓ under dither at tiers 8 / 16), `emit_blocks_row_buf` (complement and flat-cell choice) and `emit_blocks` | v2.0.0 |
 | `src/ascii_shape.cyr` | **Generated** by `scripts/gen-shape-table.sh`: the 27-glyph coverage table (`ASCII_SHAPE_*`, `_ascii_shape_init`). Never hand-edited; `--check` proves it is the script's output | v1.10.0 (inline in `src/ascii.cyr` since v1.3.1) |
 
 ## Items

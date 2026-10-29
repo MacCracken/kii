@@ -4,6 +4,115 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-28
+
+**A third render lane: `--mode blocks`, the full Block Elements vocabulary**
+([ADR 0012](docs/adr/0012-block-elements-lane.md)). Each cell is sampled 8 × 8 and drawn
+with the Block Element that fits it best, in two colours. That covers the eighths from the
+bottom and the left, the upper and right eighths, the halves, the quadrants and their
+complements, the diagonals and `█`, with `░ ▒ ▓` as colour mixes. Edges and outlines
+follow the image at an eighth of a cell. Per-pixel error is lower than half-block's on
+every test image (RAMGON 38.9 → 32.1, white text 39.6 → 23.6), and at 16 colours the
+frames are smaller (RAMGON at 80 columns: 14,553 → 8,080 bytes).
+
+**The lane is opt-in, and the default does not change.** `kii image.png` is still the
+half-block lane. CP437-era console fonts lack the quadrants and eighths, so a blocks frame
+needs a modern font. That was the user's call for this release; ADR 0004 is amended, not
+superseded. Over 472 images × 6 flag sets, every half-block and ASCII frame is
+byte-identical to v1.11.0 (2,832 of 2,832).
+
+The major version marks the new lane and the reworked roadmap: 2.0.1 through 2.6.0 are
+pinned. ⚠ Two visible changes beyond the new lane:
+- `--help` lists `<halfblock|ascii|blocks>` and one more example.
+- An unknown `--mode` now reads `kii: --mode must be halfblock, ascii or blocks`.
+
+**964 assertions** pass on x86_64 and under `cyrius test --aarch64` (cli 203 → 206, and the
+new `tests/blocks.tcyr`, 84). aarch64 frames match x86_64 in 406 of 406 runs, 290 of them in
+the blocks lane. **8,371,000 fuzz iterations**
+are all clean, including two new blocks surfaces. Every target and suite builds with zero
+warnings.
+
+### Added
+- **`--mode blocks`** (`src/blocks.cyr`):
+  - **Sampling.** Each cell's 64 samples are read straight from the decoded pixels through
+    the area sampler's taps: the mean of each span, read whole up to 4 pixels a side, by 4
+    taps beyond. A sample is transparent when more than half its pixels are.
+  - **Shape.** 19 splits: the lower and left half, four quadrants, `▚`, and the lower and
+    left 1, 2, 3, 5, 6 and 7 eighths. The split whose two region means leave the least squared
+    error wins. That is computed from row, column and quadrant sums and compared exactly, in
+    cross-multiplied integers. Ties go to the earlier split; a cell no split improves stays
+    one colour.
+  - **Colour.** The ink colours and the other colours form two fields, quantized through
+    `quantize_rgb_buf`, so `--color` and `--dither` apply as in the other lanes.
+  - **Glyph.** Twenty glyphs are complements in pairs (`▀▄ ▌▐ ▇▔ ▉▕ ▘▟ ▝▙ ▖▜ ▗▛ ▚▞`, the space
+    and `█`). Each cell is drawn with whichever of a glyph and its complement needs fewer
+    colour escapes after the cell before. A cell whose two colours quantize to one is a
+    space or `█`, whichever needs no escape.
+  - **Shades.** Under `--dither ordered` or `fs`, at 8 or 16 colours only, a cell drawn flat
+    becomes `░`, `▒` or `▓` when a 1/4, 1/2 or 3/4 mix of two of the four palette colours
+    nearest its mean is strictly nearer than the flat colour. `--dither none` never draws a
+    shade, so ADR 0011's promise holds.
+  - **Transparency.** A cell with no opaque sample is a space on the default background. A
+    cell with both is the glyph whose ink best covers the opaque samples, over the default
+    background.
+- **`_area_taps_from`** (`src/downscale.cyr`): the tap table for a range of positions, so
+  the blocks lane builds its row taps one cell row at a time. `_area_taps` is now its
+  whole-range call, with the same output.
+- **`tests/blocks.tcyr`**, 84 assertions:
+  - the glyph table and complements;
+  - the shape choice on crafted cells, and against a brute-force reference on 400;
+  - transparency, the half-coverage rule, whole rows at each tier (the complement and
+    flat-cell choices), shades and their search, and the guards.
+- **Two fuzz surfaces**, the 13th and 14th, run after the others:
+  - the shape choice against brute force on 200,000 random cells;
+  - 20,000 random frames at every tier and dither, rendered from copies of the image between
+    pads of 0 and of 255. The bytes must match, and every row must be exactly `cols` cells
+    of space or Block Elements, with shades only when they are on.
+- **Two bench rows**: a blocks frame of RAMGON at 80 × 32 cells (13.9–14.0 ms) and 200 × 80
+  (52.8–53.2 ms), decode excluded. The existing rows match v1.11.0's within
+  run-to-run noise.
+- `tests/cli.tcyr`: `--mode blocks` parses to `KII_MODE_BLOCKS`, and `block` (singular)
+  is refused.
+
+### Changed
+- `--mode` takes `halfblock|ascii|blocks`; `KII_MODE_BLOCKS = 2`. `--help` and the
+  `--mode` error line say so.
+- **The roadmap is reworked for 2.x.** Pinned:
+  - 2.0.1 release engineering;
+  - 2.1.0 the half-block lane reuses its colour state;
+  - 2.2.0 the ASCII lane on light backgrounds and without colour;
+  - 2.3.0 a Braille lane;
+  - 2.4.0–2.6.0 iTerm2, Kitty and Sixel.
+
+  Gated on upstream: progressive and SOF1 JPEG (chitra), the terminal's cell aspect
+  (darshana), and file-read memory (cyrius). Seven candidates are listed with what each
+  needs before a pin. Two rules are stated for every 2.x release: no surprise change to the
+  default output, and no environment sniffing.
+- **The cost of the blocks lane**, CPU per run (half-block → blocks): a 256² icon at
+  `--width 80` 1.92 → 9.26 ms and at 200 3.05 → 38.22 ms; RAMGON 205.8 → 220.1 ms at 80 and
+  208.3 → 261.8 ms at 200. The largest frame the cell cap allows (1.05 M cells from a 16 MP
+  PNG) takes 3.84 s of wall time against 0.65 s, with peak RSS 132.7 against 126.7 MB.
+- `build/kii` 1,020,648 → 1,048,976 bytes (unstripped, DCE off). `--agnos` 1,039,024 →
+  1,063,248, `--aarch64` 1,241,600 → 1,245,288.
+
+### Known limits
+- **Fonts.** The lane needs the quadrants (U+2596..U+259F) and the eighths; a CP437-era
+  console font shows replacement glyphs.
+- **Thin colour averages away.** A coloured stroke much thinner than a sample becomes a dim
+  mix, which at 8 and 16 colours often quantizes to grey: red and yellow text in a terminal
+  screenshot at 100 columns reads as grey strokes, where half-block shows coloured dots. The
+  strokes are in the right places and the per-pixel error is lower, but the colour is lost.
+- **Truecolour frames can be larger than half-block's**, when detail gives most cells two
+  distinct colours (the screenshot at 80 columns: 12,939 → 30,761 bytes).
+
+### Docs
+- New [ADR 0012](docs/adr/0012-block-elements-lane.md). ADR 0004, 0007, 0011 and 0002 gain
+  v2.0.0 amendments.
+- Refreshed: the roadmap (above), `docs/benchmarks.md` § v2.0.0, `state.md`, the README
+  (status, arc, flags, prior art, counts), CONTRIBUTING, SECURITY.md, the getting-started
+  guide (`--help`, a `--mode` section, two error rows), the architecture map, the ADR index
+  and `docs/doc-health.md`.
+
 ## [1.11.0] - 2026-10-28
 
 **The ASCII lane samples areas.** Each of a cell's six region values is now the mean over the

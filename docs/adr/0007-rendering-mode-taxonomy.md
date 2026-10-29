@@ -241,3 +241,13 @@ Arch logo 2–6 %, mostly along its edges, which become symmetric.
 under the corpus's two ASCII flag sets. At `--mode ascii --width 30`, 1.6 % of glyph cells
 change, in 158 frames. Every frame that changes is reduced on some axis; the 276 enlarged on
 both are byte-identical. Every half-block frame is byte-identical (1,888 of 1,888).
+
+## Amendment — v2.0.0 (a third lane)
+
+This ADR remains **Accepted**. `--mode` gains a third choice, `blocks`
+([ADR 0012](0012-block-elements-lane.md)): `halfblock | ascii | blocks`, still a cmdit
+enum, default `halfblock`. The blocks lane shares the ASCII lane's cell grid (cols ×
+half-block rows) and the area sampler's tap tables, but samples each cell 8 × 8 straight
+from the decoded pixels and draws a Block Element in two colours rather than a glyph in
+one. An unknown `--mode` value now reads `kii: --mode must be halfblock, ascii or blocks`.
+The half-block and ASCII lanes are byte-identical to 1.11.0.
