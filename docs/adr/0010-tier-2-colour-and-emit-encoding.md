@@ -151,3 +151,25 @@ captured frame changes once rather than three times.
 - xterm's 256-colour layout, the 6×6×6 cube over 0/95/135/175/215/255, and the grey ramp
   8–238; also `tmux`'s and chafa's quantizers, which make the same split.
 - chafa's `--threshold` (alpha), default 0.5.
+
+## Amendment — v2.1.0 (what the Linux console does with the brights)
+
+This ADR remains **Accepted**, and tier 16 keeps the aixterm codes. One claim in § Decision
+is corrected: "90–107 are what the Linux console and every xterm descendant understand". The
+console accepts them, but it does not draw them as an xterm does (`drivers/tty/vt/vt.c`,
+`csi_m`, read 2026-10-29):
+- **100–107 are drawn as 40–47.** The console has no bright backgrounds, so a bright colour
+  sent as a background shows dim.
+- **90–97 set bold and the colour.** Bold is how the console draws a bright foreground, and
+  a later 30–37 changes only the colour, so every dim foreground after a bright one in the
+  same row shows bright until the row's SGR 0.
+
+Modelled on the corpus, a 2.0.1 frame at tier 16 had 27.6 % of its cell halves (no
+dithering) in the wrong colour on the console. 2.1.0's half-block lane keeps bright colours
+in the foreground wherever a cell allows it, which brings that to 0.60 %
+([ADR 0004](0004-half-block-floor-glyph.md) § v2.1.0). The rest is cells of two different
+brights, one of which must be a background, and the stuck bold. The blocks lane is
+unchanged: the console's CP437 fonts cannot draw its glyphs anyway
+([ADR 0012](0012-block-elements-lane.md)). The ASCII lane draws one colour a cell, always as
+a foreground, so it meets only the stuck bold. Clearing that (SGR 22 before a dim
+foreground that follows a bright one) is a roadmap candidate.

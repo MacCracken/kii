@@ -463,3 +463,14 @@ itself, through the area sampler's tap tables, and it adds 32 glyphs to the emit
   copies of the image between pads of 0 and of 255, which must give the same bytes.
 - **The shape choice** is checked by a second fuzz surface against a brute-force reference
   that scores every split from its own mask (200,000 random cells).
+
+## Amendment — v2.1.0 (the half-block lane's glyphs)
+
+The half-block lane now writes `█` (`E2 96 88`) as well as `▀`, `▄` and the space
+([ADR 0004](0004-half-block-floor-glyph.md) § v2.1.0). The emit surface does not grow: `█` is
+already in the blocks lane's set, the SGR set is unchanged, and a cell is still at most one
+fg escape, one bg escape and a 3-byte glyph, so `EMIT_CELL_MAX` (41) and every row buffer
+keep their size. The choice reads only the row's two source rows, as before. A fuzz surface
+(200,000 random rows at every tier, with transparent pixels) reads each row back and fails
+it on any escape that is not one kii writes at that tier, any other glyph, or a row that is
+not exactly its cells, the reset and LF.

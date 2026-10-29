@@ -43,7 +43,7 @@ The pipeline runs top to bottom; each module owns one stage. The shared `pstruct
    per --dither)                     kii_color_code_at for its fg (under
      ▼                               --dither fs, every cell's colour is
   emit.cyr   emit_halfblock          quantized first, as one field)
-  (tier SGR, elision, ▀ / ▄ / space for transparency)
+  (tier SGR, elision, ▀ / ▄ / █ / space by fewest escapes)
      │                                    │
      └──────────────┬─────────────────────┘
                     ▼
@@ -118,7 +118,7 @@ kii v1.6.0 deleted its copy. What stays non-obvious:
   nothing when they do (darshana 0.9.3). Any composer added to that chain must have the same
   contract; the row checks `pos < 0` after each colour composer.
 - **The per-row budget is darshana's byte budgets added up**: since v1.8.0 ≤ 19 (a
-  truecolour FG) + ≤ 19 (BG) + 3 (▀ / ▄) per cell — `EMIT_CELL_MAX` = 41 — and 4
+  truecolour FG) + ≤ 19 (BG) + 3 (▀ / ▄ / █) per cell — `EMIT_CELL_MAX` = 41 — and 4
   (`tty_sgr_reset_buf`) + 1 (LF) per row, hence `sw * 42 + 16` (it was `sw * 26 + 16` while
   every escape was the 11-byte `38;5;N`). Elision only ever makes a row shorter. darshana writes
   with wide stores (an 8-byte prefix, then the index field) but never past the length it

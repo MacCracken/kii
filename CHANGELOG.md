@@ -4,6 +4,64 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-29
+
+**The half-block lane reuses its colour state**
+([ADR 0004](docs/adr/0004-half-block-floor-glyph.md) § v2.1.0). Every cell shows the same
+two colours in the same places as before, in about half the bytes.
+
+### Changed
+
+- ⚠ **The default output's bytes change.** `kii image.png` frames are re-encoded; on a
+  terminal with 16 background colours they look the same. Until now every opaque cell was
+  `▀` with the top colour in the foreground. Now each cell takes the encoding that needs
+  fewest escapes, given the colours the row has already set:
+  - two colours: `▀`, or `▄` with the colours swapped (a tie keeps `▀`);
+  - one colour: a space on that background, or `█` when the foreground already has it;
+  - a transparent half: as before (`▀` or `▄` on the default background, a space when both
+    halves are transparent).
+- **At 16 colours a bright colour (8–15) stays in the foreground** wherever the cell allows:
+  a one-colour bright cell is `█`, and a cell with one bright half puts it in the
+  foreground. The Linux console draws SGR 100–107 as 40–47 (no bright backgrounds), so this
+  shows far more of a frame in its intended colours there than 2.0.1 did (below). The rule
+  was chosen on 2026-10-29 over the blocks lane's plain rule, which saves more bytes but
+  would have made the console worse.
+- Measured over the 472-image corpus, every tier and dither, `--width 40` and `120`:
+  - every one of 10,932 frames shows exactly 2.0.1's colour in every cell (each frame
+    decoded as a terminal reads it), and the 372 refused cases give the same errors;
+  - bytes: tier 8 −50.8 %, tier 16 −50.1 %, tier 256 −40.4 %, truecolour −36.8 %; one
+    frame grew, by 2 bytes;
+  - on a model of the Linux console's SGR handling, the share of cell halves shown in the
+    wrong colour at tier 16 falls from 27.6 % to 0.60 % (no dither), 40.6 % to 1.27 %
+    (`ordered`) and 36.1 % to 3.63 % (`fs`);
+  - CPU is unchanged within run-to-run noise.
+- The ASCII and blocks lanes are byte-identical to 2.0.1.
+
+### Fixed (documentation)
+
+- **ADR 0010 said the Linux console understands SGR 90–107.** It accepts them, but draws
+  100–107 as dim backgrounds, and draws 90–97 by setting bold, which a later 30–37 does not
+  clear, so dim foregrounds after a bright one in a row show bright. ADR 0010 is amended,
+  and the stuck bold is a roadmap candidate.
+
+### Tests
+
+- `tests/render.tcyr` 223 → 243: the rule for one and two colours, ties, each tier-16
+  bright case, truecolour codes 8–15 (RGB there, not brights), and a transparent half that
+  must stay in the background. Four expectations from v1.8.0 now show the new encoding, and
+  the JPEG / BMP / GIF end-to-end rows count 16 cells rather than look for a `▀`.
+- **A 15th fuzz surface** (200,000 rows): random two-row strips at every tier, with
+  transparent pixels, read back as a terminal would. Every cell must show its input colours,
+  no escape may repeat the colour already set, and every glyph must be the rule's. Of 14
+  defects planted in the rule, the unit suite and the surface each catch 13; the 14th is
+  equivalent.
+- **Found: `_fuzz_rand`'s low bits repeat.** It returns the whole LCG state, so bit 0
+  alternates and bits 0–1 repeat every four draws. The new surface first drew `% 4` that
+  way and missed a planted defect; it now draws from bits 16 and up, and catches it. The
+  older surfaces still use the low bits (the blocks and area surfaces' pixel bytes repeat
+  every 256). Changing that would change their random streams, so it is a roadmap
+  candidate.
+
 ## [2.0.1] - 2026-10-28
 
 **Release engineering.** No frame changes: every output is byte-identical to 2.0.0's, apart

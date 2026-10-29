@@ -8,6 +8,10 @@
 #   - top half     → FG colour
 #   - bottom half  → BG colour
 #   - glyph        → U+2580 UPPER HALF BLOCK (▀)
+# Since v2.1.0 the same two colours may be drawn the other way round, as ▄
+# with the bottom in the fg, or a one-colour cell as a space or █, whichever
+# needs fewer escapes (emit_halfblock_row_buf; ADR 0004 § v2.1.0). The four
+# glyphs are all in CP437.
 #
 # Why half-block: doubles vertical resolution per character row with
 # no extra width cost. This is the chafa / jp2a / viu canonical floor
@@ -69,9 +73,12 @@ var EMIT_DEFAULT_ROWS = 24;
 var EMIT_HALFBLOCK_B0 = 0xE2;
 var EMIT_HALFBLOCK_B1 = 0x96;
 var EMIT_HALFBLOCK_B2 = 0x80;
-# U+2584 LOWER HALF BLOCK (▄) shares the first two bytes (v1.8.0: drawn when
-# a cell's top half is transparent, so the opaque bottom keeps its colour).
+# U+2584 LOWER HALF BLOCK (▄) and U+2588 FULL BLOCK (█) share the first two
+# bytes. ▄ is drawn when a cell's top half is transparent (v1.8.0), or when
+# swapping the colours saves an escape (v2.1.0); █ draws a one-colour cell
+# whose colour is already the foreground (v2.1.0).
 var EMIT_LOWERHALF_B2 = 0x84;
+var EMIT_FULLBLOCK_B2 = 0x88;
 
 # The most bytes one half-block cell can take: a 19-byte truecolour fg and
 # bg escape plus the 3-byte glyph. Rows are sized from it (sw * 42 + 16).
@@ -257,12 +264,27 @@ fn _kii_term_envelope(detect_rc, term_rows, term_cols, out_fit_cols, out_fit_row
 # rows (2*row) and (2*row+1). `qbuf` is the source-resolution colour-code
 # buffer, 4 bytes per pixel (qbuf + (sy*sw + sx)*4; see quant.cyr).
 #
-# Per cell: a transparent half (KII_COLOR_DEFAULT) takes the terminal's
-# default colour, and the glyph keeps the opaque half's colour — ▀ with
-# fg = top when only the bottom is transparent, ▄ with fg = bottom when
-# only the top is, a space (no fg) when both are. An fg or bg escape is
-# written only when it differs from the one this row last set; both start
-# unknown, so the first cell of every row sets what it uses.
+# Per cell, the top colour shows in the top half and the bottom colour in
+# the bottom half. An fg or bg escape is written only when it differs from
+# the one this row last set; both start unknown, so the first cell of every
+# row sets what it uses. Of the encodings that show the cell's two colours,
+# the row takes the one needing fewest escapes (v2.1.0, ADR 0004 § v2.1.0;
+# the blocks lane's rule, ADR 0012):
+#   - A transparent half (KII_COLOR_DEFAULT) is the terminal's default
+#     background, so it can only be drawn as one: ▀ with fg = top when only
+#     the bottom is transparent, ▄ with fg = bottom when only the top is, a
+#     space when both are (v1.8.0).
+#   - Two different colours: ▀ (fg = top, bg = bottom) or ▄ (fg = bottom,
+#     bg = top), whichever needs fewer escapes; a tie keeps ▀.
+#   - One colour q: a space on bg q, or █ in fg q when the fg is already q and
+#     the bg is not. Either needs one escape at most, against ▀'s two.
+# At tier 16 a bright colour (8–15) is never put in the background when the
+# foreground can take it: the Linux console draws 100–107 as 40–47, so a
+# bright half in the bg would show dim there. A one-colour bright cell is
+# █, and a cell with one bright half puts that half in the fg. Only a cell
+# whose halves are two different brights still has a bright bg, as every
+# 16-colour cell did before v2.1.0. On a terminal with 16 background colours
+# every choice shows the same two colours.
 #
 # Buffer-targeting (not a fd-1 write) so tests can assert on the
 # exact byte sequence without subprocessing. emit_halfblock below
@@ -270,6 +292,8 @@ fn _kii_term_envelope(detect_rc, term_rows, term_cols, out_fit_cols, out_fit_row
 fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
     var cur_fg = 0 - 1;
     var cur_bg = 0 - 1;
+    var t16 = 0;
+    if (quant_tier() == KII_TIER_16) { t16 = 1; }
     var top_p = qbuf + (2 * row) * sw * 4;
     var bot_p = top_p + sw * 4;
     var col = 0;
@@ -287,13 +311,42 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
                 bg = KII_COLOR_DEFAULT;
                 glyph_b2 = EMIT_LOWERHALF_B2;
             }
+        } else {
+            if (top == bot) {
+                if (_kii_hb_bright(t16, top) == 1 || (cur_fg == top && cur_bg != top)) {
+                    glyph_b2 = EMIT_FULLBLOCK_B2;         # █ in the fg
+                } else {
+                    glyph_b2 = 0;                         # a space on the bg
+                }
+            } else {
+                if (bot != KII_COLOR_DEFAULT) {
+                    var tb = _kii_hb_bright(t16, top);
+                    var bb = _kii_hb_bright(t16, bot);
+                    var flip = 0;
+                    if (tb != bb) { flip = bb; }
+                    else {
+                        var up = 0;
+                        var dn = 0;
+                        if (top != cur_fg) { up = up + 1; }
+                        if (bot != cur_bg) { up = up + 1; }
+                        if (bot != cur_fg) { dn = dn + 1; }
+                        if (top != cur_bg) { dn = dn + 1; }
+                        if (dn < up) { flip = 1; }
+                    }
+                    if (flip == 1) {
+                        fg = bot;
+                        bg = top;
+                        glyph_b2 = EMIT_LOWERHALF_B2;
+                    }
+                }
+            }
         }
         if (glyph_b2 != 0 && fg != cur_fg) {
             pos = _kii_sgr_fg(buf, pos, fg);
             if (pos < 0) { return 0 - 1; }
             cur_fg = fg;
         }
-        if (bg != cur_bg) {
+        if (glyph_b2 != EMIT_FULLBLOCK_B2 && bg != cur_bg) {
             pos = _kii_sgr_bg(buf, pos, bg);
             if (pos < 0) { return 0 - 1; }
             cur_bg = bg;
@@ -309,6 +362,14 @@ fn emit_halfblock_row_buf(qbuf, sw, row, buf, pos): i64 {
         col = col + 1;
     }
     return _kii_row_end(buf, pos);
+}
+
+# 1 if `code` is a bright palette index (8–15) and the row is at tier 16, the
+# only tier whose codes 8–15 are the aixterm brights (at truecolour they are
+# packed RGB values, and tier 256 never emits 0–15).
+fn _kii_hb_bright(t16, code): i64 {
+    if (t16 == 1 && code >= 8 && code < 16) { return 1; }
+    return 0;
 }
 
 # The row ending both render lanes use: SGR reset + newline, so each row

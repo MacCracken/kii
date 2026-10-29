@@ -10,10 +10,11 @@ example is a directory with:
   representative
 
 Every example is run from the kii repo root (`cd kii && ./build/kii ...`).
-All three were last run against their `expected.txt` at v1.9.1. Byte-exact
+All three were last run against their `expected.txt` at v2.1.0. Byte-exact
 reproduction across minor cuts is part of the [v1.0 stable-emit contract](../adr/0003-color-tier-discipline.md);
 when a release changes emitted bytes on purpose, as v1.6.4 did for
-transparent pixels, v1.8.0 for the emit encoding and v1.9.0 for sampling,
+transparent pixels, v1.8.0 for the emit encoding, v1.9.0 for sampling and
+v2.1.0 for the half-block glyph choice,
 the CHANGELOG lists it and the affected example says so.
 
 ## Index

@@ -79,6 +79,7 @@ var ASCII_FUZZ_ITERS     = 40000;     # v1.10.0 — the ASCII lane's contrast pa
 var AREA_FUZZ_ITERS      = 100000;    # v1.11.0 — the ASCII lane's area sampler
 var BLK_CELL_FUZZ_ITERS   = 200000;    # v2.0.0 — the blocks lane's shape choice vs brute force
 var BLK_FRAME_FUZZ_ITERS  = 20000;     # v2.0.0 — whole blocks frames, pad differential
+var HB_FUZZ_ITERS         = 200000;    # v2.1.0 — half-block rows decoded back to their colours
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -994,6 +995,211 @@ fn fuzz_blocks_frame_iter(pix, src_a, src_b, out_a, out_b): i64 {
     return 0;
 }
 
+# ---- v2.1.0 half-block row surface ------------------------------------------
+# Since v2.1.0 a half-block cell may be ▀, ▄, a space or █, chosen by the colour
+# state the row is in. Each iteration fills a random two-row strip (1..48 cells)
+# from a few colours of the tier, transparent pixels on half the iterations, and
+# at truecolour codes 8..15 a third of the time (RGB there, not brights), emits it
+# with emit_halfblock_row_buf, and reads the bytes back as a terminal would:
+#   - every escape is one kii writes at that tier, and changes the colour it sets;
+#   - every cell shows the input's top colour on top and bottom colour below,
+#     with a transparent half only ever in the bg (the default bg, SGR 49);
+#   - the glyph is the one the rule picks from the state before the cell (see
+#     emit_halfblock_row_buf), and it has no escape it does not use;
+#   - the row is `w` cells, then the reset and LF.
+# The tier rotates by call count. It runs after every older surface.
+var _fz_hb_calls = 0;
+var _fz_hb_par[8];
+
+# _fuzz_rand returns the whole LCG state, whose low bits repeat (bit 0 every 2
+# draws, bits 0–1 every 4), so `_fuzz_rand() % 4` taken every other draw is the
+# same every time. This surface draws from bits 16 and up (period 2^17 or more).
+fn _fz_hb_rand(n): i64 { return (_fuzz_rand() >> 16) % n; }
+var _fz_hb_npar = 0;
+
+# Parse the escape at `buf + i` (ESC [ digits/semicolons m) into _fz_hb_par.
+# Returns the index after the 'm', or -1.
+fn _fz_hb_esc(buf, i, n): i64 {
+    if (i + 2 >= n || load8(buf + i) != 27 || load8(buf + i + 1) != 91) { return 0 - 1; }
+    i = i + 2;
+    _fz_hb_npar = 0;
+    var v = 0;
+    var digits = 0;
+    while (i < n) {
+        var c = load8(buf + i);
+        if (c >= 48 && c <= 57) { v = v * 10 + c - 48; digits = digits + 1; if (digits > 3) { return 0 - 1; } }
+        else {
+            if (digits == 0 || _fz_hb_npar >= 5) { return 0 - 1; }
+            store64(&_fz_hb_par + _fz_hb_npar * 8, v);
+            _fz_hb_npar = _fz_hb_npar + 1;
+            v = 0;
+            digits = 0;
+            if (c == 109) { return i + 1; }
+            if (c != 59) { return 0 - 1; }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn _fz_hb_p(k): i64 { return load64(&_fz_hb_par + k * 8); }
+
+# The colour an escape sets, as a kii colour code, with `*kind` = 1 for fg and 2
+# for bg; -1 if the escape is not one kii writes at `tier`.
+fn _fz_hb_code(tier, kind_out): i64 {
+    var p0 = _fz_hb_p(0);
+    if (_fz_hb_npar == 1) {
+        if (p0 == 39 || p0 == 49) { store64(kind_out, 1 + (p0 == 49)); return KII_COLOR_DEFAULT; }
+        if (tier == KII_TIER_8 || tier == KII_TIER_16) {
+            if (p0 >= 30 && p0 <= 37) { store64(kind_out, 1); return p0 - 30; }
+            if (p0 >= 40 && p0 <= 47) { store64(kind_out, 2); return p0 - 40; }
+        }
+        if (tier == KII_TIER_16) {
+            if (p0 >= 90 && p0 <= 97)   { store64(kind_out, 1); return p0 - 82; }
+            if (p0 >= 100 && p0 <= 107) { store64(kind_out, 2); return p0 - 92; }
+        }
+        return 0 - 1;
+    }
+    if (p0 != 38 && p0 != 48) { return 0 - 1; }
+    store64(kind_out, 1 + (p0 == 48));
+    if (tier == KII_TIER_256 && _fz_hb_npar == 3 && _fz_hb_p(1) == 5 && _fz_hb_p(2) <= 255) { return _fz_hb_p(2); }
+    if (tier == KII_TIER_TC && _fz_hb_npar == 5 && _fz_hb_p(1) == 2) {
+        if (_fz_hb_p(2) > 255 || _fz_hb_p(3) > 255 || _fz_hb_p(4) > 255) { return 0 - 1; }
+        return (_fz_hb_p(2) << 16) | (_fz_hb_p(3) << 8) | _fz_hb_p(4);
+    }
+    return 0 - 1;
+}
+
+fn _fz_hb_bright(tier, c): i64 {
+    if (tier == KII_TIER_16 && c >= 8 && c < 16) { return 1; }
+    return 0;
+}
+
+# The glyph the rule draws (top t, bottom b) with fg `fg` and bg `bg` already
+# set: 0x80 ▀, 0x84 ▄, 0x88 █, or 32 for a space.
+fn _fz_hb_expect(tier, t, b, fg, bg): i64 {
+    var D = KII_COLOR_DEFAULT;
+    if (t == D) {
+        if (b == D) { return 32; }
+        return 0x84;
+    }
+    if (b == D) { return 0x80; }
+    if (t == b) {
+        if (_fz_hb_bright(tier, t) == 1) { return 0x88; }
+        if (fg == t && bg != t) { return 0x88; }
+        return 32;
+    }
+    var tb = _fz_hb_bright(tier, t);
+    var bb = _fz_hb_bright(tier, b);
+    if (tb != bb) {
+        if (bb == 1) { return 0x84; }
+        return 0x80;
+    }
+    var up = (t != fg) + (b != bg);
+    var dn = (b != fg) + (t != bg);
+    if (dn < up) { return 0x84; }
+    return 0x80;
+}
+
+# 0 if the `n` bytes at `out` are a correct half-block row for the w x 2 strip
+# at `q` (top row, then bottom row, 4 bytes a code).
+fn _fz_hb_check(q, w, out, n, tier): i64 {
+    if (n < 5 || memeq(out + n - 5, "\x1b[0m\n", 5) == 0) { return 1; }
+    var end = n - 5;
+    var fg = 0 - 1;
+    var bg = 0 - 1;
+    var i = 0;
+    var col = 0;
+    var kind = 0;
+    while (col < w) {
+        var t = load32(q + col * 4);
+        var b = load32(q + (w + col) * 4);
+        var want = _fz_hb_expect(tier, t, b, fg, bg);
+        var nfg = 0;
+        var nbg = 0;
+        while (i < end && load8(out + i) == 27) {
+            i = _fz_hb_esc(out, i, end);
+            if (i < 0) { return 2; }
+            var c = _fz_hb_code(tier, &kind);
+            if (c < 0) { return 3; }
+            if (kind == 1) {
+                if (c == fg || nfg > 0 || nbg > 0) { return 4; }    # a repeat, a second fg, or fg after bg
+                fg = c;
+                nfg = nfg + 1;
+            } else {
+                if (c == bg || nbg > 0) { return 4; }
+                bg = c;
+                nbg = nbg + 1;
+            }
+        }
+        if (i >= end) { return 5; }
+        var g = 32;
+        if (load8(out + i) == 32) { i = i + 1; }
+        else {
+            if (i + 3 > end || load8(out + i) != 0xE2 || load8(out + i + 1) != 0x96) { return 6; }
+            g = load8(out + i + 2);
+            i = i + 3;
+        }
+        if (g != want) { return 7; }
+        # What the cell shows, top then bottom; an fg-drawn half is never the default.
+        var st = bg;
+        var sb = bg;
+        if (g == 0x80) { st = fg; sb = bg; }
+        if (g == 0x84) { st = bg; sb = fg; }
+        if (g == 0x88) { st = fg; sb = fg; }
+        if (g == 32 && nfg > 0) { return 8; }                    # a space never needs the fg
+        if (g == 0x88 && nbg > 0) { return 8; }                  # nor █ the bg
+        if (g != 32 && fg == KII_COLOR_DEFAULT) { return 9; }
+        if (st != t || sb != b) { return 10; }
+        col = col + 1;
+    }
+    if (i != end) { return 11; }
+    return 0;
+}
+
+# `q` holds 2 x 48 codes (384 bytes); `out` one row (48 x 42 + 16 bytes).
+fn fuzz_halfblock_iter(q, out): i64 {
+    var tier = KII_TIER_8;
+    var t4 = _fz_hb_calls % 4;
+    if (t4 == 1) { tier = KII_TIER_16; }
+    if (t4 == 2) { tier = KII_TIER_256; }
+    if (t4 == 3) { tier = KII_TIER_TC; }
+    quant_set_tier(tier);
+    _fz_hb_calls = _fz_hb_calls + 1;
+    var w = 1 + _fz_hb_rand(48);
+    var k = 1 + _fz_hb_rand(4);
+    var clear = _fz_hb_rand(2);
+    var pal[32];
+    var j = 0;
+    while (j < k) {
+        var c = _fz_hb_rand(8);
+        if (tier == KII_TIER_16) { c = _fz_hb_rand(16); }
+        if (tier == KII_TIER_256) { c = 16 + _fz_hb_rand(240); }
+        if (tier == KII_TIER_TC) {
+            c = (_fuzz_rand() >> 8) & 16777215;
+            if (_fz_hb_rand(3) == 0) { c = _fz_hb_rand(16); }
+        }
+        store64(&pal + j * 8, c);
+        j = j + 1;
+    }
+    j = 0;
+    while (j < 2 * w) {
+        var code = load64(&pal + _fz_hb_rand(k) * 8);
+        if (clear == 1 && _fz_hb_rand(4) == 0) { code = KII_COLOR_DEFAULT; }
+        store32(q + j * 4, code);
+        j = j + 1;
+    }
+    var n = emit_halfblock_row_buf(q, w, 0, out, 0);
+    var bad = 0;
+    if (n <= 0 || n > w * (EMIT_CELL_MAX + 1) + 16) { bad = 1; }
+    else {
+        if (_fz_hb_check(q, w, out, n, tier) != 0) { bad = 1; }
+    }
+    quant_set_tier(KII_TIER_16);
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -1324,6 +1530,16 @@ fn main(): i64 {
         if (fuzz_blocks_frame_iter(&area_pix, &area_src_a, &area_src_b, &blk_out_a, &blk_out_b) != 0) { blk_frame_bad = blk_frame_bad + 1; }
         blk_frame_iter = blk_frame_iter + 1;
     }
+    # v2.1.0: half-block rows, read back. A strip is at most 2 x 48 codes; a row
+    # at most 48 cells x 42 + 16 bytes.
+    var hb_q[384];
+    var hb_out[2048];
+    var hb_iter = 0;
+    var hb_bad  = 0;
+    while (hb_iter < HB_FUZZ_ITERS) {
+        if (fuzz_halfblock_iter(&hb_q, &hb_out) != 0) { hb_bad = hb_bad + 1; }
+        hb_iter = hb_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -1396,11 +1612,16 @@ fn main(): i64 {
     vec_push(args_bframe, blk_frame_bad);
     fmt_printf("fuzz: %d iterations passed (blocks frames, pad differential; bad=%d)\n", args_bframe);
 
+    var args_hb = vec_new();
+    vec_push(args_hb, hb_iter);
+    vec_push(args_hb, hb_bad);
+    fmt_printf("fuzz: %d iterations passed (half-block rows, decoded to their colours; bad=%d)\n", args_hb);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

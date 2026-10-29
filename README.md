@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v2.0.1** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, three render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64; each release ships a binary for all three (§ Building).
+**v2.1.0** (2026-10-29). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, three render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64; each release ships a binary for all three (§ Building).
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal (or, on request, text glyphs or the full Block Elements set):
 
@@ -97,6 +97,11 @@ shared substrate, which is the point:
 - **v2.0.1** — release engineering: CI builds and tests aarch64, releases carry x86_64,
   aarch64 and agnos binaries (the x86_64 ones dead-code eliminated, 56 % smaller, measured
   byte-identical), and the release notes are the CHANGELOG's. No frame changes.
+- **v2.1.0** — the half-block lane reuses its colour state: each cell is `▀`, `▄`, `█` or a
+  space, whichever needs fewest escapes for the same two colours, so default frames are about
+  half the bytes (−50 % at 8 and 16 colours, −37 % at truecolour) and look the same. At 16
+  colours a bright colour stays in the foreground, because the Linux console has no bright
+  backgrounds ([ADR 0004](docs/adr/0004-half-block-floor-glyph.md) § v2.1.0).
 
 ### Supported input formats
 
@@ -123,7 +128,7 @@ kii [OPTIONS] <image>
 |---|---|---|
 | `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000; negative values are refused. |
 | `-c, --color <8\|16\|256\|tc>` | `16` | Colour tier. `16` uses the 16 ANSI colours (SGR 30–37 / 90–97), `8` the normal-intensity half only (30–37, for the strictest terminals), `256` the xterm 6×6×6 cube and grey ramp, `tc` 24-bit truecolour. kii never reads `COLORTERM`: the tier is what you ask for. |
-| `-m, --mode <M>` | `halfblock` | `halfblock` emits `▀` cells at double vertical resolution; `ascii` emits text glyphs chosen by shape; `blocks` (v2.0.0) emits whichever Block Element fits each cell's 8 × 8 samples best, in two colours (needs a font with the quadrants and eighths). |
+| `-m, --mode <M>` | `halfblock` | `halfblock` emits two colours per cell at double vertical resolution (`▀`, `▄`, `█` or a space, whichever needs fewest escapes); `ascii` emits text glyphs chosen by shape; `blocks` (v2.0.0) emits whichever Block Element fits each cell's 8 × 8 samples best, in two colours (needs a font with the quadrants and eighths). |
 | `-d, --dither <none\|ordered\|fs>` | `none` | Dithering at tiers 8, 16 and 256. `ordered` adds a 4×4 Bayer pattern; `fs` diffuses each pixel's error (Floyd-Steinberg). Both turn bands into a mix of two neighbouring colours, and make the frame larger. No effect at `tc`. |
 | `-v, --verbose` | off | Print a dimensions/format summary to **stderr** after the frame. |
 | `-h, --help` | — | Show help and exit. |
@@ -213,8 +218,8 @@ x86_64 Linux binary named `kii`.
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 964 assertions across 6 suites (cli/quant/render/ascii/blocks/decode)
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 14 fuzz surfaces, 8,371,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area/blocks ×2)
+cyrius test                           # 984 assertions across 6 suites (cli/quant/render/ascii/blocks/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 15 fuzz surfaces, 8,571,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area/blocks ×2/half-block rows)
 ./scripts/gen-shape-table.sh --check                            # the ASCII glyph table is the generator's output (needs ImageMagick 7 + Liberation Mono)
 cyrius bench tests/kii.bcyr                                     # 13 benches (quantize, end-to-end, ASCII sampling, blocks, decode-latency)
 ```

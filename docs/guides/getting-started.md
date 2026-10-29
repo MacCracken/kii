@@ -112,8 +112,11 @@ Examples:
   Within a row, an escape is written only when the colour changes, so a
   tier-16 frame is far smaller than it was before v1.8.0.
 - **`--mode halfblock|ascii|blocks`** (`-m`) — The render lane.
-  - `halfblock` (the default) draws every cell as `▀` in two colours,
-    one per half. It renders on any font that has `▀` and `▄`.
+  - `halfblock` (the default) draws every cell in two colours, one per
+    half. Since v2.1.0 a cell is `▀` or `▄` (the same two colours either
+    way round), or a space or `█` when both halves are one colour,
+    whichever needs fewest escapes. It renders on any font that has
+    `▀`, `▄` and `█`, which includes CP437 console fonts.
   - `ascii` draws a text glyph per cell, chosen by its shape, in one
     colour ([ADR 0007](../adr/0007-rendering-mode-taxonomy.md)).
   - `blocks` (since v2.0.0, [ADR 0012](../adr/0012-block-elements-lane.md))

@@ -27,6 +27,38 @@ fn _row_is(buf, n, expect): i64 {
     return memeq(buf, expect, n);
 }
 
+# The number of cells in one emitted half-block row of `n` bytes: each space
+# and each 3-byte Block Element (E2 96 xx) outside an escape is a cell, up to
+# the LF. -1 on any other byte. (v2.1.0: a row's cells are ▀ ▄ █ or spaces.)
+fn _hb_cells(buf, n): i64 {
+    var i = 0;
+    var cells = 0;
+    while (i < n) {
+        var b = load8(buf + i);
+        if (b == 10) { return cells; }
+        if (b == 27) {
+            i = i + 1;
+            while (i < n && load8(buf + i) != 109) { i = i + 1; }    # to the 'm'
+            i = i + 1;
+        } else {
+            if (b == 32) { cells = cells + 1; i = i + 1; }
+            else {
+                if (b != 0xE2 || i + 2 >= n || load8(buf + i + 1) != 0x96) { return 0 - 1; }
+                cells = cells + 1;
+                i = i + 3;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+# Emit a one-row frame of two cells, (t0 over b0) and (t1 over b1), into
+# `line`; returns the length (v2.1.0 tests).
+fn _hb_row2(q, line, t0, t1, b0, b1): i64 {
+    store32(q + 0, t0); store32(q + 4, t1); store32(q + 8, b0); store32(q + 12, b1);
+    return emit_halfblock_row_buf(q, 2, 0, line, 0);
+}
+
 # Store `n` 32-bit colour codes from the i64 array `codes` into `q`.
 fn _put_codes(q, codes, n): i64 {
     var i = 0;
@@ -342,15 +374,9 @@ fn main() {
     var jr_pos = emit_halfblock_row_buf(jr_qbuf, 16, 0, &jr_line, 0);
     assert(jr_pos > 16, "JPEG emit produced a real row (> 1 byte/cell)");
     assert_eq(load8(&jr_line + 0), 27, "JPEG emit row starts with ESC (SGR)");
-    # Confirm a half-block glyph (U+2580 = E2 96 80) is present — i.e. it
-    # actually rendered cells, not just escapes. Scan for the 0xE2 lead byte.
-    var jr_has_block = 0;
-    var jr_k = 0;
-    while (jr_k < jr_pos) {
-        if (load8(&jr_line + jr_k) == 226) { jr_has_block = 1; }   # 0xE2
-        jr_k = jr_k + 1;
-    }
-    assert_eq(jr_has_block, 1, "JPEG emit row contains a ▀ half-block glyph");
+    # It draws all 16 cells, not just escapes. (Until v2.1.0 this looked for a ▀;
+    # a one-colour cell is now a space or █.)
+    assert_eq(_hb_cells(&jr_line, jr_pos), 16, "JPEG emit row draws 16 cells");
 
     # v1.5.0 — the same e2e for the two formats chitra 1.0.0 brought in. The
     # point is that decode → downscale → quantize → emit needed NO change to
@@ -371,13 +397,9 @@ fn main() {
     var br_pos = emit_halfblock_row_buf(br_qbuf, 16, 0, &br_line, 0);
     assert(br_pos > 16, "BMP emit produced a real row (> 1 byte/cell)");
     assert_eq(load8(&br_line + 0), 27, "BMP emit row starts with ESC (SGR)");
-    var br_has_block = 0;
-    var br_k = 0;
-    while (br_k < br_pos) {
-        if (load8(&br_line + br_k) == 226) { br_has_block = 1; }   # 0xE2
-        br_k = br_k + 1;
-    }
-    assert_eq(br_has_block, 1, "BMP emit row contains a ▀ half-block glyph");
+    # It draws all 16 cells, not just escapes. (Until v2.1.0 this looked for a ▀;
+    # a one-colour cell is now a space or █.)
+    assert_eq(_hb_cells(&br_line, br_pos), 16, "BMP emit row draws 16 cells");
 
     test_group("v1.5.0 — GIF render e2e (color.gif → downscale → quantize → emit)");
     var pstr_gr[160];
@@ -401,13 +423,9 @@ fn main() {
     var gr_pos = emit_halfblock_row_buf(gr_qbuf, 16, 0, &gr_line, 0);
     assert(gr_pos > 16, "GIF emit produced a real row (> 1 byte/cell)");
     assert_eq(load8(&gr_line + 0), 27, "GIF emit row starts with ESC (SGR)");
-    var gr_has_block = 0;
-    var gr_k = 0;
-    while (gr_k < gr_pos) {
-        if (load8(&gr_line + gr_k) == 226) { gr_has_block = 1; }   # 0xE2
-        gr_k = gr_k + 1;
-    }
-    assert_eq(gr_has_block, 1, "GIF emit row contains a ▀ half-block glyph");
+    # It draws all 16 cells, not just escapes. (Until v2.1.0 this looked for a ▀;
+    # a one-colour cell is now a space or █.)
+    assert_eq(_hb_cells(&gr_line, gr_pos), 16, "GIF emit row draws 16 cells");
 
     # ============================================================
     # ----------------- M5(c) emit_halfblock ---------------------
@@ -666,18 +684,20 @@ fn main() {
     while (ci < 8) { store64(&codes + ci * 8, 4); ci = ci + 1; }
     _put_codes(&q, &codes, 8);
     lp = emit_halfblock_row_buf(&q, 4, 0, &line, 0);
-    assert_eq(_row_is(&line, lp, "\x1b[34m\x1b[44m\xe2\x96\x80\xe2\x96\x80\xe2\x96\x80\xe2\x96\x80\x1b[0m\n"), 1,
-      "four blue cells → one fg and one bg escape (was 4 of each: 89 → 31 bytes)");
+    assert_eq(_row_is(&line, lp, "\x1b[44m    \x1b[0m\n"), 1,
+      "four blue cells → one bg escape and four spaces (v2.1.0; 31 bytes as ▀ with fg and bg, 89 before v1.8.0)");
     # Top row 1 1, bottom row 2 3: only the bg changes in the second cell.
     store64(&codes + 0, 1); store64(&codes + 8, 1); store64(&codes + 16, 2); store64(&codes + 24, 3);
     _put_codes(&q, &codes, 4);
     lp = emit_halfblock_row_buf(&q, 2, 0, &line, 0);
     assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[43m\xe2\x96\x80\x1b[0m\n"), 1, "only the bg changes → only a bg escape");
-    # A checkerboard changes both every cell.
+    # A checkerboard: top 0 15, bottom 15 0.
     store64(&codes + 0, 0); store64(&codes + 8, 15); store64(&codes + 16, 15); store64(&codes + 24, 0);
     _put_codes(&q, &codes, 4);
     lp = emit_halfblock_row_buf(&q, 2, 0, &line, 0);
-    assert_eq(_row_is(&line, lp, "\x1b[30m\x1b[107m\xe2\x96\x80\x1b[97m\x1b[40m\xe2\x96\x80\x1b[0m\n"), 1, "checkerboard → both every cell");
+    # v2.1.0: the bright half takes the fg in both cells, so the second reuses the
+    # first's colours (until v2.1.0, two escapes every cell).
+    assert_eq(_row_is(&line, lp, "\x1b[97m\x1b[40m\xe2\x96\x84\xe2\x96\x80\x1b[0m\n"), 1, "checkerboard → ▄ then ▀, one pair of escapes");
     # Every row starts with no state: row 1 of a 1x4 solid buffer repeats row 0's escapes.
     ci = 0;
     while (ci < 4) { store64(&codes + ci * 8, 4); ci = ci + 1; }
@@ -701,13 +721,85 @@ fn main() {
     store64(&codes + 24, KII_COLOR_DEFAULT); store64(&codes + 32, KII_COLOR_DEFAULT); store64(&codes + 40, 2);
     _put_codes(&q, &codes, 6);
     lp = emit_halfblock_row_buf(&q, 3, 0, &line, 0);
-    assert_eq(_row_is(&line, lp, "\x1b[49m  \x1b[32m\x1b[42m\xe2\x96\x80\x1b[0m\n"), 1,
-      "fully transparent cells are spaces with no fg; one 49 covers both");
+    assert_eq(_row_is(&line, lp, "\x1b[49m  \x1b[42m \x1b[0m\n"), 1,
+      "fully transparent cells are spaces with no fg; one 49 covers both; the green cell is a space too (v2.1.0)");
     quant_set_tier(KII_TIER_TC);
     store64(&codes + 0, KII_COLOR_DEFAULT); store64(&codes + 8, 255);
     _put_codes(&q, &codes, 2);
     lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
     assert_eq(_row_is(&line, lp, "\x1b[38;2;0;0;255m\x1b[49m\xe2\x96\x84\x1b[0m\n"), 1, "transparency works the same at truecolour");
+    quant_set_tier(16);
+
+    # ---- v2.1.0 — the half-block lane reuses its colour state (ADR 0004) ----
+    # Each cell takes the encoding of its two colours that needs fewest escapes:
+    # ▀ or ▄ for two colours (a tie keeps ▀), a space or █ for one. At tier 16 a
+    # bright colour stays in the fg when it can (the Linux console has no bright
+    # backgrounds). ▀ ▄ █ are E2 96 80 / 84 / 88.
+    test_group("v2.1.0 — one colour: a space on the bg, or █ when the fg already has it");
+    store32(&q + 0, 4); store32(&q + 4, 4);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[44m \x1b[0m\n"), 1, "a blue cell → a space on 44, no fg");
+    lp = _hb_row2(&q, &line, 1, 1, 2, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\xe2\x96\x88\x1b[0m\n"), 1, "red after red-on-green → █, no escape");
+    lp = _hb_row2(&q, &line, 1, 2, 2, 2);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80 \x1b[0m\n"), 1, "green after red-on-green → a bare space");
+    lp = _hb_row2(&q, &line, 1, 3, 2, 3);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[43m \x1b[0m\n"), 1, "a new colour → a space after one bg escape");
+
+    test_group("v2.1.0 — two colours: ▀ or ▄, whichever needs fewer escapes");
+    lp = _hb_row2(&q, &line, 1, 2, 2, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\xe2\x96\x84\x1b[0m\n"), 1, "the colours swapped → ▄, no escape");
+    lp = _hb_row2(&q, &line, 1, 3, 2, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[43m\xe2\x96\x84\x1b[0m\n"), 1, "▄ reuses the fg: one escape, not two");
+    lp = _hb_row2(&q, &line, 1, 3, 2, 4);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[33m\x1b[44m\xe2\x96\x80\x1b[0m\n"), 1, "two new colours: a tie keeps ▀");
+    lp = _hb_row2(&q, &line, 1, 1, 2, 3);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[43m\xe2\x96\x80\x1b[0m\n"), 1, "▀ when it needs only the bg");
+
+    test_group("v2.1.0 — tier 16: a bright colour stays in the fg");
+    lp = _hb_row2(&q, &line, 9, 12, 12, 12);
+    assert_eq(_row_is(&line, lp, "\x1b[91m\x1b[104m\xe2\x96\x80\x1b[94m\xe2\x96\x88\x1b[0m\n"), 1,
+      "bright blue alone → █ in 94, though the bg is already 104");
+    lp = _hb_row2(&q, &line, 1, 1, 2, 10);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[92m\x1b[41m\xe2\x96\x84\x1b[0m\n"), 1,
+      "red over bright green → ▄ in 92 on 41, though ▀ needs one escape");
+    lp = _hb_row2(&q, &line, 1, 10, 2, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[92m\x1b[41m\xe2\x96\x80\x1b[0m\n"), 1,
+      "bright green over red → ▀ in 92 on 41, though ▄ needs one escape");
+    lp = _hb_row2(&q, &line, 9, 12, 12, 9);
+    assert_eq(_row_is(&line, lp, "\x1b[91m\x1b[104m\xe2\x96\x80\xe2\x96\x84\x1b[0m\n"), 1,
+      "two brights → fewest escapes, as for two dim colours");
+    store32(&q + 0, 7); store32(&q + 4, 7);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[47m \x1b[0m\n"), 1, "light grey (7) is not a bright: a space on 47");
+
+    test_group("v2.1.0 — a transparent half is only ever the bg");
+    # Cell 2's top (green) is already the bg, so ▄ would need one escape, not two;
+    # but ▄ would draw the transparent bottom in the default fg (39), not the bg.
+    lp = _hb_row2(&q, &line, 1, 2, 2, KII_COLOR_DEFAULT);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[32m\x1b[49m\xe2\x96\x80\x1b[0m\n"), 1,
+      "green over transparent after red-on-green → ▀ on 49");
+    lp = _hb_row2(&q, &line, 1, KII_COLOR_DEFAULT, 2, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\x1b[49m\xe2\x96\x84\x1b[0m\n"), 1,
+      "transparent over red after red-on-green → ▄ on 49");
+
+    test_group("v2.1.0 — tiers 8, 256 and truecolour take the fewest escapes");
+    quant_set_tier(8);
+    lp = _hb_row2(&q, &line, 1, 2, 2, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[31m\x1b[42m\xe2\x96\x80\xe2\x96\x84\x1b[0m\n"), 1, "tier 8: swapped → ▄");
+    lp = _hb_row2(&q, &line, 1, 1, 1, 1);
+    assert_eq(_row_is(&line, lp, "\x1b[41m  \x1b[0m\n"), 1, "tier 8: two red cells → one escape, two spaces");
+    quant_set_tier(256);
+    lp = _hb_row2(&q, &line, 196, 21, 21, 196);
+    assert_eq(_row_is(&line, lp, "\x1b[38;5;196m\x1b[48;5;21m\xe2\x96\x80\xe2\x96\x84\x1b[0m\n"), 1, "tier 256: swapped → ▄");
+    quant_set_tier(KII_TIER_TC);
+    # At truecolour, codes 8–15 are RGB (0,0,8)…(0,0,15), not brights: no bright rule.
+    lp = _hb_row2(&q, &line, 1, 1, 2, 10);
+    assert_eq(_row_is(&line, lp, "\x1b[38;2;0;0;1m\x1b[48;2;0;0;2m\xe2\x96\x80\x1b[48;2;0;0;10m\xe2\x96\x80\x1b[0m\n"), 1,
+      "truecolour (0,0,10) is not a bright: ▀ with one bg escape");
+    store32(&q + 0, 9); store32(&q + 4, 9);
+    lp = emit_halfblock_row_buf(&q, 1, 0, &line, 0);
+    assert_eq(_row_is(&line, lp, "\x1b[48;2;0;0;9m \x1b[0m\n"), 1, "truecolour (0,0,9) alone → a space");
     quant_set_tier(16);
 
     test_group("M5(c) — emit_halfblock rejects ungated calls");

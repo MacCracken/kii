@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.0.1**; 2.1.0 through
+> below has shipped, it should not be here. Current release **v2.1.0**; 2.2.0 through
 > 2.6.0 are pinned below.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
@@ -18,23 +18,10 @@ Two rules hold for every 2.x release:
   half-block lane at 16 colours ([ADR 0004](../adr/0004-half-block-floor-glyph.md),
   CLAUDE.md § Domain-specific rules). Every new lane or protocol is opt-in. A release
   that changes default bytes says so with ⚠ in the CHANGELOG and measures it over the
-  corpus, as 1.8.0, 1.9.0 and 1.11.0 did.
+  corpus, as 1.8.0, 1.9.0, 1.11.0 and 2.1.0 did.
 - **kii stays environment-blind.** No lane, tier or protocol is picked from `TERM`,
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
-
-## 2.1.0 — the half-block lane reuses its colour state
-
-The half-block lane always draws `▀` with the top in front. The blocks lane (2.0.0)
-draws whichever of a glyph and its complement needs fewer colour escapes, and a cell whose
-two halves are one colour as a space or `█`. The half-block lane gains the same choice:
-`▀` or `▄`, and a space or `█` for flat cells.
-- **Visually identical, fewer bytes.** Every cell shows the same two colours in the same
-  places; only the encoding changes. [ADR 0004](../adr/0004-half-block-floor-glyph.md)
-  named this "possible v1.x optimization".
-- ⚠ **It changes the default lane's bytes.** That is acceptable only with the corpus
-  showing every frame decodes to the same cell colours (a rasterized comparison) and the
-  byte saving per tier. ADR 0004 is amended with both.
 
 ## 2.2.0 — the ASCII lane on light backgrounds, and without colour
 
@@ -123,6 +110,28 @@ others): pixels as six-row bands in up to 256 registers.
 - **`-` for standard input** as a path. `/dev/stdin` works today; `-` is the usual
   spelling.
 - **A man page, `kii(1)`**, and shell completions generated from the cmdit flag table.
+- **The fewest bytes per row, exactly.** Both cell lanes choose each cell's encoding greedily,
+  from the colours the row has set so far. The exact minimum over every encoding of the same
+  colours is a shortest path over the colour state (at most 13 states a row at tier 16 on a
+  40-image sample, 139 at truecolour). On that sample, at tier 16 and `--width 80`, the
+  plain greedy rule saved 50.9 % of 2.0.1's bytes and the exact one 55.3 % (2.1.0's bright
+  rule, which constrains the choice, was not measured this way). It would change the default
+  lane's bytes again, so it needs the same corpus proof as 2.1.0.
+- **The Linux console's stuck bold.** The console draws SGR 90–97 by setting bold, and a later
+  30–37 does not clear it, so a dim foreground after a bright one in the same row shows
+  bright ([ADR 0010](../adr/0010-tier-2-colour-and-emit-encoding.md) § v2.1.0). Folding SGR 22
+  into such an escape (`22;31`) fixes it: modelled on the corpus, the half-block lane's wrong
+  halves at tier 16 go from 0.80 % to 0.34 % for 0.2 % more bytes. The ASCII lane draws only
+  foregrounds, so every bright-to-dim change in its rows meets it (not measured). It is a new
+  escape form, which darshana has no
+  composer for, and a byte change to the default lane.
+- **The fuzz generator's low bits.** `_fuzz_rand` returns the whole 32-bit LCG state, whose low
+  bits repeat (bit 0 every 2 draws, the low byte every 256), and most surfaces take
+  `_fuzz_rand() % n` or `& 255`. The blocks and area surfaces' random images are therefore a
+  256-byte pattern, repeated. The half-block surface (2.1.0) draws from bits 16 and up, after
+  the low bits hid a planted defect from it. Changing the shared generator changes every
+  surface's random stream, so the fix should be one release, with each surface re-checked
+  against its planted defects.
 - **The directory diagnostic on agnos.** Run under mirshi, the agnos build reports a
   directory as `cannot open file`, not `is a directory, not an image file`: kii recognizes a
   directory by the read's `EISDIR`, and the agnos read error does not carry it (found at
@@ -134,7 +143,9 @@ others): pixels as six-row bands in up to 256 registers.
 - **Cross-terminal verification**: Linux console, xterm, Alacritty, kitty, tmux, now for
   three lanes. The blocks lane needs it most: quadrants (U+2596..U+259F) and the eighths
   are not in CP437, so a console font may not carry them. It needs a human eye on each
-  terminal; kii ships byte-stable, so it can land at any time without gating a cut.
+  terminal; kii ships byte-stable, so it can land at any time without gating a cut. The
+  Linux console can also be read back: `/dev/vcsaN` holds each cell's glyph and attribute,
+  which would check 2.1.0's console model against the kernel itself (it needs root).
 - **Marketplace recipe in zugot**: blocked on zugot tooling, not on kii.
 - **First BBS / MUD downstream consumer integrated**: a downstream-cycle deliverable. It is
   tracked here only because v1.0 named it. kii is the substrate, and v1.0's ADR-level scope

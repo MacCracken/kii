@@ -510,3 +510,43 @@ box-filtered to the same size, at `--width 80`; RMS error per channel:
 Over the corpus's 2,280 rendered blocks frames (5 flag sets across tiers and dithers), the
 lane writes 0.63× the half-block lane's bytes. At truecolour it can write more, when most
 cells carry two distinct colours.
+
+## v2.1.0 — the half-block lane reuses its colour state
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`. The host was shared with other work during
+these runs (load average 2.4–3.1).
+
+**Bytes**, over the 472-image corpus at `--width 40` and `120` (10,932 frames, each
+decoded to its cells' colours and found identical to 2.0.1's):
+
+| Tier | `none` | `ordered` | `fs` | all |
+|---|---:|---:|---:|---:|
+| 8 | −54.0 % | −52.1 % | −47.1 % | −50.8 % |
+| 16 | −28.1 % | −57.9 % | −51.8 % | −50.1 % |
+| 256 | −47.4 % | −37.6 % | −41.9 % | −40.4 % |
+| truecolour | −36.8 % | −36.8 % | −36.8 % | −36.8 % |
+
+(Truecolour ignores `--dither`, so its three columns are the same frames.) Tier 16 without
+dither saves least because its bright colours stay in the foreground (ADR 0004 § v2.1.0);
+the plain rule would have saved −50.8 % at `--width 80` there (modelled). RAMGON at `--width 80` is
+14,553 → 7,441 bytes; the archlinux logo 6,150 → 4,971.
+
+**The Linux console**, modelled from `vt.c`'s `csi_m` at tier 16: cell halves shown in a
+colour other than the one meant, 27.6 % → 0.60 % (`none`), 40.6 % → 1.27 % (`ordered`),
+36.1 % → 3.63 % (`fs`).
+
+**CPU** per run (user + system), five interleaved rounds of 20, minimum:
+
+| Render | 2.0.1 | 2.1.0 |
+|---|---:|---:|
+| archlinux-logo 256², `--width 200` | 3.11 ms | 3.20 ms |
+| archlinux-logo, `--width 200 --color tc` | 2.39 ms | 2.41 ms |
+| archlinux-logo, `--width 400 --dither fs` | 11.87 ms | 11.79 ms |
+| RAMGON, `--width 80` | 220.1 ms | 217.9 ms |
+| RAMGON, `--width 200` | 218.5 ms | 218.6 ms |
+
+**`kii-bench`**, three interleaved rounds against 2.0.1 (rows unchanged): RAMGON → 80×24,
+which emits every row in process, 205.7 / 204.6 / 208.0 ms against 205.8 / 219.7 / 209.5.
+The second 2.1.0 round ran slower on every row, including the ones the change cannot
+reach (`downscale_to_rgb` 113 → 244 µs, both decodes), so it is load from the shared host;
+the other two rounds match 2.0.1 within ~1 % on every row.
