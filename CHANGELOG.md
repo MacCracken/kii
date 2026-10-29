@@ -4,6 +4,75 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-28
+
+**Release engineering.** No frame changes: every output is byte-identical to 2.0.0's, apart
+from `--version`.
+
+### Added
+
+- **CI builds and tests aarch64.** A second job cross-builds with `--aarch64`, checks the
+  binary's `--version` under qemu-user, runs every suite with `cyrius test --aarch64`, and
+  checks that the aarch64 binary answers each case exactly as the x86_64 one does. Until now
+  all three were steps of each cut, run by hand.
+- **Three release binaries**, with `SHA256SUMS`: `kii-X.Y.Z-x86_64-linux`,
+  `kii-X.Y.Z-aarch64-linux` and `kii-X.Y.Z-x86_64-agnos`.
+- **Release notes from the CHANGELOG.** `scripts/release-notes.sh X.Y.Z` prints that version's
+  section, with its repository links pointed into the tagged tree (a release page resolves a
+  relative link against itself). The release publishes it in place of GitHub's generated list
+  of commits. CI fails if `VERSION` has no CHANGELOG section, so the CHANGELOG header joins the
+  version-sync check.
+- **The benches compile in CI** (not run: timings depend on the runner).
+- **`scripts/check-builds-agree.sh A B [RUNNER…]`**: two kii binaries must give the same
+  stdout, stderr and exit code on 144 cases (the nine fixtures in all three lanes, every
+  tier and dither, plus help, version and each kind of refusal). CI runs it for the DCE build
+  and for aarch64 under qemu.
+- **`scripts/build-strict.sh`**: `cyrius build` that fails on a compiler warning. cyrius
+  exits 0 on one, and a call to an undefined function is only a warning when DCE proves the
+  call unreachable. agnodrm 1.5.2 shipped a broken `--agnos` binary that way. Every build in
+  CI and the release goes through it. kii builds with no warnings on every target, with and
+  without DCE.
+
+### Changed
+
+- ⚠ **The release assets are renamed.** Through 2.0.0 a release carried one file, `kii`
+  (x86_64 Linux). A script that downloads `…/releases/download/<tag>/kii` needs the new names
+  above.
+- **The x86_64 Linux and agnos release binaries are built with `CYRIUS_DCE=1`**, dead code
+  eliminated: 1,048,976 → 463,248 bytes and 1,063,248 → 465,232. Each was measured against its
+  plain build over the 472-image corpus: 2,832 half-block and ASCII cases (stdout, stderr and
+  exit code) and 2,832 blocks frames, all byte-identical, plus 33 CLI cases. The agnos pair
+  was run under mirshi 1.11.3, and its half-block and ASCII output also matches the Linux
+  build's. aarch64 ships plain: cyrius cannot compact an aarch64 ELF yet, so DCE would only
+  NOP-fill the dead code, and the binary would stay 1,245,288 bytes.
+- **The toolchain pin is validated before the installer runs.** A lost or reformatted
+  `cyrius = "…"` line made the grep print nothing, and the installer reads an empty version
+  as "the latest release", so CI would have passed on a toolchain nobody pinned.
+- `ci.yml`'s header no longer lists v0.2.0's pending work (this release is that work), and
+  the comment naming the repository `cyrius-kii` is gone. The manifest description names the
+  blocks lane.
+
+### Found
+
+- **On agnos a directory argument reads as `cannot open file`**, where Linux says `is a
+  directory, not an image file` (both exit 1). kii recognizes a directory by the read's
+  `EISDIR`, and under mirshi the agnos read error does not carry it. Both agnos builds agree,
+  so DCE is not the cause. Not fixed here: a frame or diagnostic change does not belong in a
+  release-engineering cut.
+
+### Verified
+
+- 964 assertions on x86_64 and aarch64; 8,371,000 fuzz iterations, clean.
+- Every corpus frame, in all three lanes, is byte-identical to 2.0.0's.
+- `check-builds-agree.sh`: 144 of 144 for the DCE build and for aarch64 under qemu; for agnos
+  under mirshi, 143 of 144 for each build (the directory above).
+- Both workflows parse, and every `run:` step was executed locally in a copy of the files a
+  checkout holds, with the release's tag set, except the toolchain and qemu installs and the
+  upload. The shell was `bash -eo pipefail`, stricter than the `bash -e` GitHub uses for a
+  step that names none. It caught `--version | head -1` failing under qemu: `head` closes the
+  pipe after one line, and the slower binary's second line then dies of SIGPIPE. The checks
+  read the first line with `sed -n 1p`, which reads all of its input.
+
 ## [2.0.0] - 2026-10-28
 
 **A third render lane: `--mode blocks`, the full Block Elements vocabulary**

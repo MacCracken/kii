@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.0.0**; 2.0.1 through
+> below has shipped, it should not be here. Current release **v2.0.1**; 2.1.0 through
 > 2.6.0 are pinned below.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
@@ -22,21 +22,6 @@ Two rules hold for every 2.x release:
 - **kii stays environment-blind.** No lane, tier or protocol is picked from `TERM`,
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
-
-## 2.0.1 — release engineering
-
-No frame changes; every output byte-identical to 2.0.0.
-- **CI builds and tests aarch64**: `cyrius build --aarch64` and `cyrius test --aarch64`
-  as steps. They are run by hand at every cut today.
-- **Release notes from the CHANGELOG**: the release workflow extracts the version's
-  section rather than leaving the notes empty.
-- **Multi-arch release binaries**: x86_64, aarch64 and `--agnos`.
-- **A bench build in CI** (`tests/kii.bcyr` compiled, not timed), so a bench that stops
-  compiling is caught.
-- **Dead-code elimination for release binaries.** The compiler reports ~585 KB of
-  unreachable functions. Build with `CYRIUS_DCE=1`, and ship it only if every frame of
-  the corpus is byte-identical to the plain build.
-- The cosmetic `cyrius-kii` comment in `ci.yml`.
 
 ## 2.1.0 — the half-block lane reuses its colour state
 
@@ -138,6 +123,11 @@ others): pixels as six-row bands in up to 256 registers.
 - **`-` for standard input** as a path. `/dev/stdin` works today; `-` is the usual
   spelling.
 - **A man page, `kii(1)`**, and shell completions generated from the cmdit flag table.
+- **The directory diagnostic on agnos.** Run under mirshi, the agnos build reports a
+  directory as `cannot open file`, not `is a directory, not an image file`: kii recognizes a
+  directory by the read's `EISDIR`, and the agnos read error does not carry it (found at
+  2.0.1). Whether the agnos kernel reports it, or mirshi drops it in translation, decides
+  whether the fix is kii's (an `fstat` before the read) or upstream's.
 
 ## Not scheduled (outside kii's control)
 

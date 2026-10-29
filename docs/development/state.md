@@ -5,6 +5,25 @@
 
 ## Version
 
+**2.0.1** — cut 2026-10-28. **Release engineering; no frame changes** (every corpus frame
+byte-identical to 2.0.0's):
+- **CI**: a second job builds for aarch64 and runs every suite under qemu-user, and checks
+  that its answers match x86_64's. The first job also compiles the benches, builds for agnos,
+  and checks the DCE build against the plain one. Every build fails on a compiler warning
+  (`scripts/build-strict.sh`), and `VERSION` must have a CHANGELOG section.
+- **Releases** carry three binaries with `SHA256SUMS`: `kii-X.Y.Z-x86_64-linux` and
+  `-x86_64-agnos`, both built with `CYRIUS_DCE=1` (463,248 and 465,232 bytes), and
+  `-aarch64-linux`, plain. ⚠ The single `kii` asset of earlier releases is gone. The notes are
+  the version's CHANGELOG section (`scripts/release-notes.sh`).
+- **DCE was measured before it shipped**: on x86_64 and on agnos (under mirshi), every case of
+  the 472-image corpus is byte-identical to the plain build's.
+- **`scripts/check-builds-agree.sh`** compares two binaries on 144 cases (fixtures in every
+  lane, tier and dither, and the CLI's own paths).
+- **Found**: on agnos a directory reads as `cannot open file`, because the read error carries
+  no `EISDIR` (a roadmap candidate).
+
+`print_version` → `kii 2.0.1`.
+
 **2.0.0** — cut 2026-10-28. **A third lane, `--mode blocks`: the full Block Elements
 vocabulary** ([ADR 0012](../adr/0012-block-elements-lane.md)), opt-in; the default is still
 half-block:
@@ -395,7 +414,7 @@ Module map:
 
 ## Binary size
 
-Build: **1,024 KB** on host at v2.0.0 (`build/kii` = 1,048,976 bytes, unstripped, DCE off). `--agnos` 1,063,248 bytes; `--aarch64` 1,245,288 bytes. At v1.11.0: 1,020,648 host, `--agnos` 1,039,024, `--aarch64` 1,241,600. At v1.10.0: 1,016,552 host, `--agnos` 1,030,824, `--aarch64` 1,241,592. At v1.9.1: 1,008,328 host (1,210 unreachable fns, ~585 KB, eliminable with `CYRIUS_DCE=1`), `--agnos` 1,022,600, `--aarch64` 1,237,464. At v1.9.0: 1,012,280 host, `--agnos` 1,026,520, `--aarch64` 1,237,312. At v1.8.0: 1,003,824 host, `--agnos` 1,018,072, `--aarch64` 1,237,064, back over the 64 KiB segment boundary (padding, not code). At v1.7.0: 999,568 host, `--agnos` 1,013,816, `--aarch64` 1,171,360. At v1.6.4: 999,656 bytes host (1,205 unreachable fns, ~572 KB, eliminable with `CYRIUS_DCE=1`), `--agnos` 1,013,904, `--aarch64` 1,236,984, of which 64 KiB was segment-alignment padding (the text grew 2,280 bytes across a 64 KiB boundary). At v1.6.3: 976 KB (`build/kii` = 999,328 bytes, unstripped, DCE off; the compiler reports 1,209 unreachable fns, ~574 KB, eliminable with `CYRIUS_DCE=1`). The +75,240 bytes over v1.6.2 (924,088) are the stdlib's sankoch 2.8.7 bundle, mostly its new Brotli encoder; kii links it as a stdlib leaf and calls only inflate and CRC-32. `--agnos` 1,013,568 bytes; `--aarch64` 1,171,128 bytes. At v1.6.1 it was 923,976 bytes, the growth from the cmdit 1.4.0 and chitra 1.1.3 bundles. At v1.6.0 it was **877 KB** (898,344 bytes), up from 683,584 bytes for v1.5.2 rebuilt from its own tree at 6.6.2: the growth is the 6.7.9 toolchain and the larger darshana 1.3.0 bundle — kii's own source got smaller (the local BG composer and the hand-rolled UTF-8 walk are gone). `--agnos` 908,376 bytes; `--aarch64` 1,086,544 bytes. Earlier: **668 KB** at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DCE off). The `~145 KB` this section reported was measured at v0.8.0 and never refreshed across the cmdit fold, the chitra re-fold, or the JPEG/BMP/GIF folds — it was low by **4.6×**. Most of the size is the vendored `chitra` bundle carrying four decoders plus `sankoch`; the compiler reports ~942 unreachable fns (~390 KB) eliminable with `CYRIUS_DCE=1`. kii gained no module at v1.5.0 or v1.5.1. (Corrected at the v1.5.1 P-1 sweep.)
+Build: **1,024 KB** on host at v2.0.1 (`build/kii` = 1,048,976 bytes, unstripped, DCE off). `--agnos` 1,063,248 bytes; `--aarch64` 1,245,288 bytes. **Release binaries since v2.0.1** are built with `CYRIUS_DCE=1` on x86_64 Linux (**463,248 bytes**: 1,215 unreachable fns, 585,733 bytes, eliminated) and on agnos (**465,232**: 1,299 fns, 596,834 bytes); aarch64 ships plain, since cyrius only NOP-fills dead code on an aarch64 ELF (1,219 fns, 712,184 bytes) and the size does not change. At v2.0.0: the same plain sizes. At v1.11.0: 1,020,648 host, `--agnos` 1,039,024, `--aarch64` 1,241,600. At v1.10.0: 1,016,552 host, `--agnos` 1,030,824, `--aarch64` 1,241,592. At v1.9.1: 1,008,328 host (1,210 unreachable fns, ~585 KB, eliminable with `CYRIUS_DCE=1`), `--agnos` 1,022,600, `--aarch64` 1,237,464. At v1.9.0: 1,012,280 host, `--agnos` 1,026,520, `--aarch64` 1,237,312. At v1.8.0: 1,003,824 host, `--agnos` 1,018,072, `--aarch64` 1,237,064, back over the 64 KiB segment boundary (padding, not code). At v1.7.0: 999,568 host, `--agnos` 1,013,816, `--aarch64` 1,171,360. At v1.6.4: 999,656 bytes host (1,205 unreachable fns, ~572 KB, eliminable with `CYRIUS_DCE=1`), `--agnos` 1,013,904, `--aarch64` 1,236,984, of which 64 KiB was segment-alignment padding (the text grew 2,280 bytes across a 64 KiB boundary). At v1.6.3: 976 KB (`build/kii` = 999,328 bytes, unstripped, DCE off; the compiler reports 1,209 unreachable fns, ~574 KB, eliminable with `CYRIUS_DCE=1`). The +75,240 bytes over v1.6.2 (924,088) are the stdlib's sankoch 2.8.7 bundle, mostly its new Brotli encoder; kii links it as a stdlib leaf and calls only inflate and CRC-32. `--agnos` 1,013,568 bytes; `--aarch64` 1,171,128 bytes. At v1.6.1 it was 923,976 bytes, the growth from the cmdit 1.4.0 and chitra 1.1.3 bundles. At v1.6.0 it was **877 KB** (898,344 bytes), up from 683,584 bytes for v1.5.2 rebuilt from its own tree at 6.6.2: the growth is the 6.7.9 toolchain and the larger darshana 1.3.0 bundle — kii's own source got smaller (the local BG composer and the hand-rolled UTF-8 walk are gone). `--agnos` 908,376 bytes; `--aarch64` 1,086,544 bytes. Earlier: **668 KB** at v1.5.1 (`build/kii` = 683,576 bytes, unstripped, DCE off). The `~145 KB` this section reported was measured at v0.8.0 and never refreshed across the cmdit fold, the chitra re-fold, or the JPEG/BMP/GIF folds — it was low by **4.6×**. Most of the size is the vendored `chitra` bundle carrying four decoders plus `sankoch`; the compiler reports ~942 unreachable fns (~390 KB) eliminable with `CYRIUS_DCE=1`. kii gained no module at v1.5.0 or v1.5.1. (Corrected at the v1.5.1 P-1 sweep.)
 
 ## Tests + bench
 
@@ -433,9 +452,9 @@ not a plan, and keeping a second ordered list here is how the two drift apart. T
 roadmap is forward-facing only: anything shipped is deleted from it rather than checked
 off, so if an item appears there it is genuinely still open.
 
-In brief, what is open as of v2.0.0:
+In brief, what is open as of v2.0.1:
 
-- **Pinned** — 2.0.1 release engineering; 2.1.0 the half-block lane reuses its colour state; 2.2.0 the ASCII lane on light backgrounds and without colour; 2.3.0 a Braille lane; 2.4.0 iTerm2, 2.5.0 Kitty and 2.6.0 Sixel (Tier 3).
+- **Pinned** — 2.1.0 the half-block lane reuses its colour state; 2.2.0 the ASCII lane on light backgrounds and without colour; 2.3.0 a Braille lane; 2.4.0 iTerm2, 2.5.0 Kitty and 2.6.0 Sixel (Tier 3).
 - **Gated on upstream** — progressive and SOF1 JPEG (chitra), the terminal's cell aspect (darshana's winsize pixel fields), file-read peak memory (the cyrius stdlib issue of 2026-10-28).
-- **Candidates** — linear-light averaging, perceptual colour distance, sextants / octants, quantization-aware blocks shapes, `--height`, `-` for stdin, a man page.
+- **Candidates** — linear-light averaging, perceptual colour distance, sextants / octants, quantization-aware blocks shapes, `--height`, `-` for stdin, a man page, the directory diagnostic on agnos.
 - **Not scheduled** — cross-terminal verification (the blocks lane needs it most), the zugot recipe, the first BBS/MUD consumer.

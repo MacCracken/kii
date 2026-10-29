@@ -5,13 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # release.yml gates on this workflow via `uses: ./.github/workflows/ci.yml`.
-  # GitHub Actions requires the called workflow to opt in via `workflow_call:`
-  # — without this, the v0.2.0 release tag would trip on the CI-gate step.
-  # Wired in at v0.2.0 close-out (see CHANGELOG). A more thorough CI/release
-  # pass (fuzz step, --version smoke, aarch64 cross, CHANGELOG-extracted
-  # release notes) is captured in the v0.2.0 release notes and pending a
-  # dedicated cycle.
+  # release.yml gates on this whole workflow (`uses: ./.github/workflows/ci.yml`),
+  # which GitHub allows only for a workflow that opts in with `workflow_call:`.
   workflow_call:
 
 concurrency:
@@ -36,9 +31,16 @@ jobs:
         # to the project's OWN ./lib. 6.5.25 fixed that, so from the v1.5.0 pin
         # (6.5.35) onward `cyrius deps` hard-errors under the flat layout with
         # "pins version X but it is not installed at ~/.cyrius/versions/X/lib".
+        #
+        # 2.0.1: the pin is validated before it is used. A reformatted or lost
+        # pin line makes the grep print nothing, and the installer reads an
+        # empty CYRIUS_VERSION as "the latest release": CI would pass on a
+        # toolchain nobody pinned.
         run: |
           set -e
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
+          printf '%s' "$CYRIUS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "could not read a semver pin from cyrius.cyml [package].cyrius (got '$CYRIUS_VERSION')"; exit 1; }
           echo "Installing Cyrius $CYRIUS_VERSION"
           curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
@@ -48,41 +50,107 @@ jobs:
         run: cyrius deps
 
       - name: Build
-        # Binary name is `kii` per cyrius.cyml [build].output, NOT the
-        # GitHub repo name (`cyrius-kii`). The cyrius-init template
-        # used ${{ github.event.repository.name }} as a default; kii's
-        # repo and binary names diverge, so hardcode the binary.
+        # Binary name is `kii` per cyrius.cyml [build].output. Every build in
+        # this workflow goes through scripts/build-strict.sh, which fails on a
+        # compiler warning (cyrius exits 0 on one; see the script for the
+        # warning that is a broken binary).
         run: |
           mkdir -p build
-          cyrius build src/main.cyr build/kii
+          scripts/build-strict.sh src/main.cyr build/kii
 
       - name: Version drift check
-        # The print_version literal in src/main.cyr is hand-edited at
-        # each milestone close. This step catches the class of drift
-        # where VERSION bumps but the literal doesn't (or vice versa)
-        # — locally hit once during the M1 close-out cycle. Compares
-        # the binary's `--version` first line against the VERSION
-        # file. Auto-generated literals are a v0.3.x follow-up
-        # (sibling pattern: anuenue's scripts/version-bump.sh).
+        # The print_version literal in src/main.cyr is hand-edited at each
+        # release; this catches VERSION and the literal disagreeing. 2.0.1: the
+        # CHANGELOG must also have notes for VERSION, which release.yml
+        # publishes (scripts/release-notes.sh).
         run: |
-          EXPECTED="kii $(cat VERSION | tr -d '[:space:]')"
-          ACTUAL=$(./build/kii --version | head -1)
+          EXPECTED="kii $(tr -d '[:space:]' < VERSION)"
+          ACTUAL=$(./build/kii --version | sed -n 1p)
           test "$ACTUAL" = "$EXPECTED" || { echo "version drift: binary says '$ACTUAL', VERSION says '$EXPECTED'"; exit 1; }
+          scripts/release-notes.sh "$(tr -d '[:space:]' < VERSION)" > /dev/null
 
       - name: Test
-        # v5.6.28: bare `cyrius test` picks up the [build].test entry
-        # AND auto-discovers tests/*.tcyr — avoids the previous
-        # `cyrius test src/test.cyr` form that hard-failed when the
-        # stub didn't exist (Issue 1) and also wouldn't ever exercise
-        # tests/${proj}.tcyr.
+        # Bare `cyrius test` picks up the [build].test entry and auto-discovers
+        # tests/*.tcyr.
         run: cyrius test
 
-      - name: Fuzz (arg-parser crash-safety)
-        # tests/kii.fcyr wires a deterministic LCG-driven loop over
-        # kii's flag set. 10k iters runs in ~0.04 s — basically free
-        # in CI. M7 audit cycle raises iter count to 10⁶ per the
-        # v1.0 acceptance criterion. PNG-decoder fuzz lands as a
-        # separate harness at M2.
+      - name: Fuzz
+        # tests/kii.fcyr: fourteen deterministic LCG-driven surfaces, the
+        # parsers' crash-safety and the render paths' differentials
+        # (8,371,000 iterations, about two minutes).
         run: |
-          cyrius build tests/kii.fcyr build/kii-fuzz
+          scripts/build-strict.sh tests/kii.fcyr build/kii-fuzz
           ./build/kii-fuzz
+
+      - name: Bench build (compiled, not run)
+        # Timings depend on the runner, so CI does not run the benches.
+        # Compiling them catches a bench that no longer builds (2.0.1).
+        run: scripts/build-strict.sh tests/kii.bcyr build/kii-bench
+
+      - name: DCE build agrees with the plain build
+        # release.yml ships x86_64 Linux built with CYRIUS_DCE=1 (dead code
+        # eliminated: 1,048,976 → 463,248 bytes at 2.0.1). The DCE binary must
+        # answer every case the way the tested build does: the fixtures in all
+        # three lanes, and the CLI's own paths.
+        run: |
+          CYRIUS_DCE=1 scripts/build-strict.sh src/main.cyr build/kii-dce
+          scripts/check-builds-agree.sh build/kii build/kii-dce
+
+      - name: agnos build
+        # --agnos is the stock x86_64 backend plus the CYRIUS_TARGET_AGNOS
+        # define, so it needs no extra compiler. Built here, not run: an agnos
+        # binary runs on Linux only under mirshi, which the release checklist
+        # runs by hand (CONTRIBUTING.md § Releases).
+        run: CYRIUS_DCE=1 scripts/build-strict.sh --agnos src/main.cyr build/kii-agnos
+
+  aarch64:
+    name: aarch64 (qemu-user)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install qemu-user
+        # `cyrius test --aarch64` runs each test binary under
+        # /usr/bin/qemu-aarch64.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+
+      - name: Install Cyrius toolchain
+        # As in build-and-test. The installer also lays down cycc_aarch64, the
+        # cross compiler `--aarch64` uses.
+        run: |
+          set -e
+          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
+          printf '%s' "$CYRIUS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "could not read a semver pin from cyrius.cyml [package].cyrius (got '$CYRIUS_VERSION')"; exit 1; }
+          echo "Installing Cyrius $CYRIUS_VERSION"
+          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve dependencies
+        run: cyrius deps
+
+      - name: Build
+        # The x86_64 build is the reference for the frame check below.
+        run: |
+          mkdir -p build
+          scripts/build-strict.sh --aarch64 src/main.cyr build/kii-aarch64
+          scripts/build-strict.sh src/main.cyr build/kii
+
+      - name: Version check
+        run: |
+          EXPECTED="kii $(tr -d '[:space:]' < VERSION)"
+          ACTUAL=$(qemu-aarch64 build/kii-aarch64 --version | sed -n 1p)
+          test "$ACTUAL" = "$EXPECTED" || { echo "version drift: aarch64 binary says '$ACTUAL', VERSION says '$EXPECTED'"; exit 1; }
+
+      - name: Test
+        # Every suite, cross-built and run under qemu-user. Until 2.0.1 this
+        # was a step of each release cut, run by hand.
+        run: cyrius test --aarch64
+
+      - name: Frames agree with x86_64
+        # The same cases as the DCE check, the aarch64 binary under qemu: the
+        # frames do not depend on the architecture.
+        run: scripts/check-builds-agree.sh build/kii build/kii-aarch64 qemu-aarch64

@@ -4,57 +4,88 @@ on:
   push:
     tags: ['[0-9]*']
 
+# Read by default; only the publishing job gets write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   ci:
     name: CI Gate
+    # The whole of ci.yml must pass on the tag: build, tests, fuzz, the bench
+    # build, the DCE agreement check, the agnos build and the aarch64 job.
     uses: ./.github/workflows/ci.yml
 
   release:
     name: Build & Release
     needs: [ci]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify version
         run: |
-          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
           TAG_VERSION="${GITHUB_REF_NAME}"
+          echo "$TAG_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag ($TAG_VERSION) is not x.y.z"; exit 1; }
           test "$FILE_VERSION" = "$TAG_VERSION" || { echo "VERSION ($FILE_VERSION) != tag ($TAG_VERSION)"; exit 1; }
 
       - name: Install Cyrius toolchain
-        # The cyrius.cyml `[package].cyrius` pin stays the single source of
-        # truth — no version is hardcoded in this YAML. Use the upstream
-        # installer so the versioned ~/.cyrius/versions/<ver>/ layout matches
-        # how cyrius resolves the pin. The previous hand-rolled flat copy into
-        # ~/.cyrius/{bin,lib} left the pinned version unresolvable: it only
-        # worked because a pre-6.5.25 bug in _dep_find_stdlib_dir() treated any
-        # tree containing src/main.cyr as the cyrius repo and silently fell back
-        # to the project's OWN ./lib. 6.5.25 fixed that, so from the v1.5.0 pin
-        # (6.5.35) onward `cyrius deps` hard-errors under the flat layout with
-        # "pins version X but it is not installed at ~/.cyrius/versions/X/lib".
+        # As in ci.yml: the cyrius.cyml pin, validated, through the upstream
+        # installer (which also lays down cycc_aarch64).
         run: |
           set -e
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
+          printf '%s' "$CYRIUS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "could not read a semver pin from cyrius.cyml [package].cyrius (got '$CYRIUS_VERSION')"; exit 1; }
           echo "Installing Cyrius $CYRIUS_VERSION"
           curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
-      - name: Build
-        # Binary name is `kii` per cyrius.cyml [build].output. See
-        # ci.yml Build step for the rationale (repo name and binary
-        # name diverge).
+      - name: Build all targets
+        # Three binaries since 2.0.1 (before, only x86_64 Linux, as `kii`):
+        # - x86_64 Linux and agnos with CYRIUS_DCE=1, dead code eliminated
+        #   (about 56 % of each). 2.0.1 measured both against the plain build:
+        #   every case of a 472-image corpus byte-identical, the agnos pair run
+        #   under mirshi. ci.yml re-checks the x86_64 pair on every push, and
+        #   the next step checks the binary being shipped.
+        # - aarch64 plain: cyrius cannot compact an aarch64 ELF yet, so DCE
+        #   would only NOP-fill the dead code, at the same size.
+        # The plain x86_64 build is the reference for the check, not shipped.
         run: |
           cyrius deps
           mkdir -p build
-          cyrius build src/main.cyr build/kii
+          scripts/build-strict.sh src/main.cyr build/kii
+          CYRIUS_DCE=1 scripts/build-strict.sh src/main.cyr build/kii-dce
+          CYRIUS_DCE=1 scripts/build-strict.sh --agnos src/main.cyr build/kii-agnos
+          scripts/build-strict.sh --aarch64 src/main.cyr build/kii-aarch64
+
+      - name: Check the shipped x86_64 binary
+        run: |
+          test "$(./build/kii-dce --version | sed -n 1p)" = "kii ${GITHUB_REF_NAME}"
+          scripts/check-builds-agree.sh build/kii build/kii-dce
+
+      - name: Package
+        # Named per version and target, with SHA-256 checksums.
+        run: |
+          V="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          cp build/kii-dce     "dist/kii-$V-x86_64-linux"
+          cp build/kii-aarch64 "dist/kii-$V-aarch64-linux"
+          cp build/kii-agnos   "dist/kii-$V-x86_64-agnos"
+          (cd dist && sha256sum kii-* > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Release notes
+        # The version's CHANGELOG section, its links pointed into the tagged
+        # tree (scripts/release-notes.sh). Until 2.0.1 the notes were GitHub's
+        # generated list of commits.
+        run: scripts/release-notes.sh "${GITHUB_REF_NAME}" > "$RUNNER_TEMP/notes.md"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          files: build/*
+          name: kii ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/notes.md
+          files: dist/*

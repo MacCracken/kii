@@ -20,7 +20,7 @@ The roadmap ([`docs/development/roadmap.md`](docs/development/roadmap.md)) pins 
 
 ## Adding a new color-tier mode
 
-Tier-2 has shipped: 256-color and truecolor at 1.8.0 ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)), dithering at 1.9.0 ([ADR 0011](docs/adr/0011-dithering.md)). Tier-3 (Sixel, Kitty, iTerm2 image protocols) is open for 2.0. See [`CLAUDE.md` § Color-tier discipline](CLAUDE.md) and [ADR 0003](docs/adr/0003-color-tier-discipline.md) for why the tiers come in this order. A PR for either should target the release the roadmap pins it to.
+Tier-2 has shipped: 256-color and truecolor at 1.8.0 ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)), dithering at 1.9.0 ([ADR 0011](docs/adr/0011-dithering.md)). Tier-3 (iTerm2, Kitty and Sixel image protocols) is pinned to 2.4.0–2.6.0. See [`CLAUDE.md` § Color-tier discipline](CLAUDE.md) and [ADR 0003](docs/adr/0003-color-tier-discipline.md) for why the tiers come in this order. A PR for either should target the release the roadmap pins it to.
 
 ## Adding a new image format
 
@@ -48,7 +48,7 @@ Every behavior change needs at least:
 
 - The ASCII lane's glyph table, `src/ascii_shape.cyr`, is generated: change `scripts/gen-shape-table.sh`, run `./scripts/gen-shape-table.sh > src/ascii_shape.cyr`, and confirm with `./scripts/gen-shape-table.sh --check`. It needs ImageMagick 7 (`magick`) and Liberation Mono, so CI does not run it; `tests/ascii.tcyr` pins the properties the matcher relies on instead.
 
-PRs without test coverage will be asked to add it. Current state: **964 unit assertions + 8,371,000 fuzz iters/run + 13 benches** as of v2.0.0.
+PRs without test coverage will be asked to add it. Current state: **964 unit assertions + 8,371,000 fuzz iters/run + 13 benches** as of v2.0.1.
 
 ## Commits and PRs
 
@@ -56,6 +56,36 @@ PRs without test coverage will be asked to add it. Current state: **964 unit ass
 - One concern per commit (mirror of CLAUDE.md "ONE change at a time")
 - PRs name the roadmap release they target, if any
 - The maintainer handles all releases and tagging — do not include `VERSION` bumps in feature PRs unless explicitly asked
+
+## Releases
+
+The maintainer cuts releases. Pushing a tag `X.Y.Z` that matches `VERSION` runs
+[`release.yml`](.github/workflows/release.yml): the whole of CI as a gate, then three binaries
+(`kii-X.Y.Z-x86_64-linux`, `-aarch64-linux`, `-x86_64-agnos`) with `SHA256SUMS`, and the
+version's CHANGELOG section as the notes.
+
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs on every push and pull request:
+- the build, the version check (the binary, `VERSION` and a CHANGELOG section must agree), the
+  suites, the fuzz harness, and the benches compiled but not run;
+- the DCE build, checked against the plain build with `scripts/check-builds-agree.sh`;
+- the agnos build;
+- an aarch64 job: the suites under qemu-user, and the aarch64 binary checked against x86_64.
+
+Every build goes through `scripts/build-strict.sh`, which fails on a compiler warning.
+
+Before a cut, the maintainer also runs what CI cannot:
+- `./scripts/gen-shape-table.sh --check` (needs ImageMagick 7 and Liberation Mono);
+- the agnos build under [mirshi](https://github.com/MacCracken/mirshi), which runs an agnos
+  binary on Linux:
+
+  ```sh
+  CYRIUS_DCE=1 cyrius build --agnos src/main.cyr build/kii-agnos
+  scripts/check-builds-agree.sh build/kii build/kii-agnos mirshi --root /
+  ```
+
+  One case differs today, a directory argument (roadmap § Candidates);
+- for a release that claims frames are unchanged, the same comparison over a large image
+  corpus against the previous release's binary, in every lane.
 
 ## Code of Conduct
 

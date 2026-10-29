@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v2.0.0** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, three render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64.
+**v2.0.1** (2026-10-28). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, three render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64; each release ships a binary for all three (§ Building).
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal (or, on request, text glyphs or the full Block Elements set):
 
@@ -94,6 +94,9 @@ shared substrate, which is the point:
   test image, and smaller frames at 16 colours. Opt-in, because CP437-era console fonts lack
   the quadrants and eighths ([ADR 0012](docs/adr/0012-block-elements-lane.md)). Half-block and
   ASCII frames are byte-identical to 1.11.0.
+- **v2.0.1** — release engineering: CI builds and tests aarch64, releases carry x86_64,
+  aarch64 and agnos binaries (the x86_64 ones dead-code eliminated, 56 % smaller, measured
+  byte-identical), and the release notes are the CHANGELOG's. No frame changes.
 
 ### Supported input formats
 
@@ -197,6 +200,15 @@ cyrius build src/main.cyr build/kii   # compile
 
 Toolchain pin: the `cyrius = "…"` line in [`cyrius.cyml`](cyrius.cyml) is the source of
 truth, so read it there.
+
+### Release binaries
+
+Each [release](https://github.com/MacCracken/kii/releases) since v2.0.1 carries
+`kii-X.Y.Z-x86_64-linux`, `kii-X.Y.Z-aarch64-linux` and `kii-X.Y.Z-x86_64-agnos`, with
+`SHA256SUMS`. The x86_64 Linux and agnos binaries are built with `CYRIUS_DCE=1` (dead code
+eliminated); CI checks that the DCE build answers like the plain one, and that aarch64
+answers like x86_64 (`scripts/check-builds-agree.sh`). Releases up to v2.0.0 carried one
+x86_64 Linux binary named `kii`.
 
 ### Running the test + bench + fuzz suites
 
