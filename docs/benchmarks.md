@@ -626,3 +626,25 @@ unchanged against 2.3.0 (RAMGON 204.1 → 206.1 ms on the busy host, within its 
 
 **Bytes**, kii's PNG against the file as read, over the corpus: BMP 0.08×, GIF 0.63×, PNG 1.01×,
 JPEG 5.29× (ADR 0014 § Measurements). On the wire base64 adds a third.
+
+## v2.5.0 — the kitty graphics protocol
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`. CPU per run (user + system), fastest of three
+rounds, `--width 80`:
+
+| Image | `--mode iterm` | `--mode kitty` |
+|---|---:|---:|
+| archlinux-logo, 256² | 13.08 ms | 12.93 ms |
+| RAMGON, 1152 × 925 | 837.95 ms | 841.24 ms |
+
+Both send the same PNG, so the encode is the whole cost; the chunking adds nothing measurable.
+
+**The payload options**, over the 456 corpus images kii decodes (encode time summed):
+
+| Payload | Bytes | Encode |
+|---|---:|---:|
+| PNG (`f=100`), as shipped | 26,000,771 | 14.3 s |
+| raw RGBA8 with zlib 6 (`f=32,o=z`) | 32,513,949 | 7.2 s |
+| raw RGBA8 (`f=32`) | 226,080,028 | — |
+
+By format, zlib-raw against the PNG: BMP 0.83×, GIF 0.86×, PNG 1.02×, JPEG 1.31×.

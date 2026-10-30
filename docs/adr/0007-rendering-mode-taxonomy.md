@@ -366,3 +366,12 @@ sends the picture and the terminal draws it. The enum is
   likewise for the other two). `cmdit_seen` tells a given flag from a default.
 
 The four cell lanes are byte-identical to 2.3.0.
+
+## Amendment — v2.5.0 (a second protocol)
+
+This ADR remains **Accepted**. `--mode` gains `kitty`
+([ADR 0014](0014-tier-3-image-protocols.md) § v2.5.0):
+`halfblock | ascii | blocks | braille | iterm | kitty`. An unknown value now reads
+`kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty`. Like `iterm`, it
+refuses `--color`, `--dither` and `--invert` when they are given, with lines that name
+`--mode kitty`. Every other mode is byte-identical to 2.4.0.

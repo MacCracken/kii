@@ -1,0 +1,146 @@
+# tests/kitty.tcyr — Tier 3's second protocol (v2.5.0, ADR 0014 § v2.5.0): the
+# first escape's keys, the chunking (4,096 characters, m=1 until the last), the
+# reassembled payload, and the guards.
+
+include "src/kitty.cyr"
+include "lib/assert.cyr"
+
+fn _bytes_are(buf, n, expect): i64 {
+    if (n != strlen(expect)) { return 0; }
+    return memeq(buf, expect, n);
+}
+
+# The b64 character's value, or -1.
+fn _v(ch): i64 {
+    if (ch >= 65 && ch <= 90) { return ch - 65; }
+    if (ch >= 97 && ch <= 122) { return ch - 71; }
+    if (ch >= 48 && ch <= 57) { return ch + 4; }
+    if (ch == 43) { return 62; }
+    if (ch == 47) { return 63; }
+    return 0 - 1;
+}
+
+# Walk the escapes in buf[0..n): count them, check each next head is "m=1" or
+# (the last) "m=0", every chunk but the last 4,096 characters, and decode the
+# base64 into `out`. Returns the decoded length, or -1 on any break in form.
+# `first_len` receives the first head's length (to the ';').
+fn _walk(buf, n, out, first_len, count_out): i64 {
+    var i = 0;
+    var o = 0;
+    var k = 0;
+    var acc = 0;
+    var bits = 0;
+    while (i < n) {
+        if (load8(buf + i) != 27 || load8(buf + i + 1) != 95 || load8(buf + i + 2) != 71) { return 0 - 1; }
+        var j = i + 3;
+        while (j < n && load8(buf + j) != 59) { j = j + 1; }
+        if (j >= n) { return 0 - 1; }
+        if (k == 0) { store64(first_len, j + 1 - i); }
+        var e = j + 1;
+        while (e < n && load8(buf + e) != 27) { e = e + 1; }
+        if (e + 1 >= n || load8(buf + e + 1) != 92) { return 0 - 1; }
+        var last = 0;
+        if (e + 2 >= n) { last = 1; }
+        # The m key: the last character before ';' is its digit.
+        var m = load8(buf + j - 1);
+        if (last == 1 && m != 48) { return 0 - 1; }
+        if (last == 0 && m != 49) { return 0 - 1; }
+        if (k > 0 && j - (i + 3) != 3) { return 0 - 1; }   # only "m=N" after the first
+        if (last == 0 && e - (j + 1) != 4096) { return 0 - 1; }
+        var p = j + 1;
+        while (p < e) {
+            var ch = load8(buf + p);
+            if (ch != 61) {
+                var v = _v(ch);
+                if (v < 0) { return 0 - 1; }
+                acc = (acc << 6) | v;
+                bits = bits + 6;
+                if (bits >= 8) {
+                    bits = bits - 8;
+                    store8(out + o, (acc >> bits) & 255);
+                    o = o + 1;
+                }
+            }
+            p = p + 1;
+        }
+        k = k + 1;
+        i = e + 2;
+    }
+    store64(count_out, k);
+    return o;
+}
+
+fn test_head() {
+    test_group("v2.5.0 — the first escape's keys");
+    var h[64];
+    var n = kitty_head(&h, 40, 0, 1);
+    assert_eq(_bytes_are(&h, n, "\x1b_Ga=T,f=100,q=2,c=40,m=1;"), 1, "columns, more to come");
+    n = kitty_head(&h, 19, 1, 0);
+    assert_eq(_bytes_are(&h, n, "\x1b_Ga=T,f=100,q=2,r=19,m=0;"), 1, "rows, a single chunk");
+    return 0;
+}
+
+fn test_chunks() {
+    test_group("v2.5.0 — chunks of 4,096 characters, m=1 until the last");
+    var lens[48];
+    store64(&lens, 1); store64(&lens + 8, 3071); store64(&lens + 16, 3072);
+    store64(&lens + 24, 3073); store64(&lens + 32, 6144); store64(&lens + 40, 20000);
+    var want_k[48];
+    store64(&want_k, 1); store64(&want_k + 8, 1); store64(&want_k + 16, 1);
+    store64(&want_k + 24, 2); store64(&want_k + 32, 2); store64(&want_k + 40, 7);
+    var src = alloc(20000);
+    var t = 0;
+    while (t < 20000) { store8(src + t, (t * 37 + 11) & 255); t = t + 1; }
+    var buf = alloc(8 * (64 + 4096 + 2));
+    var back = alloc(20000);
+    var c = 0;
+    while (c < 6) {
+        var len = load64(&lens + c * 8);
+        var chunks = (len + KITTY_CHUNK_IN - 1) / KITTY_CHUNK_IN;
+        var pos = _kitty_chunks(buf, 0, src, len, 0, chunks, 40, 0);
+        var first = 0;
+        var count = 0;
+        var got = _walk(buf, pos, back, &first, &count);
+        assert_eq(got, len, "the escapes decode to the whole payload");
+        assert_eq(count, load64(&want_k + c * 8), "the chunk count");
+        assert_eq(memeq(back, src, len), 1, "byte for byte");
+        assert_eq(first, 26, "the first head carries the keys (26 bytes to the ;)");
+        c = c + 1;
+    }
+    # Written in two batches, the chunks are the same as in one.
+    var one = alloc(8 * (64 + 4096 + 2));
+    var p1 = _kitty_chunks(one, 0, src, 20000, 0, 7, 40, 0);
+    var p2 = _kitty_chunks(buf, 0, src, 20000, 0, 3, 40, 0);
+    p2 = _kitty_chunks(buf, p2, src, 20000, 3, 4, 40, 0);
+    assert_eq(p1, p2, "in batches: the same length");
+    assert_eq(memeq(one, buf, p1), 1, "in batches: the same bytes");
+    return 0;
+}
+
+fn test_guards() {
+    test_group("v2.5.0 — emit_kitty refuses an image it does not have");
+    var ps[160];
+    var i = 0;
+    while (i < 160) { store64(&ps + i, 0); i = i + 8; }
+    assert_eq(emit_kitty(&ps, 40, 0), 0 - 1, "no decoded pixels: -1");
+    var px[16];
+    store64(&ps + STRUCT_PIXELS_BUF_OFFSET, &px);
+    store64(&ps + STRUCT_WIDTH_OFFSET, 2);
+    store64(&ps + STRUCT_HEIGHT_OFFSET, 2);
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 15);
+    assert_eq(emit_kitty(&ps, 40, 0), 0 - 1, "a pixel buffer short of w x h x 4: -1");
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 16);
+    assert_eq(emit_kitty(&ps, 0, 0), 0 - 1, "no cells: -1");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_head();
+    test_chunks();
+    test_guards();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(SYS_EXIT, exit_code);

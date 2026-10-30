@@ -205,3 +205,86 @@ roadmap's cross-terminal verification.
 - RFC 4648, *The Base16, Base32, and Base64 Data Encodings*, § 4.
 - Linux `drivers/tty/vt/vt.c`: `ESnonstd`, `ESosc`, `handle_ascii`.
 - chafa 1.18.3, `-f iterm`; iTerm2's `imgcat`.
+
+## Amendment — v2.5.0 (the kitty graphics protocol)
+
+This ADR remains **Accepted**. `--mode kitty` is Tier 3's second protocol. § Decision 1, 2, 3, 6
+and 7 apply unchanged: it is chosen by flag only, has no fallback, sends a PNG kii writes, refuses
+the cell settings, and decodes and refuses as every lane does. Two things differ, and one claim
+in § 4 is corrected.
+
+**1. The escapes.** The picture goes as APC escapes, its base64 split in chunks of 4,096
+characters (3,072 bytes), the protocol's limit, then LF:
+
+    ESC _ G a=T,f=100,q=2,c=C,m=1 ; <chunk> ESC \      the first (m=0 when it is the only one)
+    ESC _ G m=1 ; <chunk> ESC \                        each next one
+    ESC _ G m=0 ; <chunk> ESC \                        the last
+
+- **`a=T`** transmits and displays at once, at the cursor. **`t`** stays at its default `d`: the
+  data travels in the escapes, since kii writes no file and no shared memory.
+- **`f=100`** sends the PNG of § 3, byte for byte the iTerm2 lane's.
+- **`q=2`** suppresses every reply. kitty sends none to a command with no image id, and kii sends
+  no id, but a reply would land in the shell's input after kii exits, so `q=2` makes sure.
+- **No `C`**: the cursor moves past the image, and the LF starts the next line.
+
+**2. The payload, measured.** The roadmap left it open between raw RGBA8 (`f=32`), raw with zlib
+(`f=32,o=z`), and the PNG. Over the 456 corpus images kii decodes:
+
+| Payload | Bytes | Encode |
+|---|---:|---:|
+| PNG, adaptive filters, zlib 6 (`f=100`) | 26,000,771 | 14.3 s |
+| raw RGBA8, zlib 6 (`f=32,o=z`) | 32,513,949 (1.25×) | 7.2 s |
+| raw RGBA8 (`f=32`) | 226,080,028 (8.70×) | none |
+
+zlib-raw is a little smaller for BMP and GIF (0.83–0.86×), the same for PNG (1.02×), and 1.31×
+for JPEG. The PNG was taken: it is the smallest overall, it reuses § 3's one encoder, and it
+leaves both protocols sending the same bytes. zlib-raw would halve the encode at a quarter more on
+the wire. Raw would need no encode, but at 8.7× the bytes.
+
+**3. § 4 corrected: one of `c` and `r`, never both.** § 4 said "Kitty (2.5.0) takes it as `c=`
+and `r=`". That would distort the picture: given both, kitty stretches the image to fill exactly
+`c × r` cells. Run in kitty's own parser, a 2 : 1 image given `c=10,r=10` filled 10 × 10 cells.
+Given one, kitty works out the other from its real cell size and keeps the aspect. So kii sends
+the side its geometry is bound by:
+- `c` for `--width N`, or an image the terminal's columns bind;
+- `r` for one its rows bind.
+
+At 10 × 20, 8 × 20 and 9 × 19-pixel cells, RAMGON at `c=80` took 32.1, 25.7 and 30.4 rows, its
+true aspect each time. In a 200 × 20 terminal it went by `r=19`, which drew 47.3 × 19 cells.
+
+**4. Checked with kitty itself.** kitty 0.49.2's Python modules carry its `Screen` and graphics
+manager, the same parser the terminal runs. Run headless through `kitty +runpy`, with no window,
+they read kii's escapes as a kitty window would. Over the 472-image corpus at `--width 40` and
+`120`:
+- **All 942 cases match the half-block lane's exit code and stderr**: 911 frames and 31 refusals.
+- **Every frame has the form above.** Each chunk but the last is exactly 4,096 characters,
+  nothing lies outside the escapes but the LF, and the payload is the iTerm2 lane's PNG byte for
+  byte.
+- **kitty reads every frame as one image**, placed over exactly the columns asked, and writes no
+  reply.
+- **Its decoded pixels equal ImageMagick's decode of kii's PNG** in all 456 frames at
+  `--width 40`. That is two independent PNG decoders agreeing, on pixels § Measurements showed
+  are chitra's.
+
+So this lane, unlike the iTerm2 one, is checked against the terminal it targets, short of the
+screen itself.
+
+**5. What kitty does with the cursor, and the console.** After the image the cursor sits to the
+right of its last row. When the image fills the terminal's width, kitty moves it to the start of
+the next line itself, so kii's LF then leaves one blank line. That is a roadmap candidate. The
+Linux console enters `ESapc` on `ESC _` and ignores every byte until ESC, so it draws nothing.
+
+**Size and time.** The PNG is § 3's, and the escapes add one 7-byte head per 4,096 characters.
+The archlinux logo at `--width 40` is 11,711 bytes, against 11,738 for iTerm2. CPU matches the
+iTerm2 lane within noise: 12.9 against 13.1 ms for the logo, 841 against 838 ms for RAMGON.
+
+**Tests.**
+- `tests/kitty.tcyr`, 31 assertions: the head's keys, the chunking at 1, 3,071, 3,072, 3,073,
+  6,144 and 20,000 bytes read back by an independent walker, the chunks written in batches,
+  and the guards.
+- cli: `--mode kitty` and its refusals.
+- A 19th fuzz surface, 20,000 random payloads in random batches, read back key by key and
+  chunk by chunk to the payload.
+- Of 12 defects planted in the escapes and the CLI, the unit suite catches all 12 and the fuzz
+  surface the 10 in the escapes.
+- Every 2.4.0 lane, iTerm2 included, is byte-identical: 7,080 of 7,080 corpus cases.

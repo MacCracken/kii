@@ -50,6 +50,7 @@ include "src/ascii.cyr"
 include "src/blocks.cyr"
 include "src/braille.cyr"
 include "src/iterm.cyr"
+include "src/kitty.cyr"
 
 # Iteration counts.
 #
@@ -85,6 +86,7 @@ var HB_FUZZ_ITERS         = 200000;    # v2.1.0 — half-block rows decoded back
 var INV_FUZZ_ITERS        = 50000;     # v2.2.0 — --invert against the negative, --color none against the escapes
 var BRL_FUZZ_ITERS        = 30000;     # v2.3.0 — the Braille lane: sampler, ink rules, negative, escapes
 var PNG_OUT_FUZZ_ITERS    = 20000;     # v2.4.0 — the PNG writer through chitra, and base64
+var KITTY_FUZZ_ITERS      = 20000;     # v2.5.0 — kitty escapes: keys, chunks, the payload back
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -1793,6 +1795,77 @@ fn fuzz_png_out_iter(pix): i64 {
     return 0;
 }
 
+# ---- v2.5.0 kitty-protocol fuzz surface ----------------------------
+# Each iteration builds a random payload (1..30,000 bytes) and writes its
+# kitty escapes for a random size (1..1,000 cells, by columns or by rows) in
+# random batches of chunks, then reads them back independently:
+#   - the first escape's head is exactly a=T,f=100,q=2, then c= or r= and the
+#     size, then m=1 (m=0 when it is the only one);
+#   - every later head is m=1, and the last m=0;
+#   - every chunk but the last is 4,096 characters, the last at most that;
+#   - nothing lies between or around the escapes;
+#   - the chunks' base64, joined, decodes to the payload (_fz_b64_decode).
+# Draws use bits 16 and up of _fuzz_rand. It runs after every older surface.
+fn fuzz_kitty_iter(): i64 {
+    var n = 1 + _fz_hb_rand(30000);
+    var cells = 1 + _fz_hb_rand(1000);
+    var by_rows = _fz_hb_rand(2);
+    var src = alloc(n);
+    var chunks = (n + KITTY_CHUNK_IN - 1) / KITTY_CHUNK_IN;
+    var buf = alloc(chunks * (64 + 4096 + 2));
+    var text = alloc(chunks * 4096);
+    var back = alloc(n + 3);
+    if (src == 0 || buf == 0 || text == 0 || back == 0) { return 0 - 1; }
+    var i = 0;
+    while (i < n) { store8(src + i, _fz_hb_rand(256)); i = i + 1; }
+    var pos = 0;
+    var c = 0;
+    while (c < chunks) {
+        var k = 1 + _fz_hb_rand(5);
+        if (k > chunks - c) { k = chunks - c; }
+        pos = _kitty_chunks(buf, pos, src, n, c, k, cells, by_rows);
+        c = c + k;
+    }
+    var bad = 0;
+    # The first head, built here.
+    var want[64];
+    var wp = _iterm_put(&want, 0, "\x1b_Ga=T,f=100,q=2,");
+    if (by_rows == 1) { wp = _iterm_put(&want, wp, "r="); }
+    else { wp = _iterm_put(&want, wp, "c="); }
+    wp = _iterm_num(&want, wp, cells);
+    if (chunks > 1) { wp = _iterm_put(&want, wp, ",m=1;"); }
+    else { wp = _iterm_put(&want, wp, ",m=0;"); }
+    var p = 0;
+    var tn = 0;
+    var e = 0;
+    while (bad == 0 && e < chunks) {
+        var hl = 7;
+        if (e == 0) {
+            hl = wp;
+            if (memeq(buf + p, &want, wp) == 0) { bad = 1; }
+        } else {
+            if (e + 1 < chunks && memeq(buf + p, "\x1b_Gm=1;", 7) == 0) { bad = 1; }
+            if (e + 1 == chunks && memeq(buf + p, "\x1b_Gm=0;", 7) == 0) { bad = 1; }
+        }
+        var q = p + hl;
+        var start = q;
+        while (q < pos && load8(buf + q) != 27) { q = q + 1; }
+        var len = q - start;
+        if (q + 1 >= pos || load8(buf + q + 1) != 92) { bad = 1; }
+        if (e + 1 < chunks && len != 4096) { bad = 1; }
+        if (len > 4096 || len == 0) { bad = 1; }
+        if (bad == 0) { memcpy(text + tn, buf + start, len); tn = tn + len; }
+        p = q + 2;
+        e = e + 1;
+    }
+    if (bad == 0 && p != pos) { bad = 1; }
+    if (bad == 0 && (_fz_b64_decode(text, tn, back) != n || memeq(back, src, n) == 0)) { bad = 1; }
+    alloc_reset();                     # the payload, escapes and text are scratch
+    crc32_table = 0;                   # as the decoder surfaces do after a reset
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -2159,6 +2232,13 @@ fn main(): i64 {
         if (fuzz_png_out_iter(&area_pix) != 0) { pout_bad = pout_bad + 1; }
         pout_iter = pout_iter + 1;
     }
+    # v2.5.0: the kitty escapes.
+    var kt_iter = 0;
+    var kt_bad  = 0;
+    while (kt_iter < KITTY_FUZZ_ITERS) {
+        if (fuzz_kitty_iter() != 0) { kt_bad = kt_bad + 1; }
+        kt_iter = kt_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -2251,11 +2331,16 @@ fn main(): i64 {
     vec_push(args_pout, pout_bad);
     fmt_printf("fuzz: %d iterations passed (PNG writer through chitra, base64 round trip; bad=%d)\n", args_pout);
 
+    var args_kt = vec_new();
+    vec_push(args_kt, kt_iter);
+    vec_push(args_kt, kt_bad);
+    fmt_printf("fuzz: %d iterations passed (kitty escapes: keys, chunks, the payload back; bad=%d)\n", args_kt);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad + pout_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad + pout_bad + kt_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

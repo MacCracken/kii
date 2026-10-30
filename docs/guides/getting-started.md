@@ -68,7 +68,7 @@ Options:
   -w, --width <int>	output width in columns (0 = match terminal)
   -c, --color <8|16|256|tc|none>	colour tier (none: ASCII or Braille glyphs only) (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
-  -m, --mode <halfblock|ascii|blocks|braille|iterm>	render mode (default: halfblock)
+  -m, --mode <halfblock|ascii|blocks|braille|iterm|kitty>	render mode (default: halfblock)
   -d, --dither <none|ordered|fs>	dithering (default: none)
   -i, --invert	ASCII and Braille lanes: dark is ink, for light backgrounds
 
@@ -83,6 +83,7 @@ Examples:
   kii --mode blocks image.png                # every Block Element: 8x8 shapes, 2 colours a cell
   kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour
   kii --mode iterm photo.jpg                 # the picture itself, as an iTerm2 / WezTerm image
+  kii --mode kitty photo.jpg                 # the picture itself, by the kitty graphics protocol
   kii --mode ascii --invert image.png        # dark is ink, for a light terminal
   kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
@@ -121,7 +122,7 @@ Examples:
   kii does not read `COLORTERM`, `TERM` or `NO_COLOR`: the tier is what
   you pass. Within a row, an escape is written only when the colour
   changes, so a tier-16 frame is far smaller than it was before v1.8.0.
-- **`--mode halfblock|ascii|blocks|braille|iterm`** (`-m`) — The render lane, or (`iterm`) an image protocol.
+- **`--mode halfblock|ascii|blocks|braille|iterm|kitty`** (`-m`) — The render lane, or (`iterm`, `kitty`) an image protocol.
   - `halfblock` (the default) draws every cell in two colours, one per
     half. Since v2.1.0 a cell is `▀` or `▄` (the same two colours either
     way round), or a space or `█` when both halves are one colour,
@@ -163,6 +164,16 @@ Examples:
     console included, draws nothing, and kii does not fall back: run a
     cell lane instead. Inside tmux the sequence is dropped unless tmux
     passes it through, which kii does not arrange.
+  - `kitty` (since v2.5.0) sends the same PNG by the kitty graphics
+    protocol: APC escapes (`ESC _ G … ESC \`) carrying it in chunks of
+    4,096 characters. kitty and other terminals that read the protocol
+    draw it. The image is sized by its columns (by its rows when the
+    terminal's rows bound the frame), and the terminal works out the
+    other side from its real cell size, so the aspect is always right.
+    Like `iterm` it takes no `--color`, `--dither` or `--invert`, and a
+    terminal without the protocol draws nothing. When the image fills the
+    terminal's width, kitty moves the cursor to the next line itself, so a
+    blank line follows the image.
 - **`--dither none|ordered|fs`** (`-d`) — Dithering, since v1.9.0
   ([ADR 0011](../adr/0011-dithering.md)). The default `none` maps each
   pixel to its nearest colour, so a gradient becomes flat bands.
@@ -297,8 +308,8 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: --color none applies to --mode ascii or braille only` | `--color none` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --invert applies to --mode ascii or braille only` | `--invert` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
-| `kii: --mode must be halfblock, ascii, blocks, braille or iterm` | Any other `--mode` value |
-| `kii: --color does not apply to --mode iterm (the terminal draws the image)` | `--color`, `--dither` or `--invert` (each has its line) given with `--mode iterm`, even at its default (since v2.4.0) |
+| `kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty` | Any other `--mode` value |
+| `kii: --color does not apply to --mode iterm (the terminal draws the image)` | `--color`, `--dither` or `--invert` (each has its line) given with `--mode iterm`, even at its default (since v2.4.0; the same lines name `--mode kitty` since v2.5.0) |
 | `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |
 | `kii: missing image path` | No path given |
 | `kii: too many arguments (expected one image path)` | More than one path |

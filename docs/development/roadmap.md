@@ -3,8 +3,8 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.4.0**; 2.5.0 and 2.6.0
-> are pinned below.
+> below has shipped, it should not be here. Current release **v2.5.0**; 2.6.0 is pinned
+> below.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
@@ -22,14 +22,6 @@ Two rules hold for every 2.x release:
 - **kii stays environment-blind.** No lane, tier or protocol is picked from `TERM`,
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
-
-## 2.5.0 — Tier 3: the Kitty graphics protocol (`--mode kitty`)
-
-APC `_G` transmissions of the decoded image, base64 in 4096-byte chunks, placed over the
-frame's cells (`c=`, `r=`), under [ADR 0014](../adr/0014-tier-3-image-protocols.md)'s rules.
-- The payload is 2.5.0's to measure. Raw RGBA8 (`f=32`) needs no encoder but is the largest;
-  `o=z` compresses it with sankoch's zlib; and the PNG writer 2.4.0 added gives `f=100`.
-- As in the iTerm2 lane, the terminal sees only pixels kii decoded, with their transparency.
 
 ## 2.6.0 — Tier 3: Sixel (`--mode sixel`)
 
@@ -105,8 +97,13 @@ others): pixels as six-row bands in up to 256 registers.
   `MultipartFile` form works in its tmux integration, and a DCS-wrapped passthrough works where
   tmux's `allow-passthrough` is on. kii sends the single `File=` form and does not know when it
   is inside tmux, so either would be a flag (ADR 0014).
-- **The image protocols at the cell box's pixel size.** `--mode iterm` sends the decoded image
-  at its own resolution, and the terminal scales it; a 1-megapixel image costs about 0.65 s to
+- **The kitty lane's blank line at full width.** When the image fills the terminal's width,
+  kitty moves the cursor to the next line itself, and the LF kii writes after the image then
+  leaves a blank line. kii does not know the terminal's width under `--width N`; in fit mode it
+  does, so it could leave the LF out there. It was seen with kitty's own parser (ADR 0014
+  § v2.5.0); other terminals that read the protocol may move the cursor differently.
+- **The image protocols at the cell box's pixel size.** `--mode iterm` and `--mode kitty` send the
+  decoded image at its own resolution, and the terminal scales it; a 1-megapixel image costs about 0.65 s to
   write. With the cell's pixel size (§ Gated on upstream, darshana) kii could send no more pixels
   than the box shows.
 - **The Braille lane's level by hand** (`--threshold N` or similar). The lane inks dots at one

@@ -1,0 +1,9 @@
+Frame: 11,711 bytes, three APC escapes and a newline. SHA-256 of the frame begins
+6f9c17e84e9722a3. ESC shown as ^[:
+
+  ^[_Ga=T,f=100,q=2,c=40,m=1;<4,096 base64 characters>^[\
+  ^[_Gm=1;<4,096 base64 characters>^[\
+  ^[_Gm=0;<3,472 base64 characters>^[\
+
+then LF. Joined, the base64 decodes to the same 8,746-byte PNG example 06 sends:
+256 x 256, 8-bit RGBA.

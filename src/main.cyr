@@ -4,7 +4,7 @@
 #
 # Status: SHIPPED at v1.6.x — four input formats (PNG, baseline JPEG, BMP,
 # GIF first-frame) through the chitra substrate, four render lanes and,
-# since v2.4.0, the first image protocol (--mode iterm)
+# since v2.4.0 and v2.5.0, the image protocols (--mode iterm, --mode kitty)
 # (half-block default, --mode ascii shape-vector, since v2.0.0
 # --mode blocks, every Block Element, and since v2.3.0 --mode braille,
 # 2 x 4 dots a cell), terminal-fit geometry.
@@ -33,6 +33,7 @@ include "src/ascii.cyr"
 include "src/blocks.cyr"
 include "src/braille.cyr"
 include "src/iterm.cyr"
+include "src/kitty.cyr"
 
 # Write a null-terminated string to fd 2 (stderr). Usage / help
 # text rides this so the happy-path stdout pipe stays pure once
@@ -77,13 +78,14 @@ fn _eprint_path_msg(path, msg): i64 {
 # nothing, and nothing for none, so the default line is unchanged). v2.2.0:
 # --color none reads "→ no color" (no dither either: nothing is quantized),
 # and --invert adds ", inverted" at any tier. v2.4.0: --mode iterm reads
-# "→ iTerm2 inline image (N-byte PNG)". M5 routes this
+# "→ iTerm2 inline image (N-byte PNG)", and v2.5.0's --mode kitty
+# "→ kitty graphics (N-byte PNG)". M5 routes this
 # to fd 2 since the ANSI frame now owns stdout (pipe-purity for
 # `kii img.png > frame.ansi`). P(-1) (v1.6.4): the tier was the literal
 # "16" until now, so `--color 8 --verbose` reported a 16-color render.
 # Each number buffer holds 24 bytes: fmt_int_buf writes up to 21 for an
 # i64 (dimensions are ≤ 65535 today, but the buffer should not depend on it).
-fn _eprint_quant_summary(path, pstruct, iterm_lane): i64 {
+fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane): i64 {
     _eprint_path_safe(path);
     _eprint(": ");
     var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
@@ -104,6 +106,13 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane): i64 {
         _eprint(") → iTerm2 inline image (");
         var nbuf[24]; var nlen = fmt_int_buf(_iterm_png_len, &nbuf);
         sys_write(2, &nbuf, nlen);
+        _eprint("-byte PNG)\n");
+        return 0;
+    }
+    if (kitty_lane == 1) {
+        _eprint(") → kitty graphics (");
+        var kbuf[24]; var klen = fmt_int_buf(_kitty_png_len, &kbuf);
+        sys_write(2, &kbuf, klen);
         _eprint("-byte PNG)\n");
         return 0;
     }
@@ -128,7 +137,7 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 2.4.0");
+    println("kii 2.5.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -147,6 +156,7 @@ fn print_usage(fs): i64 {
     _eprint("  kii --mode blocks image.png                # every Block Element: 8x8 shapes, 2 colours a cell\n");
     _eprint("  kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour\n");
     _eprint("  kii --mode iterm photo.jpg                 # the picture itself, as an iTerm2 / WezTerm image\n");
+    _eprint("  kii --mode kitty photo.jpg                 # the picture itself, by the kitty graphics protocol\n");
     _eprint("  kii --mode ascii --invert image.png        # dark is ink, for a light terminal\n");
     _eprint("  kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)\n");
     _eprint("  kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)\n");
@@ -216,6 +226,8 @@ fn main(): i64 {
     if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_BRAILLE) { braille_lane = 1; }
     var iterm_lane = 0;
     if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_ITERM) { iterm_lane = 1; }
+    var kitty_lane = 0;
+    if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_KITTY) { kitty_lane = 1; }
     # An image protocol takes none of the cell lanes' settings (v2.4.0).
     var pconflict = kii_protocol_conflict_line(cmdit_get_enum(fs, KII_F_MODE), cmdit_seen(fs, KII_F_COLOR),
         cmdit_seen(fs, KII_F_DITHER), downscale_invert());
@@ -289,6 +301,9 @@ fn main(): i64 {
     var src_h = load64(&pstruct + STRUCT_HEIGHT_OFFSET);
     var target_w = 0;
     var target_src_rows = 0;
+    # 1 when the terminal's rows bound the frame rather than its columns (only
+    # without --width): the kitty lane then sizes the image by rows (v2.5.0).
+    var rows_bound = 0;
     if (width_flag > 0) {
         if (_kii_compute_target_geometry(src_w, src_h, width_flag,
             &target_w, &target_src_rows) != 0) {
@@ -324,6 +339,9 @@ fn main(): i64 {
             _eprint_path_msg(path, "could not compute output geometry");
             return KII_EXIT_RUN;
         }
+        var fit_cap = fit_cols;
+        if (fit_cap <= 0) { fit_cap = EMIT_DEFAULT_COLS; }
+        if (target_w < fit_cap) { rows_bound = 1; }
     }
     # Frame-size cap (P(-1), v1.6.4). `--width N` derives the row count from
     # the image's aspect with no row limit, so a narrow image multiplies an
@@ -355,6 +373,25 @@ fn main(): i64 {
     #   iterm (v2.4.0, ADR 0014) — the same cell box, sent as one OSC 1337
     #     sequence: a PNG of the decoded pixels, which the terminal scales
     #     into the box without distorting it.
+    #   kitty (v2.5.0) — the same PNG as APC escapes in 4,096-character
+    #     chunks, sized by the side the geometry is bound by (c= or r=), so the
+    #     terminal keeps the aspect with its own cell size.
+    if (kitty_lane == 1) {
+        var kt_cells = target_w;
+        if (rows_bound == 1) {
+            kt_cells = target_src_rows / 2;
+            if (kt_cells < 1) { kt_cells = 1; }
+        }
+        var krc = emit_kitty(&pstruct, kt_cells, rows_bound);
+        if (krc == 0 - 2) {
+            _eprint_path_msg(path, "failed to write frame to stdout");
+            return KII_EXIT_RUN;
+        }
+        if (krc != 0) {
+            _eprint_path_msg(path, "kitty image failed (out of memory)");
+            return KII_EXIT_RUN;
+        }
+    }
     if (iterm_lane == 1) {
         var it_rows = target_src_rows / 2;
         if (it_rows < 1) { it_rows = 1; }
@@ -419,7 +456,7 @@ fn main(): i64 {
             return KII_EXIT_RUN;
         }
     }
-    if (ascii_lane == 0 && blocks_lane == 0 && braille_lane == 0 && iterm_lane == 0) {
+    if (ascii_lane == 0 && blocks_lane == 0 && braille_lane == 0 && iterm_lane == 0 && kitty_lane == 0) {
         var drc = downscale_to_rgb(&pstruct, target_w, target_src_rows);
         if (drc != 0) {
             _eprint_path_msg(path, "downscale failed (out of memory)");
@@ -446,7 +483,7 @@ fn main(): i64 {
     # see the dimensions/format line on the next stderr-routed line.
     # Pure-pipe consumers (`kii img.png | feh -`) don't pay for it.
     if (cmdit_get_bool(fs, KII_F_VERBOSE) == 1) {
-        _eprint_quant_summary(path, &pstruct, iterm_lane);
+        _eprint_quant_summary(path, &pstruct, iterm_lane, kitty_lane);
     }
     # "Did the stream end the way its format says it should?" chitra 0.7.0
     # generalized seen_iend from the literal PNG IEND to that question, per

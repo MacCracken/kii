@@ -1,0 +1,118 @@
+# kitty.cyr — Tier 3's second protocol: the kitty graphics protocol
+# (`--mode kitty`, v2.5.0, ADR 0014 § v2.5.0).
+#
+# The picture goes as APC escapes, its base64 split in chunks of 4,096
+# characters (3,072 bytes), the most the protocol takes:
+#
+#     ESC _ G a=T,f=100,q=2,c=C,m=1 ; <chunk> ESC \       (the first)
+#     ESC _ G m=1 ; <chunk> ESC \                         (each next one)
+#     ESC _ G m=0 ; <chunk> ESC \                         (the last)
+#     LF
+#
+#   - a=T transmits and displays at once, at the cursor. t is left at its
+#     default, d: the data is in the escapes (kii writes no file and no shared
+#     memory).
+#   - f=100: the payload is the PNG the iTerm2 lane sends, byte for byte
+#     (png.cyr, chitra's decoded pixels). zlib of the raw RGBA (f=32,o=z) was
+#     measured: half the encode time, a quarter more bytes over the corpus.
+#   - q=2 suppresses every reply. kitty sends none to a command with no image
+#     id (i), and kii sends none, but a reply would land in the shell's input
+#     after kii exits, so q=2 makes sure.
+#   - One of c (columns) or r (rows), never both: given both, kitty stretches
+#     the image to fill c x r cells, and kii's rows assume 2:1 cells. Given one,
+#     kitty sizes the other from the terminal's real cell size, keeping the
+#     aspect. kii sends the side its geometry is bound by: c for --width N or
+#     an image the columns bind, r for one the terminal's rows bind.
+#   - No C: the cursor moves to the right of the image's last row, and the LF
+#     after it starts the next line.
+# Multi-source: the kitty graphics protocol specification, chafa's
+# `-f kitty` output, and kitty's own parser, run headless on kii's output
+# (ADR 0014 § v2.5.0).
+
+include "src/image.cyr"
+include "src/emit.cyr"        # _kii_write_all
+include "src/png.cyr"
+include "src/iterm.cyr"       # kii_b64_encode, _iterm_put, _iterm_num
+
+# Bytes of payload a chunk: 3,072, which base64 makes 4,096 characters.
+var KITTY_CHUNK_IN = 3072;
+# Chunks gathered into one write.
+var KITTY_BATCH = 16;
+
+# The first escape's head, from ESC _ G to the ';' before the payload, into
+# `buf` (at least 64 bytes): `cells` is the column count, or the row count when
+# `by_rows` is 1; `more` is 1 when chunks follow. Returns its length.
+fn kitty_head(buf, cells, by_rows, more): i64 {
+    var pos = _iterm_put(buf, 0, "\x1b_Ga=T,f=100,q=2,");
+    if (by_rows == 1) { pos = _iterm_put(buf, pos, "r="); }
+    else { pos = _iterm_put(buf, pos, "c="); }
+    pos = _iterm_num(buf, pos, cells);
+    if (more == 1) { return _iterm_put(buf, pos, ",m=1;"); }
+    return _iterm_put(buf, pos, ",m=0;");
+}
+
+# Every escape for the n-byte payload `png`, in order, into `buf` at `pos`,
+# for chunks first_chunk .. first_chunk + count - 1. The buffer holds count
+# escapes of at most 64 + 4,096 + 2 bytes. Returns the new pos.
+fn _kitty_chunks(buf, pos, png, n, first_chunk, count, cells, by_rows): i64 {
+    var k = 0;
+    while (k < count) {
+        var ci = first_chunk + k;
+        var off = ci * KITTY_CHUNK_IN;
+        var len = n - off;
+        if (len > KITTY_CHUNK_IN) { len = KITTY_CHUNK_IN; }
+        var more = 0;
+        if (off + len < n) { more = 1; }
+        if (ci == 0) { pos = pos + kitty_head(buf + pos, cells, by_rows, more); }
+        else {
+            if (more == 1) { pos = _iterm_put(buf, pos, "\x1b_Gm=1;"); }
+            else { pos = _iterm_put(buf, pos, "\x1b_Gm=0;"); }
+        }
+        pos = pos + kii_b64_encode(png + off, len, buf + pos);
+        store8(buf + pos, 27);            # ESC \ ends each escape
+        store8(buf + pos + 1, 92);
+        pos = pos + 2;
+        k = k + 1;
+    }
+    return pos;
+}
+
+# The whole frame for the n-byte payload `png`, sized by `cells` columns (or
+# rows when `by_rows`), to fd 1. Returns 0, -1 if a buffer cannot be
+# allocated, or -2 if a write failed.
+fn kitty_write(png, n, cells, by_rows): i64 {
+    var chunks = (n + KITTY_CHUNK_IN - 1) / KITTY_CHUNK_IN;
+    var buf = alloc(KITTY_BATCH * (64 + 4096 + 2));
+    if (buf == 0) { return 0 - 1; }
+    var c = 0;
+    while (c < chunks) {
+        var count = chunks - c;
+        if (count > KITTY_BATCH) { count = KITTY_BATCH; }
+        var pos = _kitty_chunks(buf, 0, png, n, c, count, cells, by_rows);
+        if (_kii_write_all(1, buf, pos) != 0) { return 0 - 2; }
+        c = c + count;
+    }
+    var lf[8];
+    store8(&lf, 10);
+    if (_kii_write_all(1, &lf, 1) != 0) { return 0 - 2; }
+    return 0;
+}
+
+# The PNG's length after emit_kitty, for --verbose.
+var _kitty_png_len = 0;
+
+# emit_kitty — the decoded image in pstruct as one kitty graphics transmission,
+# `cells` columns wide (or rows tall when `by_rows` is 1). Returns 0, -1 if the
+# image is missing or the PNG cannot be written, or -2 if a write failed.
+fn emit_kitty(pstruct, cells, by_rows): i64 {
+    var pixels = load64(pstruct + STRUCT_PIXELS_BUF_OFFSET);
+    var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
+    var h = load64(pstruct + STRUCT_HEIGHT_OFFSET);
+    if (pixels == 0 || w <= 0 || h <= 0 || cells <= 0) { return 0 - 1; }
+    if (load64(pstruct + STRUCT_PIXELS_SIZE_OFFSET) < w * h * 4) { return 0 - 1; }
+    var n = 0;
+    var png = kii_png_encode(pixels, w, h, &n);
+    if (png == 0) { return 0 - 1; }
+    _kitty_png_len = n;
+    return kitty_write(png, n, cells, by_rows);
+}

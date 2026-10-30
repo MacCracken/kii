@@ -528,3 +528,16 @@ expansion. The restricted-emit posture holds, for these reasons:
 
 The 18th fuzz surface checks the PNG writer's chunk structure and every CRC, chitra's
 reading of each PNG back to the same pixels, and base64 against a reference decoder.
+
+## Amendment — v2.5.0 (the kitty graphics protocol)
+
+`--mode kitty` writes APC escapes (`ESC _ G … ESC \`), which keep v2.4.0's posture point for
+point:
+- **The heads are kii's own text**: `a=T,f=100,q=2`, one size, and `m=`.
+- **The payload is the same kii-written PNG**, in base64 chunks of 4,096 characters that cannot
+  hold ESC.
+- **`t=d`**: kii names no file and no shared-memory object for the terminal to open, and writes
+  none.
+- **`q=2` with no image id**: the terminal writes nothing back into the session's input.
+
+kitty's own parser read all 911 corpus frames as one image each, with no reply.

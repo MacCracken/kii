@@ -4,6 +4,85 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-29
+
+**Tier 3's second protocol: kitty graphics, `--mode kitty`**
+([ADR 0014](docs/adr/0014-tier-3-image-protocols.md) § v2.5.0). The same PNG the iTerm2 lane
+sends, as APC escapes kitty reads, and checked with kitty's own parser. Every other lane is
+byte-identical to 2.4.0 (7,080 of 7,080 corpus cases, the iTerm2 lane included).
+
+### Added
+
+- **`--mode kitty`** writes `ESC _ G a=T,f=100,q=2,c=C,m=1 ;` and the first 4,096 base64
+  characters, `ESC _ G m=1 ;` for each next chunk, `m=0` on the last, then LF.
+  - **The payload is the iTerm2 lane's PNG**, byte for byte.
+  - **No reply**: no image id is sent, and `q=2` suppresses replies besides.
+  - **No file or shared memory**: the data travels in the escapes (`t=d`).
+  - **Sized by one side only.** `c=` is the columns: always under `--width N`, and when the
+    terminal's columns bind. `r=` is the rows, when its rows bind. Given both, kitty stretches
+    the image to fill them. Given one, it works out the other from its real cell size, so the
+    aspect is always true.
+  - **`--color`, `--dither` and `--invert` are refused** with it whenever given, as with
+    `--mode iterm`.
+  - `--verbose` reports `→ kitty graphics (N-byte PNG)`.
+- **Example 07**: the Arch logo by the kitty protocol, and what kitty's parser reads from it.
+
+### Changed
+
+- An unknown `--mode` reads `kii: --mode must be halfblock, ascii, blocks, braille, iterm or
+  kitty`.
+
+### Measured
+
+- **The payload.** Over 456 images:
+
+  | Payload | Bytes | Encode |
+  |---|---:|---:|
+  | PNG | 26.0 MB | 14.3 s |
+  | raw RGBA with zlib | 32.5 MB | 7.2 s |
+  | raw RGBA | 226 MB | none |
+
+  The PNG is smallest and is shared with the iTerm2 lane. zlib-raw is half the encode for a
+  quarter more bytes. Raw is 8.7× the bytes.
+- **kitty's own parser** (`kitty +runpy`, its `Screen` and graphics manager, no window), over
+  the 472-image corpus at two widths:
+  - 911 frames, each read as one image placed over exactly the columns asked, with no reply;
+  - 31 refusals that match the half-block lane's;
+  - every chunk but the last exactly 4,096 characters;
+  - at `--width 40`, kitty's decoded pixels equal ImageMagick's decode of the PNG in all 456
+    frames.
+- **The aspect, in kitty's parser.** RAMGON at `c=80` took 32.1, 25.7 and 30.4 rows at three
+  cell sizes, its true aspect each time. A 200 × 20 terminal sized it by rows (`r=19`), 47.3 ×
+  19 cells.
+- **CPU** matches the iTerm2 lane (RAMGON 841 against 838 ms): the encode is the cost.
+- **Found:** when the image fills the terminal's width, kitty moves the cursor to the next line
+  itself, so kii's LF leaves a blank line. It is a roadmap candidate.
+
+### Fixed (documentation)
+
+- **ADR 0014 § 4 said the kitty lane would send both `c=` and `r=`.** That stretches the image.
+  It is corrected: one of them, as above.
+
+### Tests
+
+- **1,193 assertions**, up from 1,151.
+  - A new suite, `tests/kitty.tcyr` (31): the head's keys, and chunking at six payload sizes
+    read back by an independent walker, in one batch and in two. Plus the guards.
+  - cli 244 → 252: `--mode kitty`, its refusals, `kii_mode_is_protocol`.
+- **A 19th fuzz surface** (20,000 iterations, 8,691,000 in all): random payloads in random
+  batches of chunks, read back key by key and chunk by chunk to the payload.
+- Of 12 planted defects, the unit suite catches all 12 and the fuzz surface the 10 in the
+  escapes.
+- `scripts/check-builds-agree.sh` gains a kitty lane and two CLI cases: 233 → 244.
+
+### Documentation
+
+- ADR 0014 is amended with § v2.5.0: the escapes, the payload measured, the `c`/`r` correction,
+  the check in kitty's parser, and the cursor.
+- ADRs 0002 and 0007 are amended for the APC escapes and the sixth `--mode`.
+- The roadmap's 2.5.0 section is removed; 2.6.0 (Sixel) is the last Tier 3 pin. A new
+  candidate covers the blank line at full width.
+
 ## [2.4.0] - 2026-10-29
 
 **Tier 3 opens: iTerm2 inline images, `--mode iterm`**
