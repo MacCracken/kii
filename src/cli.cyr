@@ -120,17 +120,25 @@ fn kii_register_flags(fs): i64 {
     # the half-block and blocks lanes draw colours, not ink, so main refuses
     # it there (kii_lane_conflict_line).
     KII_F_INVERT  = cmdit_bool(fs, 105, "invert", "ASCII and Braille lanes: dark is ink, for light backgrounds");
-    # --cell-size WxH (no short form): v2.6.0, --mode sixel only. Sixel is
-    # drawn in device pixels, so kii needs the terminal's cell size; darshana
-    # does not report the window's pixel size yet, so it is given here, and
-    # 10x20 (the 2:1 cell every lane assumes, and chafa's own fallback) when it
-    # is not. kii_cell_size parses it.
-    KII_F_CELL    = cmdit_str(fs, 0, "cell-size", "10x20", "Sixel: the terminal's cell size in pixels, WxH");
+    # --cell-size WxH (no short form): v2.6.0 for --mode sixel, every lane
+    # since v2.7.0 (ADR 0015). The cell's shape sets every lane's row count,
+    # and Sixel draws in its pixels. Without it, kii measures the cell from
+    # the terminal (darshana's tty_winsize_px, kii_measured_cell), and uses
+    # 10x20 (the 2:1 cell every lane assumed through v2.6.0, and chafa's own
+    # fallback) where the terminal does not report its pixels. kii_cell_size
+    # parses it.
+    KII_F_CELL    = cmdit_str(fs, 0, "cell-size", "10x20", "the terminal's cell size in pixels, WxH (measured when the terminal reports it)");
     return 0;
 }
 
 # The largest cell side --cell-size takes, in pixels.
 var KII_MAX_CELL_PX = 256;
+
+# Where the cell came from (v2.7.0), for --verbose: the 10x20 default, the
+# terminal, or --cell-size.
+var KII_CELL_DEFAULT  = 0;
+var KII_CELL_MEASURED = 1;
+var KII_CELL_GIVEN    = 2;
 
 # The most pixels a Sixel frame may hold: chitra's own decode ceiling,
 # 16,777,216. The cell cap alone would allow 1,048,576 cells of up to 256 x 256
@@ -164,6 +172,28 @@ fn kii_cell_size(s, out_w, out_h): i64 {
     }
     if (digits == 0 || load8(s + i) != 0) { return 0 - 1; }
     if (w < 1 || h < 1) { return 0 - 1; }
+    store64(out_w, w);
+    store64(out_h, h);
+    return 0;
+}
+
+# The cell's size in pixels from a darshana `tty_winsize_px` answer (v2.7.0,
+# ADR 0015): the window's pixels over its columns and rows, each rounded
+# down, into out_w / out_h. Returns 0, or -1 when there is no answer to use
+# (both outs then 0):
+#   - `rc` is not 0: not a terminal (a pipe, a file), or no console;
+#   - any of the four is 0: the terminal did not report it. A pty sized by
+#     rows and columns alone, and every agnos console, has 0 x 0 pixels;
+#   - a side outside 1..KII_MAX_CELL_PX, the bounds --cell-size takes.
+# Pure, so the rule is testable without a pty.
+fn kii_measured_cell(rc, rows, cols, xpix, ypix, out_w, out_h): i64 {
+    store64(out_w, 0);
+    store64(out_h, 0);
+    if (rc != 0) { return 0 - 1; }
+    if (rows <= 0 || cols <= 0 || xpix <= 0 || ypix <= 0) { return 0 - 1; }
+    var w = xpix / cols;
+    var h = ypix / rows;
+    if (w < 1 || h < 1 || w > KII_MAX_CELL_PX || h > KII_MAX_CELL_PX) { return 0 - 1; }
     store64(out_w, w);
     store64(out_h, h);
     return 0;

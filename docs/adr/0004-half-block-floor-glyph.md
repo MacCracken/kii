@@ -235,3 +235,11 @@ This ADR remains **Accepted**. The Braille Patterns, which § Decision placed po
 as their own opt-in lane, `--mode braille` ([ADR 0013](0013-braille-lane.md)). Each cell
 is 2 × 4 dots in one colour on the terminal's background. The half-block lane is the
 default and is byte-identical to 2.2.0.
+
+## Amendment — v2.7.0 (the cell's measured shape)
+
+This ADR remains **Accepted**. The half-block lane's two halves are square only in a cell
+twice as tall as wide, which every lane assumed through 2.6.0. Since 2.7.0 the rows come from
+the cell kii measures from the terminal, or `--cell-size`, or 10x20
+([ADR 0015](0015-measured-cell.md)), so the image keeps its aspect on any cell. On a 1:2 cell,
+off a terminal, and where the terminal reports no pixels, the lane is byte-identical to 2.6.0.

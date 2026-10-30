@@ -880,24 +880,24 @@ fn main() {
     var g_w = 0;  var g_sr = 0;
     # 1152x925 (RAMGON) with width_flag=80 → 80 cols, 32 rows
     # (= 64 source rows). dst_rows = (925 × 80) / (1152 × 2) = 32.
-    assert_eq(_kii_compute_target_geometry(1152, 925, 80, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(1152, 925, 80, 10, 20, &g_w, &g_sr), 0,
       "RAMGON 80 → 0");
     assert_eq(g_w,  80, "RAMGON 80 → dst_w = 80");
     assert_eq(g_sr, 64, "RAMGON 80 → dst_src_rows = 64 (32 term rows)");
     # 1152x925 with width_flag=40 → 40 cols, 16 rows (32 src rows).
-    assert_eq(_kii_compute_target_geometry(1152, 925, 40, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(1152, 925, 40, 10, 20, &g_w, &g_sr), 0,
       "RAMGON 40 → 0");
     assert_eq(g_w,  40, "RAMGON 40 → dst_w = 40");
     assert_eq(g_sr, 32, "RAMGON 40 → dst_src_rows = 32");
     # 1152x925 with width_flag=120 → 120 cols, 48 rows (96 src rows).
-    assert_eq(_kii_compute_target_geometry(1152, 925, 120, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(1152, 925, 120, 10, 20, &g_w, &g_sr), 0,
       "RAMGON 120 → 0");
     assert_eq(g_w,  120, "RAMGON 120 → dst_w = 120");
     assert_eq(g_sr, 96,  "RAMGON 120 → dst_src_rows = 96");
 
     test_group("M6(a) — geometry: width=0 (--width unset) → default 80");
     # No --width override → falls back to EMIT_DEFAULT_COLS = 80.
-    assert_eq(_kii_compute_target_geometry(1152, 925, 0, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(1152, 925, 0, 10, 20, &g_w, &g_sr), 0,
       "width=0 → 0");
     assert_eq(g_w, 80, "width=0 → default dst_w = 80");
     # Same 64 source-row count as the explicit 80 case.
@@ -911,7 +911,7 @@ fn main() {
     # Square (100×100) @ width=40:
     #   dst_src_h = (100 × 40) / 100 = 40
     #   dst_rows  = 20 terminal rows
-    assert_eq(_kii_compute_target_geometry(100, 100, 40, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(100, 100, 40, 10, 20, &g_w, &g_sr), 0,
       "square 100x100 @ 40 → 0");
     assert_eq(g_w,  40, "square 100x100 @ 40 → dst_w = 40");
     assert_eq(g_sr, 40, "square 100x100 @ 40 → dst_src_rows = 40 (20 term rows)");
@@ -919,7 +919,7 @@ fn main() {
     # Wide landscape (200×50) @ width=80:
     #   dst_src_h = (50 × 80) / 200 = 20
     #   dst_rows  = 10 terminal rows
-    assert_eq(_kii_compute_target_geometry(200, 50, 80, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(200, 50, 80, 10, 20, &g_w, &g_sr), 0,
       "landscape 200x50 @ 80 → 0");
     assert_eq(g_w,  80, "landscape 200x50 @ 80 → dst_w = 80");
     assert_eq(g_sr, 20, "landscape 200x50 @ 80 → dst_src_rows = 20 (10 term rows)");
@@ -930,7 +930,7 @@ fn main() {
     #              M6(b) row-cap will clamp this when geometry is
     #              auto-detected, but explicit --width keeps the
     #              aspect-true rendering for capture-to-file).
-    assert_eq(_kii_compute_target_geometry(50, 200, 80, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(50, 200, 80, 10, 20, &g_w, &g_sr), 0,
       "portrait 50x200 @ 80 → 0");
     assert_eq(g_w,  80,  "portrait 50x200 @ 80 → dst_w = 80");
     assert_eq(g_sr, 320, "portrait 50x200 @ 80 → dst_src_rows = 320 (160 term rows)");
@@ -939,16 +939,16 @@ fn main() {
     # Very narrow: 1-row source at 80 cols → (1×80)/(W×2) = 0 → clamp ≥ 1.
     # Use 800×1 source: dst_src_h = (1×80)/(800×2) = 0 → clamp to 1.
     # dst_src_rows = 2. dst_rows would be 1.
-    assert_eq(_kii_compute_target_geometry(800, 1, 80, &g_w, &g_sr), 0,
+    assert_eq(_kii_compute_target_geometry(800, 1, 80, 10, 20, &g_w, &g_sr), 0,
       "800x1 @ 80 → 0");
     assert_eq(g_w,  80, "800x1 @ 80 → dst_w = 80");
     assert_eq(g_sr, 2,  "800x1 @ 80 → dst_src_rows = 2 (clamped, min 1 terminal row)");
     # Source dims invalid → -1, no writes.
-    assert_eq(_kii_compute_target_geometry(0, 100, 80, &g_w, &g_sr), 0 - 1,
+    assert_eq(_kii_compute_target_geometry(0, 100, 80, 10, 20, &g_w, &g_sr), 0 - 1,
       "src_w=0 → -1");
-    assert_eq(_kii_compute_target_geometry(100, 0, 80, &g_w, &g_sr), 0 - 1,
+    assert_eq(_kii_compute_target_geometry(100, 0, 80, 10, 20, &g_w, &g_sr), 0 - 1,
       "src_h=0 → -1");
-    assert_eq(_kii_compute_target_geometry(0 - 1, 100, 80, &g_w, &g_sr), 0 - 1,
+    assert_eq(_kii_compute_target_geometry(0 - 1, 100, 80, 10, 20, &g_w, &g_sr), 0 - 1,
       "src_w<0 → -1");
 
     # ============================================================
@@ -959,7 +959,7 @@ fn main() {
     # 1000×100 (very wide) in 120×40 envelope:
     #   dst_src_h_at_120 = (100×120)/1000 = 12 → term rows = 6
     #   6 ≤ 40 so width binds. dst_w = 120, dst_src_rows = 12.
-    assert_eq(_kii_compute_fit_geometry(1000, 100, 120, 40, &f_w, &f_sr), 0,
+    assert_eq(_kii_compute_fit_geometry(1000, 100, 120, 40, 10, 20, &f_w, &f_sr), 0,
       "1000x100 @ 120x40 → 0");
     assert_eq(f_w,  120, "wide-image width-binding: dst_w = 120");
     assert_eq(f_sr, 12,  "wide-image width-binding: dst_src_rows = 12 (6 term rows)");
@@ -969,7 +969,7 @@ fn main() {
     # rows, exceeds 40. Row-binds:
     #   dst_src_rows = 40 × 2 = 80
     #   dst_cols = (80 × 1152) / 925 = 99.66 → 99
-    assert_eq(_kii_compute_fit_geometry(1152, 925, 120, 40, &f_w, &f_sr), 0,
+    assert_eq(_kii_compute_fit_geometry(1152, 925, 120, 40, 10, 20, &f_w, &f_sr), 0,
       "RAMGON @ 120x40 → 0");
     assert_eq(f_w,  99, "RAMGON row-binding: dst_w = 99");
     assert_eq(f_sr, 80, "RAMGON row-binding: dst_src_rows = 80 (40 term rows)");
@@ -977,7 +977,7 @@ fn main() {
     # Square 100×100 in 80×24 envelope: aspect at cols=80 wants
     # dst_src_h = (100×80)/100 = 80, term rows = 40, > 24 → row-bind.
     # dst_src_rows = 48, dst_cols = (48 × 100) / 100 = 48.
-    assert_eq(_kii_compute_fit_geometry(100, 100, 80, 24, &f_w, &f_sr), 0,
+    assert_eq(_kii_compute_fit_geometry(100, 100, 80, 24, 10, 20, &f_w, &f_sr), 0,
       "square 100x100 @ 80x24 → 0");
     assert_eq(f_w,  48, "square row-binding: dst_w = 48");
     assert_eq(f_sr, 48, "square row-binding: dst_src_rows = 48 (24 term rows)");
@@ -987,21 +987,21 @@ fn main() {
     # RAMGON 1152×925 in 80×24 envelope: aspect at cols=80 wants
     # 32 term rows, > 24 → row-bind to dst_src_rows = 48, dst_cols =
     # (48 × 1152) / 925 = 59.79 → 59.
-    assert_eq(_kii_compute_fit_geometry(1152, 925, 0, 0, &f_w, &f_sr), 0,
+    assert_eq(_kii_compute_fit_geometry(1152, 925, 0, 0, 10, 20, &f_w, &f_sr), 0,
       "RAMGON @ 0x0 (defaults) → 0");
     assert_eq(f_w,  59, "non-TTY fallback (80x24): row-binds dst_w = 59");
     assert_eq(f_sr, 48, "non-TTY fallback (80x24): row-binds dst_src_rows = 48");
 
     test_group("M6(b) — fit: edge cases + invalid input");
     # Single-pixel source. Width-binds (1 src row fits easily).
-    assert_eq(_kii_compute_fit_geometry(800, 1, 80, 24, &f_w, &f_sr), 0,
+    assert_eq(_kii_compute_fit_geometry(800, 1, 80, 24, 10, 20, &f_w, &f_sr), 0,
       "800x1 @ 80x24 → 0");
     assert_eq(f_w,  80, "800x1: width binds → dst_w = 80");
     assert_eq(f_sr, 2,  "800x1: width binds → dst_src_rows = 2 (clamped)");
     # Invalid source dims → -1.
-    assert_eq(_kii_compute_fit_geometry(0, 100, 80, 24, &f_w, &f_sr), 0 - 1,
+    assert_eq(_kii_compute_fit_geometry(0, 100, 80, 24, 10, 20, &f_w, &f_sr), 0 - 1,
       "src_w=0 → -1");
-    assert_eq(_kii_compute_fit_geometry(100, 0, 80, 24, &f_w, &f_sr), 0 - 1,
+    assert_eq(_kii_compute_fit_geometry(100, 0, 80, 24, 10, 20, &f_w, &f_sr), 0 - 1,
       "src_h=0 → -1");
 
     # ============================================================
@@ -1042,9 +1042,75 @@ fn main() {
     # End to end with the fit layer: a half-set 0x40 line never gets a frame
     # wider than 40 columns.
     _kii_term_envelope(0, 0, 40, &e_c, &e_r);
-    assert_eq(_kii_compute_fit_geometry(1000, 100, e_c, e_r, &f_w, &f_sr), 0,
+    assert_eq(_kii_compute_fit_geometry(1000, 100, e_c, e_r, 10, 20, &f_w, &f_sr), 0,
       "1000x100 in a 0x40 line → 0");
     assert_eq(f_w, 40, "1000x100 in a 0x40 line → 40 columns, not 80");
+
+    # ============================================================
+    # ---- v2.7.0 the cell's size (ADR 0015) ---------------------
+    # ============================================================
+    test_group("v2.7.0 — geometry at the cell kii measured or was given");
+    # RAMGON at --width 80 in a 9x19 cell: (925 × 80 × 9) / (1152 × 19) = 30.4
+    # → 30 rows, against 32 at 10x20: a taller cell takes fewer rows.
+    assert_eq(_kii_compute_target_geometry(1152, 925, 80, 9, 19, &g_w, &g_sr), 0, "RAMGON 80 at 9x19 → 0");
+    assert_eq(g_w * 1000 + g_sr, 80060, "...80 cols, 60 source rows (30 term rows)");
+    # A square cell takes twice the rows; a cell twice as wide as tall, four times.
+    _kii_compute_target_geometry(100, 100, 40, 10, 10, &g_w, &g_sr);
+    assert_eq(g_sr, 80, "100x100 @ 40 in a 10x10 cell → 40 term rows");
+    _kii_compute_target_geometry(100, 100, 40, 20, 10, &g_w, &g_sr);
+    assert_eq(g_sr, 160, "100x100 @ 40 in a 20x10 cell → 80 term rows");
+    # Row-binding RAMGON in 80x23 (a 24x80 pty less the prompt row): 9x19 gives
+    # (23 × 19 × 1152) / (925 × 9) = 60.5 → 60 cols, where 10x20 gives 57.
+    assert_eq(_kii_compute_fit_geometry(1152, 925, 80, 23, 9, 19, &f_w, &f_sr), 0, "RAMGON fit 80x23 at 9x19 → 0");
+    assert_eq(f_w * 1000 + f_sr, 60046, "...60 cols, 46 source rows");
+    _kii_compute_fit_geometry(1152, 925, 80, 23, 10, 20, &f_w, &f_sr);
+    assert_eq(f_w * 1000 + f_sr, 57046, "...57 cols at 10x20");
+    _kii_compute_fit_geometry(100, 100, 80, 24, 8, 24, &f_w, &f_sr);
+    assert_eq(f_w * 1000 + f_sr, 72048, "a square in a 1:3 cell row-binds at 72 cols");
+    _kii_compute_fit_geometry(1000, 100, 120, 40, 9, 19, &f_w, &f_sr);
+    assert_eq(f_w * 1000 + f_sr, 120010, "a wide image still width-binds: 120 cols, 5 term rows");
+    var cbad = 0;
+    if (_kii_compute_target_geometry(100, 100, 40, 0, 20, &g_w, &g_sr) == 0 - 1) { cbad = cbad + 1; }
+    if (_kii_compute_target_geometry(100, 100, 40, 10, 0, &g_w, &g_sr) == 0 - 1) { cbad = cbad + 1; }
+    if (_kii_compute_target_geometry(100, 100, 40, 0 - 10, 20, &g_w, &g_sr) == 0 - 1) { cbad = cbad + 1; }
+    if (_kii_compute_fit_geometry(100, 100, 80, 24, 0, 20, &f_w, &f_sr) == 0 - 1) { cbad = cbad + 1; }
+    if (_kii_compute_fit_geometry(100, 100, 80, 24, 10, 0 - 20, &f_w, &f_sr) == 0 - 1) { cbad = cbad + 1; }
+    assert_eq(cbad, 5, "a cell side of 0 or less is -1 in both");
+
+    test_group("v2.7.0 — every 1:2 cell is the v2.6.0 geometry");
+    # 7x14, 8x16, 12x24 and 128x256 against 10x20, over a sweep of image sizes,
+    # widths and envelopes, in both functions.
+    var cw_list[32];
+    store64(&cw_list, 7); store64(&cw_list + 8, 8); store64(&cw_list + 16, 12); store64(&cw_list + 24, 128);
+    var c12_diff = 0;
+    var c12_n = 0;
+    var sw = 1;
+    while (sw <= 401) {
+        var sh = 1;
+        while (sh <= 401) {
+            var cols = 1;
+            while (cols <= 200) {
+                var w0 = 0; var r0 = 0; var w1 = 0; var r1 = 0;
+                _kii_compute_target_geometry(sw, sh, cols, 10, 20, &w0, &r0);
+                var fw0 = 0; var fr0 = 0; var fw1 = 0; var fr1 = 0;
+                _kii_compute_fit_geometry(sw, sh, cols, 23, 10, 20, &fw0, &fr0);
+                var k = 0;
+                while (k < 4) {
+                    var kc = load64(&cw_list + k * 8);
+                    _kii_compute_target_geometry(sw, sh, cols, kc, kc * 2, &w1, &r1);
+                    _kii_compute_fit_geometry(sw, sh, cols, 23, kc, kc * 2, &fw1, &fr1);
+                    if (w0 != w1 || r0 != r1 || fw0 != fw1 || fr0 != fr1) { c12_diff = c12_diff + 1; }
+                    c12_n = c12_n + 1;
+                    k = k + 1;
+                }
+                cols = cols + 13;
+            }
+            sh = sh + 20;
+        }
+        sw = sw + 20;
+    }
+    assert_eq(c12_n, 28224, "28,224 comparisons ran");
+    assert_eq(c12_diff, 0, "...and every 1:2 cell agreed with 10x20");
 
     return assert_summary();
 }

@@ -9,8 +9,9 @@ terminal that reads the protocol) draws it.
 a PNG, the very one the iTerm2 lane sends (example 06); `q=2` suppresses any
 reply, which would otherwise land in the shell after kii exits; `c=40` sizes
 the image to 40 columns. Only one of `c` and `r` is sent: given both, kitty
-stretches the image to fill them, and kii's rows assume 2:1 cells. Given one,
-kitty works out the other from its real cell size.
+stretches the image to fill them, and kii's rows are only as right as its
+cell (measured since v2.7.0, else 10x20). Given one, kitty works out the other
+from its real cell size.
 
 **Checked with kitty itself**: kitty's own parser, run headless through
 `kitty +runpy`, reads this frame as one 256 x 256 image whose pixels equal

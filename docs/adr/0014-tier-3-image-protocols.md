@@ -396,3 +396,18 @@ or a Sixel-enabled build), foot, mlterm, and WezTerm, which reads all three. It 
 the cell size until darshana can say, and a fixed palette's error on flat colours. It also writes
 more bytes than the PNG protocols: RAMGON's frame is 433 KB, against the iTerm2 lane's 2.48 MB of
 base64 at full resolution, but at 800 × 642 pixels.
+
+## Amendment — v2.7.0 (the cell, measured)
+
+This ADR remains **Accepted**. § Decision 3 and 4, and § v2.6.0, said kii does not know the cell's
+pixel size. Since 2.7.0 it does, wherever the terminal reports its window's pixels: darshana
+1.7.0's `tty_winsize_px` ([ADR 0015](0015-measured-cell.md)). The protocol boxes change as
+follows:
+- **Sixel** draws in the measured cell's pixels, unless `--cell-size` says otherwise. Its box
+  also takes its bound side from the same cell. 2.6.0 chose that side at 2:1, so a cell flatter
+  than 1:2 could make the image taller than the terminal; that is fixed.
+- **iTerm2's box** of columns and rows, and **kitty's** choice of `c=` or `r=`, follow the
+  measured cell's rows. kitty, given one side, still works the other out from its own cell.
+- **The PNG keeps the decoded resolution.** Sending no more pixels than the box shows waits on
+  whether a terminal's pixel fields count device pixels or points on a HiDPI display (ADR 0015
+  § Decision 4).

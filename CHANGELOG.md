@@ -4,6 +4,104 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-30
+
+**Every lane at the terminal's own cell shape** ([ADR 0015](docs/adr/0015-measured-cell.md)).
+darshana 1.7.0 reports the window's size in pixels, so kii measures the cell instead of
+assuming it is twice as tall as wide.
+
+⚠ **The default output changes on a terminal that reports a cell whose shape is not 1:2.**
+There, 2.6.0 drew every image too tall: 5.6 % on a 9x19 cell, 10 % on a 10x22 one. 2.7.0 draws
+it at its own aspect. Every frame is byte-identical to 2.6.0 in three cases: off a terminal, on
+a terminal that reports no pixels, and on any 1:2 cell (36,584 of 36,584 corpus cases).
+
+### Added
+
+- **The measured cell.** kii reads the terminal once, with darshana's `tty_winsize_px`.
+  - The rows and columns size the frame, as before.
+  - The window's pixels over them give the cell, each side rounded down. It is used when all
+    four values are reported and both sides are 1–256; otherwise the cell is 10x20, the 2:1
+    cell every lane assumed through 2.6.0.
+  - Off a terminal there is nothing to read. A frame written to a file or a pipe is the same
+    wherever it was made, under `--width N` too.
+- **Every lane fits the cell's shape.** For a cell `cw` × `ch` pixels:
+  - a frame `C` columns wide gets `(src_h × C × cw) / (src_w × ch)` rows;
+  - when the terminal's rows bind, the frame gets `(rows × ch × src_w) / (src_h × cw)` columns.
+
+  A k × 2k cell gives 2.6.0's arithmetic exactly. The cell lanes, the iTerm2 box, the kitty
+  lane's `c=` / `r=` choice and the Sixel box all follow it, and Sixel draws in the cell's
+  pixels with no `--cell-size`.
+- `--verbose` names the cell when it was measured or given, as `…, cell 9x19 (measured)`. The
+  default cell adds nothing.
+
+### Changed
+
+- **`--cell-size WxH` applies to every lane** and wins over the measurement. It was Sixel's
+  alone and the other lanes refused it, so `kii: --cell-size applies to --mode sixel only` is
+  gone. A malformed value is refused in every lane. Give the flag to make a frame independent
+  of the terminal it is drawn on.
+- **darshana 1.6.0 → 1.7.0**, for `tty_winsize_px`. `cyrius.lock` was regenerated, and only
+  darshana's commit pin and bundle hash changed.
+- `--help` describes `--cell-size` for every lane, and its Sixel example no longer asks for
+  the cell size.
+
+### Fixed
+
+- **A Sixel image could be taller than the terminal.** 2.6.0 chose which side bounds the box at
+  2:1, whatever `--cell-size` said. With a cell flatter than 1:2, the image could need one row
+  more than the terminal had. A 1000x300 image at `--cell-size 10x10` on a 24-row pty drew 240
+  pixels: 24 rows, one past the 23 above the prompt. 2.7.0 draws 230.
+
+### Measured (832-image corpus, 820 that decode)
+
+- **Against 2.6.0**, 36,584 cases, none differing:
+  - off a terminal: every lane, fit and `--width`, with tiers, dithers and `--verbose`;
+  - a 24x80 pty with no pixels;
+  - an 8x16 cell (Sixel against 2.6.0 given `--cell-size 8x16`);
+  - a 9x19 cell with `--cell-size 10x20`, against 2.6.0 given nothing.
+- **1,640 end-to-end checks on a 9x19-cell pty**: the fitted half-block frame's rows and
+  columns, its rows at `--width 40`, and the Sixel raster size, each computed from the image's
+  size.
+- **How many frames a measured cell changes**, fitted into a 24x80 terminal:
+
+  | Cell | Frames changed | 2.6.0's frame, drawn, vs true height |
+  |---|---:|---:|
+  | 10x20, 9x18 | 0 | — |
+  | 9x19 | 702 (85.6 %) | +5.6 % |
+  | 8x17 | 715 (87.2 %) | +6.3 % |
+  | 7x15 | 744 (90.7 %) | +7.1 % |
+  | 12x26 | 751 (91.6 %) | +8.3 % |
+  | 10x22 | 756 (92.2 %) | +10.0 % |
+
+### Tests
+
+- **1,246 assertions**, up from 1,223:
+  - cli 257 → 268: `kii_measured_cell`, and `--cell-size` outside Sixel;
+  - render 263 → 275: geometry at other cells, and 28,224 comparisons of four 1:2 cells
+    against 10x20.
+- **A 21st fuzz surface** (1,000,000 iterations, 9,711,000 in all) checks:
+  - geometry at random cells, against its defining inequalities;
+  - any k × 2k cell against 10x20;
+  - `kii_measured_cell`.
+- **Planted defects.** Of 12 in the new geometry and cell code, the unit suites catch 11. The
+  twelfth drops the explicit test of a 0 pixel field, and is equivalent: such a field already
+  gives a side under 1, which is refused. Of 6 in main's wiring, the corpus checks catch all 6.
+- `scripts/check-builds-agree.sh` gains three `--cell-size` lanes, 266 → 293 cases.
+
+### Documentation
+
+- **ADR 0015** (new): the measured cell, `--cell-size` in every lane, and why the protocols
+  keep the decoded resolution. On a HiDPI display, whether the pixel fields count device
+  pixels or points is not known for each terminal.
+- ADRs 0004, 0007 and 0014 are amended to point at it.
+- **The roadmap**:
+  - the darshana gate is removed, since it shipped;
+  - the protocols-at-the-box's-pixels candidate records why it waits;
+  - the stuck-bold candidate no longer says darshana has no composer for `22;31`.
+    `tty_sgr_list_buf` (darshana 1.3.0) is one.
+- README, the getting-started guide, examples 07 and 08, and the architecture notes are
+  updated.
+
 ## [2.6.0] - 2026-10-29
 
 **Tier 3's third protocol: Sixel, `--mode sixel`, encoded by kii**

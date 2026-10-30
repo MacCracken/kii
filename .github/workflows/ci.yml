@@ -75,9 +75,9 @@ jobs:
         run: cyrius test
 
       - name: Fuzz
-        # tests/kii.fcyr: fourteen deterministic LCG-driven surfaces, the
-        # parsers' crash-safety and the render paths' differentials
-        # (8,371,000 iterations, about two minutes).
+        # tests/kii.fcyr: deterministic LCG-driven surfaces, the parsers'
+        # crash-safety and the render paths' differentials, about three
+        # minutes (CONTRIBUTING.md lists them; state.md has the count).
         run: |
           scripts/build-strict.sh tests/kii.fcyr build/kii-fuzz
           ./build/kii-fuzz

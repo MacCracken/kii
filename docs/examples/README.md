@@ -28,7 +28,7 @@ the CHANGELOG lists it and the affected example says so.
 | [`05-braille-logo/`](05-braille-logo/) | `--mode braille` (v2.3.0) — a logo whose blue a fixed threshold would erase |
 | [`06-iterm-inline-image/`](06-iterm-inline-image/) | `--mode iterm` (v2.4.0) — the picture itself, as one OSC 1337 PNG |
 | [`07-kitty-graphics/`](07-kitty-graphics/) | `--mode kitty` (v2.5.0) — the same PNG in APC chunks, checked with kitty's own parser |
-| [`08-sixel/`](08-sixel/) | `--mode sixel` (v2.6.0) — Sixel encoded by kii, in device pixels from `--cell-size` |
+| [`08-sixel/`](08-sixel/) | `--mode sixel` (v2.6.0) — Sixel encoded by kii, in device pixels from the cell (measured since v2.7.0, or `--cell-size`) |
 
 ## Adding an example
 

@@ -23,7 +23,7 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "b
 # ANSI escapes, terminal size, and the stderr path-echo sanitizer.
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
-tag = "1.6.0"
+tag = "1.7.0"
 modules = ["dist/darshana.cyr"]
 
 # CLI argument parsing.

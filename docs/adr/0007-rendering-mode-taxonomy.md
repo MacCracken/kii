@@ -385,3 +385,11 @@ takes the cell lanes' `--color 8 | 16 | 256` (256 when not given) and `--dither`
 quantizes its registers. It refuses `--color tc`, `--color none` and `--invert`. A new flag,
 `--cell-size WxH` (default `10x20`), gives its pixel size, and any other mode refuses it. Every
 other mode is byte-identical to 2.5.0.
+
+## Amendment — v2.7.0 (`--cell-size` in every mode)
+
+This ADR remains **Accepted**. `--cell-size WxH` is no longer Sixel's alone: every mode takes
+it, and without it kii measures the cell from the terminal's window size, keeping 10x20 where
+there is none ([ADR 0015](0015-measured-cell.md)). The cell's shape sets every mode's rows,
+and Sixel also draws in its pixels. The line `kii: --cell-size applies to --mode sixel only`
+is gone.

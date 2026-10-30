@@ -122,19 +122,21 @@ fn _kii_sgr_bg(buf, pos, code): i64 {
 # Compute target output dimensions from source W/H + an optional
 # --width flag. Writes the dst column count + dst source-row count
 # (= dst terminal-row count × 2) into the caller-provided i64 slots.
-# Returns 0 on success, -1 on invalid source dimensions.
+# Returns 0 on success, -1 on invalid source dimensions or cell.
 #
 # **Aspect math** (half-block-aware):
 # - A terminal "row" carries TWO source pixels stacked vertically
 #   (top half = FG, bottom half = BG of one ▀ glyph).
 # - A terminal "col" carries ONE source pixel horizontally.
-# - For a square source pixel, the terminal "cell" is therefore
-#   effectively 1:2 (cols:rows-of-source-pixels). So preserving the
-#   image's aspect ratio means:
-#     dst_src_h / dst_cols = src_h / src_w
-#     dst_src_h            = (src_h × dst_cols) / src_w
-#     dst_rows             = dst_src_h / 2
-#                          = (src_h × dst_cols) / (src_w × 2)
+# - The cell is `cw` × `ch` device pixels (v2.7.0, ADR 0015): measured
+#   from the terminal, given by --cell-size, or 10 × 20. Preserving the
+#   image's aspect ratio means a frame `dst_cols` cells wide is
+#   dst_cols × cw pixels, and its rows ch pixels each:
+#     dst_rows × ch / (dst_cols × cw) = src_h / src_w
+#     dst_rows = (src_h × dst_cols × cw) / (src_w × ch)
+#   A 1:2 cell (10 × 20, the only cell through v2.6.0) gives
+#     dst_rows = (src_h × dst_cols) / (src_w × 2)
+#   with the same rounding, so its frames are the v2.6.0 frames.
 #
 # **Width selection** (M6(a) — first cut):
 # - `width_flag > 0` → that exact value (user override).
@@ -144,15 +146,16 @@ fn _kii_sgr_bg(buf, pos, code): i64 {
 # **Minimum**: a 1-pixel source still produces a 1-row output, not 0.
 # Useful for pathological tiny inputs (avoids zero-height frames the
 # emit layer would reject as a bounds error).
-fn _kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src_rows): i64 {
+fn _kii_compute_target_geometry(src_w, src_h, width_flag, cw, ch, out_dst_w, out_dst_src_rows): i64 {
     if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
+    if (cw <= 0 || ch <= 0) { return 0 - 1; }
 
     var dst_cols = EMIT_DEFAULT_COLS;
     if (width_flag > 0) { dst_cols = width_flag; }
 
     # Aspect-derived terminal rows. Integer division truncates toward
     # zero — clamp to ≥ 1 so single-row outputs are still well-formed.
-    var dst_rows = (src_h * dst_cols) / (src_w * 2);
+    var dst_rows = (src_h * dst_cols * cw) / (src_w * ch);
     if (dst_rows < 1) { dst_rows = 1; }
 
     store64(out_dst_w,        dst_cols);
@@ -180,8 +183,12 @@ fn _kii_compute_target_geometry(src_w, src_h, width_flag, out_dst_w, out_dst_src
 # Defaults: a `max_cols <= 0` arg is treated as EMIT_DEFAULT_COLS;
 # `max_rows <= 0` as EMIT_DEFAULT_ROWS. So passing both as 0 gives the
 # classic 80×24 envelope — the non-TTY fallback main.cyr uses.
-fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_dst_src_rows): i64 {
+#
+# The cell is `cw` × `ch` pixels, as in `_kii_compute_target_geometry`
+# (v2.7.0); a 1:2 cell gives the v2.6.0 answer exactly.
+fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, cw, ch, out_dst_w, out_dst_src_rows): i64 {
     if (src_w <= 0 || src_h <= 0) { return 0 - 1; }
+    if (cw <= 0 || ch <= 0) { return 0 - 1; }
 
     var cols = max_cols;
     var rows = max_rows;
@@ -189,8 +196,8 @@ fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_ds
     if (rows <= 0) { rows = EMIT_DEFAULT_ROWS; }
 
     # Width-binding candidate: use full `cols`, derive aspect-true
-    # terminal rows. dst_rows_at_cols = (src_h × cols) / (src_w × 2).
-    var dst_rows_at_cols = (src_h * cols) / (src_w * 2);
+    # terminal rows. dst_rows_at_cols = (src_h × cols × cw) / (src_w × ch).
+    var dst_rows_at_cols = (src_h * cols * cw) / (src_w * ch);
 
     var dst_w_final  = 0;
     var dst_sr_final = 0;
@@ -201,9 +208,10 @@ fn _kii_compute_fit_geometry(src_w, src_h, max_cols, max_rows, out_dst_w, out_ds
         dst_sr_final = dst_rows_at_cols * 2;
     } else {
         # Row binds; derive aspect-true cols from `rows` and shrink.
-        # dst_src_rows = rows × 2; dst_cols = (dst_src_rows × src_w) / src_h.
+        # dst_src_rows = rows × 2; dst_cols = (rows × ch × src_w) / (src_h × cw),
+        # which a 1:2 cell makes (dst_src_rows × src_w) / src_h.
         var dst_src_rows_at_rows = rows * 2;
-        var dst_cols_at_rows = (dst_src_rows_at_rows * src_w) / src_h;
+        var dst_cols_at_rows = (rows * ch * src_w) / (src_h * cw);
         if (dst_cols_at_rows < 1) { dst_cols_at_rows = 1; }
         dst_w_final  = dst_cols_at_rows;
         dst_sr_final = dst_src_rows_at_rows;

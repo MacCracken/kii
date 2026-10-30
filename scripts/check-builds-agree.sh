@@ -40,7 +40,9 @@ LANES=("--width 40" "--width 80 --color 8" "--width 60 --color 256 --dither orde
        "--mode braille --width 60 --color tc --dither fs --invert"
        "--mode braille --width 50 --color none --verbose" "--mode braille --width 1"
        "--mode iterm --width 40" "--mode kitty --width 40"
-       "--mode sixel --width 40" "--mode sixel --width 30 --color 16 --dither fs --cell-size 8x16")
+       "--mode sixel --width 40" "--mode sixel --width 30 --color 16 --dither fs --cell-size 8x16"
+       "--width 40 --cell-size 9x19" "--mode ascii --width 30 --cell-size 7x15 --verbose"
+       "--mode sixel --width 30 --cell-size 9x19")
 CLI=("" "--help" "-h" "--version" "--bogus" "--width" "--width 0" "--width -3" "--width 99999"
      "--width abc" "--mode" "--mode block" "--color 7" "--dither x" "--width 40 $F"
      "--width 40 /nonexistent.png" "--width 40 /dev/null" "--width 40 $F/RAMGON.png $F/color.gif"

@@ -690,6 +690,44 @@ fn main() {
       kii_path_has_control_bytes("\xC3\xA9"), "é: same verdict as tty_has_ctl(UTF8, TAB|LF)");
     assert_eq(kii_path_has_control_bytes(""),                     0, "empty path → safe");
 
+    # v2.7.0 (ADR 0015) — the cell from a darshana tty_winsize_px answer.
+    test_group("v2.7.0 — kii_measured_cell: the cell from the window's pixels");
+    var mc_w = 0 - 7;
+    var mc_h = 0 - 7;
+    assert_eq(kii_measured_cell(0, 24, 80, 720, 456, &mc_w, &mc_h), 0, "24x80 in 720x456 pixels → 0");
+    assert_eq(mc_w * 1000 + mc_h, 9019, "...a 9x19 cell");
+    kii_measured_cell(0, 24, 80, 800, 480, &mc_w, &mc_h);
+    assert_eq(mc_w * 1000 + mc_h, 10020, "800x480 → 10x20");
+    kii_measured_cell(0, 24, 80, 799, 479, &mc_w, &mc_h);
+    assert_eq(mc_w * 1000 + mc_h, 9019, "each side rounds down: 799x479 → 9x19");
+    assert_eq(kii_measured_cell(0, 1, 1, 256, 256, &mc_w, &mc_h), 0, "256x256, the largest cell → 0");
+    var mc_bad = 0;
+    if (kii_measured_cell(0 - 1, 24, 80, 720, 456, &mc_w, &mc_h) == 0 - 1) { mc_bad = mc_bad + 1; }   # not a terminal
+    if (kii_measured_cell(0, 24, 80, 0, 0, &mc_w, &mc_h) == 0 - 1)        { mc_bad = mc_bad + 1; }   # no pixels
+    if (kii_measured_cell(0, 24, 80, 720, 0, &mc_w, &mc_h) == 0 - 1)      { mc_bad = mc_bad + 1; }   # half reported
+    if (kii_measured_cell(0, 24, 80, 0, 456, &mc_w, &mc_h) == 0 - 1)      { mc_bad = mc_bad + 1; }
+    if (kii_measured_cell(0, 0, 80, 720, 456, &mc_w, &mc_h) == 0 - 1)     { mc_bad = mc_bad + 1; }   # no rows
+    if (kii_measured_cell(0, 24, 0, 720, 456, &mc_w, &mc_h) == 0 - 1)     { mc_bad = mc_bad + 1; }   # no cols
+    if (kii_measured_cell(0, 24, 80, 79, 456, &mc_w, &mc_h) == 0 - 1)     { mc_bad = mc_bad + 1; }   # under 1 px wide
+    if (kii_measured_cell(0, 24, 80, 720, 23, &mc_w, &mc_h) == 0 - 1)     { mc_bad = mc_bad + 1; }   # under 1 px tall
+    if (kii_measured_cell(0, 1, 1, 257, 20, &mc_w, &mc_h) == 0 - 1)       { mc_bad = mc_bad + 1; }   # over 256 wide
+    if (kii_measured_cell(0, 1, 1, 10, 257, &mc_w, &mc_h) == 0 - 1)       { mc_bad = mc_bad + 1; }   # over 256 tall
+    if (kii_measured_cell(0, 0 - 24, 80, 720, 456, &mc_w, &mc_h) == 0 - 1) { mc_bad = mc_bad + 1; }  # negative
+    assert_eq(mc_bad, 11, "eleven answers with no usable cell are -1");
+    assert_eq(mc_w + mc_h, 0, "...and leave 0x0");
+
+    test_group("v2.7.0 — --cell-size parses in every lane");
+    var fsc = cmdit_new("kii");
+    kii_register_flags(fsc);
+    var argvc[24];
+    store64(&argvc, "kii");
+    store64(&argvc + 8, "--cell-size");
+    store64(&argvc + 16, "9x19");
+    assert_eq(cmdit_parse_argv(fsc, 3, &argvc), CMDIT_OK, "--cell-size 9x19 with the default lane parses");
+    assert_eq(cmdit_seen(fsc, KII_F_CELL), 1, "...and is seen");
+    assert_eq(kii_cell_size(cmdit_get_str(fsc, KII_F_CELL), &mc_w, &mc_h), 0, "...and is a cell");
+    assert_eq(mc_w * 1000 + mc_h, 9019, "...of 9x19");
+
     return assert_summary();
 }
 

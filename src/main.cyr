@@ -90,6 +90,27 @@ fn _eprint_path_msg(path, msg): i64 {
 # The Sixel frame's pixel size, for --verbose (set by main, v2.6.0).
 var _sixel_px_w = 0;
 var _sixel_px_h = 0;
+# The cell every lane was sized with, and where it came from (KII_CELL_*),
+# for --verbose (set by main, v2.7.0).
+var _kii_cell_w = 0;
+var _kii_cell_h = 0;
+var _kii_cell_src = 0;
+
+# ", cell WxH (measured)" or ", cell WxH (--cell-size)" on the --verbose line
+# (v2.7.0, ADR 0015). Nothing for the 10x20 default, so a frame sized as
+# v2.6.0 sized it reports as it did. Always returns 0.
+fn _eprint_cell_note(): i64 {
+    if (_kii_cell_src == KII_CELL_DEFAULT) { return 0; }
+    _eprint(", cell ");
+    var cbuf[24]; var clen = fmt_int_buf(_kii_cell_w, &cbuf);
+    sys_write(2, &cbuf, clen);
+    _eprint("x");
+    clen = fmt_int_buf(_kii_cell_h, &cbuf);
+    sys_write(2, &cbuf, clen);
+    if (_kii_cell_src == KII_CELL_MEASURED) { _eprint(" (measured)"); }
+    else { _eprint(" (--cell-size)"); }
+    return 0;
+}
 
 fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane, sixel_lane): i64 {
     _eprint_path_safe(path);
@@ -112,14 +133,18 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane, sixel_lane): i64
         _eprint(") → iTerm2 inline image (");
         var nbuf[24]; var nlen = fmt_int_buf(_iterm_png_len, &nbuf);
         sys_write(2, &nbuf, nlen);
-        _eprint("-byte PNG)\n");
+        _eprint("-byte PNG)");
+        _eprint_cell_note();
+        _eprint("\n");
         return 0;
     }
     if (kitty_lane == 1) {
         _eprint(") → kitty graphics (");
         var kbuf[24]; var klen = fmt_int_buf(_kitty_png_len, &kbuf);
         sys_write(2, &kbuf, klen);
-        _eprint("-byte PNG)\n");
+        _eprint("-byte PNG)");
+        _eprint_cell_note();
+        _eprint("\n");
         return 0;
     }
     if (sixel_lane == 1) {
@@ -138,6 +163,7 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane, sixel_lane): i64
         _eprint(" colours");
         if (quant_dither() == KII_DITHER_ORDERED) { _eprint(", ordered dither"); }
         if (quant_dither() == KII_DITHER_FS)      { _eprint(", fs dither"); }
+        _eprint_cell_note();
         _eprint("\n");
         return 0;
     }
@@ -153,6 +179,7 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane, sixel_lane): i64
         if (quant_dither() == KII_DITHER_FS)      { _eprint(", fs dither"); }
     }
     if (downscale_invert() == 1) { _eprint(", inverted"); }
+    _eprint_cell_note();
     _eprint("\n");
     return 0;
 }
@@ -162,7 +189,7 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane, sixel_lane): i64
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 2.6.0");
+    println("kii 2.7.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -182,7 +209,7 @@ fn print_usage(fs): i64 {
     _eprint("  kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour\n");
     _eprint("  kii --mode iterm photo.jpg                 # the picture itself, as an iTerm2 / WezTerm image\n");
     _eprint("  kii --mode kitty photo.jpg                 # the picture itself, by the kitty graphics protocol\n");
-    _eprint("  kii --mode sixel --cell-size 9x19 img.png  # Sixel, encoded by kii (give your cell size)\n");
+    _eprint("  kii --mode sixel img.png                   # Sixel, encoded by kii (cell measured, or --cell-size)\n");
     _eprint("  kii --mode ascii --invert image.png        # dark is ink, for a light terminal\n");
     _eprint("  kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)\n");
     _eprint("  kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)\n");
@@ -256,21 +283,22 @@ fn main(): i64 {
     if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_KITTY) { kitty_lane = 1; }
     var sixel_lane = 0;
     if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_SIXEL) { sixel_lane = 1; }
-    # --cell-size is Sixel's (v2.6.0); Sixel refuses tc, none and --invert, and
-    # takes 256 colours unless --color says otherwise.
+    # --cell-size, the cell's pixel size: Sixel's at v2.6.0, every lane's since
+    # v2.7.0 (ADR 0015). Given, it wins. Otherwise the geometry below measures
+    # the cell from the terminal and keeps the default, 10x20, where the
+    # terminal reports no pixels.
     var cell_w = 0;
     var cell_h = 0;
-    if (sixel_lane == 0 && cmdit_seen(fs, KII_F_CELL) == 1) {
-        _eprint("kii: --cell-size applies to --mode sixel only\n");
+    var cell_src = KII_CELL_DEFAULT;
+    if (kii_cell_size(cmdit_get_str(fs, KII_F_CELL), &cell_w, &cell_h) != 0) {
+        _eprint("kii: --cell-size must be WxH in pixels, each 1 to 256 (as 10x20)\n");
         print_usage(fs);
         return KII_EXIT_USAGE;
     }
+    if (cmdit_seen(fs, KII_F_CELL) == 1) { cell_src = KII_CELL_GIVEN; }
+    # Sixel refuses tc, none and --invert, and takes 256 colours unless --color
+    # says otherwise.
     if (sixel_lane == 1) {
-        if (kii_cell_size(cmdit_get_str(fs, KII_F_CELL), &cell_w, &cell_h) != 0) {
-            _eprint("kii: --cell-size must be WxH in pixels, each 1 to 256 (as 10x20)\n");
-            print_usage(fs);
-            return KII_EXIT_USAGE;
-        }
         var sconflict = kii_sixel_conflict_line(quant_tier(), downscale_invert());
         if (sconflict != 0) {
             _eprint(sconflict);
@@ -355,17 +383,40 @@ fn main(): i64 {
     # 1 when the terminal's rows bound the frame rather than its columns (only
     # without --width): the kitty lane then sizes the image by rows (v2.5.0).
     var rows_bound = 0;
+    # The terminal, read once (v2.7.0): its rows and columns size the frame
+    # when --width is not given, and its pixels give the cell when
+    # --cell-size is not. darshana's tty_winsize_px is TIOCGWINSZ on Linux
+    # and winsize#60 on agnos, which reports no pixels; it is -1 when stdout
+    # is not a terminal, so a frame written to a file or a pipe keeps the
+    # 10x20 cell and its v2.6.0 bytes.
+    var term_rows = 0;
+    var term_cols = 0;
+    var term_xpix = 0;
+    var term_ypix = 0;
+    var detect_rc = tty_winsize_px(1, &term_rows, &term_cols, &term_xpix, &term_ypix);
+    if (cell_src == KII_CELL_DEFAULT) {
+        var mcw = 0;
+        var mch = 0;
+        if (kii_measured_cell(detect_rc, term_rows, term_cols, term_xpix, term_ypix, &mcw, &mch) == 0) {
+            cell_w = mcw;
+            cell_h = mch;
+            cell_src = KII_CELL_MEASURED;
+        }
+    }
+    _kii_cell_w = cell_w;
+    _kii_cell_h = cell_h;
+    _kii_cell_src = cell_src;
     if (width_flag > 0) {
-        if (_kii_compute_target_geometry(src_w, src_h, width_flag,
+        if (_kii_compute_target_geometry(src_w, src_h, width_flag, cell_w, cell_h,
             &target_w, &target_src_rows) != 0) {
             _eprint_path_msg(path, "could not compute output geometry");
             return KII_EXIT_RUN;
         }
     } else {
-        # Detection. tty_winsize is darshana surface: on Linux it's the ioctl
-        # TIOCGWINSZ; on agnos (darshana 0.8.0+) it's the winsize#60 syscall
-        # reading the framebuffer console grid. Both return 0 + set the out slots
-        # on success, -1 on failure (non-TTY / FB-not-up). (The pre-0.8.0 agnos
+        # Detection, from the read above. On Linux it is the ioctl TIOCGWINSZ;
+        # on agnos (darshana 0.8.0+) the winsize#60 syscall reading the
+        # framebuffer console grid. Both return 0 + set the out slots on
+        # success, -1 on failure (non-TTY / FB-not-up). (The pre-0.8.0 agnos
         # gate is gone: darshana's agnos branch no longer collides with
         # `kill`#16 — it calls winsize#60 directly, so kii sizes to the real
         # console on agnos.)
@@ -376,16 +427,13 @@ fn main(): i64 {
         # prompt, and 0 for whatever was not measured. Its comment records why
         # kii keeps that per-dimension rule rather than darshana's
         # both-or-neither `tty_winsize_or`.
-        var term_rows = 0;
-        var term_cols = 0;
-        var detect_rc = tty_winsize(1, &term_rows, &term_cols);
         var fit_cols = 0;
         var fit_rows = 0;
         _kii_term_envelope(detect_rc, term_rows, term_cols, &fit_cols, &fit_rows);
         # fit_cols / fit_rows == 0 here means "non-TTY or pathological
         # ioctl result" — `_kii_compute_fit_geometry` substitutes the
         # EMIT_DEFAULT_* fallback values (80 × 24).
-        if (_kii_compute_fit_geometry(src_w, src_h, fit_cols, fit_rows,
+        if (_kii_compute_fit_geometry(src_w, src_h, fit_cols, fit_rows, cell_w, cell_h,
             &target_w, &target_src_rows) != 0) {
             _eprint_path_msg(path, "could not compute output geometry");
             return KII_EXIT_RUN;
@@ -427,9 +475,9 @@ fn main(): i64 {
     #   kitty (v2.5.0) — the same PNG as APC escapes in 4,096-character
     #     chunks, sized by the side the geometry is bound by (c= or r=), so the
     #     terminal keeps the aspect with its own cell size.
-    #   sixel (v2.6.0) — the cell box in device pixels (--cell-size, 10x20
-    #     unless given): the bound side's cells times the cell's pixels, the
-    #     other side from the image's aspect. Area-sampled to that size,
+    #   sixel (v2.6.0) — the cell box in device pixels (the cell: --cell-size,
+    #     else measured, else 10x20, v2.7.0): the bound side's cells times the
+    #     cell's pixels, the other side from the image's aspect. Area-sampled to that size,
     #     quantized at the tier (256 by default) with the dither, and encoded
     #     in six-row bands by emit_sixel.
     if (sixel_lane == 1) {

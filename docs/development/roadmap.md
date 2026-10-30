@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.6.0**. Every 2.x pin has
+> below has shipped, it should not be here. Current release **v2.7.0**. Every 2.x pin has
 > shipped, Tier 3 with it; what remains is gated on upstream, a candidate, or unscheduled.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
@@ -32,13 +32,6 @@ Two rules hold for every 2.x release:
   ([ADR 0009](../adr/0009-bmp-gif-via-chitra.md)).
 - **SOF1 extended-sequential JPEG, 8-bit Huffman** (chitra). Also a chitra 1.x candidate;
   the same re-pin path.
-- **The terminal's cell aspect** (darshana). kii assumes cells are twice as tall as wide.
-  `TIOCGWINSZ` also reports the window's pixel size, which gives the real ratio on most
-  graphical terminals, but darshana's `tty_winsize` reads only rows and columns. Once it
-  exposes the pixel fields, kii fits images to the measured aspect (falling back to 2:1
-  where the fields are 0, as on the Linux console). Sixel then takes its cell size from them;
-  until then it uses `--cell-size` (2.6.0, default 10x20), and the image protocols could send
-  no more pixels than the box shows (§ Candidates).
 - **Peak memory when reading a file** (cyrius stdlib). `file_read_whole_max` keeps the
   buffers it outgrows, so reading a file costs 2–4× its size
   (`cyrius/docs/development/issues/2026-10-28-file-read-whole-keeps-outgrown-buffers.md`).
@@ -77,8 +70,8 @@ Two rules hold for every 2.x release:
   into such an escape (`22;31`) fixes it: modelled on the corpus, the half-block lane's wrong
   halves at tier 16 go from 0.80 % to 0.34 % for 0.2 % more bytes. The ASCII lane draws only
   foregrounds, so every bright-to-dim change in its rows meets it (not measured). It is a new
-  escape form, which darshana has no
-  composer for, and a byte change to the default lane.
+  escape form, which darshana's `tty_sgr_list_buf` (1.3.0) already composes, and a byte change
+  to the default lane.
 - **The fuzz generator's low bits.** `_fuzz_rand` returns the whole 32-bit LCG state, whose low
   bits repeat (bit 0 every 2 draws, the low byte every 256), and most surfaces take
   `_fuzz_rand() % n` or `& 255`. The blocks and area surfaces' random images are therefore a
@@ -101,9 +94,12 @@ Two rules hold for every 2.x release:
   does, so it could leave the LF out there. It was seen with kitty's own parser (ADR 0014
   § v2.5.0); other terminals that read the protocol may move the cursor differently.
 - **The image protocols at the cell box's pixel size.** `--mode iterm` and `--mode kitty` send the
-  decoded image at its own resolution, and the terminal scales it; a 1-megapixel image costs about 0.65 s to
-  write. With the cell's pixel size (§ Gated on upstream, darshana) kii could send no more pixels
-  than the box shows.
+  decoded image at its own resolution, and the terminal scales it; a 1-megapixel image costs about
+  0.65 s to write. Since 2.7.0 kii knows the cell's pixels where the terminal reports them
+  ([ADR 0015](../adr/0015-measured-cell.md)), so it could send no more than the box shows. What
+  holds it back: on a HiDPI display a terminal's pixel fields may count device pixels or points,
+  which is not known for each terminal, and capping at points would halve the resolution there.
+  It needs that answer per terminal, or a margin (twice the box) measured against the time saved.
 - **The Braille lane's level by hand** (`--threshold N` or similar). The lane inks dots at one
   level per frame, Otsu's ([ADR 0013](../adr/0013-braille-lane.md)), so the same picture at
   another width, or a set of frames meant to match, may get different levels. A fixed level
