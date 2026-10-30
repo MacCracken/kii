@@ -281,3 +281,14 @@ when the slot is 0.
 
 **4. Exact integers.** The colour means round half up. The luminance floors, as `_ascii_luma`
 does, so a one-pixel span gives the point lane's value. aarch64 frames match x86_64's.
+
+## Amendment — v2.3.0 (tap counts per axis)
+
+This ADR remains **Accepted**. The area sampler takes its tap counts per axis:
+`downscale_area_taps(pstruct, w, h, kx, ky)` reads a span of up to `kx` pixels across, or
+`ky` down, whole, and takes that many evenly spaced taps over a longer one.
+- **`downscale_area_to_rgb` is the same function at `KII_AREA_TAPS` (4) both ways.** ASCII
+  frames are byte-identical to 2.2.0.
+- **The Braille lane samples each dot at 16 × 8** ([ADR 0013](0013-braille-lane.md)). That
+  is the density at which the blocks lane reads a cell: 8 × 8 samples of up to 4 × 4 taps
+  each, 32 × 32 taps a cell, which is 16 × 8 per Braille dot.

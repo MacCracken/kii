@@ -88,8 +88,9 @@ fn kii_register_flags(fs): i64 {
     # look at COLORTERM: output must not depend on the environment.
     # v2.2.0 adds none: no escapes at all, the ASCII lane's glyphs alone
     # (chafa's `--colors none`). kii does not read NO_COLOR either; none is
-    # its explicit form, and only --mode ascii takes it (kii_lane_conflict_line).
-    KII_F_COLOR   = cmdit_enum(fs,  99, "color",   "16", "8|16|256|tc|none", "colour tier (none: ASCII glyphs only)");
+    # its explicit form, and only --mode ascii and braille take it
+    # (kii_lane_conflict_line).
+    KII_F_COLOR   = cmdit_enum(fs,  99, "color",   "16", "8|16|256|tc|none", "colour tier (none: ASCII or Braille glyphs only)");
     # `v` (118) was reserved for --verbose at M1; activated at M5
     # alongside the ANSI emit. With the frame now occupying stdout,
     # the M4 dimensions / format summary moves behind this flag and
@@ -98,10 +99,11 @@ fn kii_register_flags(fs): i64 {
     # --mode / -m (109): rendering lane. "halfblock" (default) = the ▀ fg/bg
     # floor; "ascii" = text-glyph art (shape-vector matching since v1.3.1,
     # colored fg), ADR 0007; "blocks" = every Block Element, an 8 x 8 shape
-    # per cell in two colours (v2.0.0, ADR 0012). A cmdit enum since v1.7.0: any other value
+    # per cell in two colours (v2.0.0, ADR 0012); "braille" = the Braille
+    # Patterns, 2 x 4 dots a cell in one colour (v2.3.0, ADR 0013). A cmdit enum since v1.7.0: any other value
     # fails the parse with CMDIT_ERR_BAD_ENUM, and cmdit_get_enum gives the
     # choice's index (KII_MODE_*), in the order of the choices string.
-    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii|blocks", "render mode");
+    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii|blocks|braille", "render mode");
     # --dither / -d (100): v1.9.0 (ADR 0011). none (the default) quantizes
     # each pixel on its own; ordered adds a 4x4 Bayer offset; fs diffuses the
     # error (Floyd-Steinberg). No effect at --color tc, where nothing is
@@ -109,9 +111,10 @@ fn kii_register_flags(fs): i64 {
     KII_F_DITHER  = cmdit_enum(fs, 100, "dither", "none", "none|ordered|fs", "dithering");
     # --invert / -i (105): v2.2.0. The ASCII lane reads dark as ink, for a
     # light terminal (jp2a's -i, the other way round: jp2a's default is
-    # dark ink). Only --mode ascii takes it; the half-block and blocks lanes
-    # draw colours, not ink, so main refuses it there (kii_lane_conflict_line).
-    KII_F_INVERT  = cmdit_bool(fs, 105, "invert", "ASCII lane: dark is ink, for light backgrounds");
+    # dark ink). Only --mode ascii takes it, and --mode braille since v2.3.0;
+    # the half-block and blocks lanes draw colours, not ink, so main refuses
+    # it there (kii_lane_conflict_line).
+    KII_F_INVERT  = cmdit_bool(fs, 105, "invert", "ASCII and Braille lanes: dark is ink, for light backgrounds");
     return 0;
 }
 
@@ -138,21 +141,23 @@ fn kii_color_tier(fs): i64 {
 }
 
 # --mode's choices, as cmdit_get_enum(fs, KII_F_MODE) indexes them (the
-# order of "halfblock|ascii|blocks" in kii_register_flags).
+# order of "halfblock|ascii|blocks|braille" in kii_register_flags).
 var KII_MODE_HALFBLOCK = 0;
 var KII_MODE_ASCII     = 1;
 var KII_MODE_BLOCKS    = 2;
+var KII_MODE_BRAILLE   = 3;
 
 # The usage line for a setting the chosen lane cannot honour, "kii: " prefix
 # and newline included, or 0 when the combination is valid (v2.2.0).
 # --invert and --color none act on ink and glyphs, which only the ASCII lane
-# draws: the half-block and blocks lanes draw colours. Refusing them there,
-# rather than ignoring them, keeps both free to mean something in those
-# lanes later without changing what an accepted command draws.
+# and, since v2.3.0, the Braille lane draw: the half-block and blocks lanes
+# draw colours. Refusing them there, rather than ignoring them, keeps both
+# free to mean something in those lanes later without changing what an
+# accepted command draws.
 fn kii_lane_conflict_line(mode, tier, invert): i64 {
-    if (mode == KII_MODE_ASCII) { return 0; }
-    if (tier == KII_TIER_NONE) { return "kii: --color none applies to --mode ascii only\n"; }
-    if (invert == 1) { return "kii: --invert applies to --mode ascii only\n"; }
+    if (mode == KII_MODE_ASCII || mode == KII_MODE_BRAILLE) { return 0; }
+    if (tier == KII_TIER_NONE) { return "kii: --color none applies to --mode ascii or braille only\n"; }
+    if (invert == 1) { return "kii: --invert applies to --mode ascii or braille only\n"; }
     return 0;
 }
 
@@ -200,7 +205,7 @@ fn kii_parse_error_line(err, flag): i64 {
     if (err == CMDIT_ERR_OUT_OF_RANGE)     { return "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n"; }
     if (err == CMDIT_ERR_BAD_ENUM && flag != 0) {
         if (streq(flag, "color") == 1) { return "kii: --color must be 8, 16, 256, tc or none\n"; }
-        if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock, ascii or blocks\n"; }
+        if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock, ascii, blocks or braille\n"; }
         if (streq(flag, "dither") == 1) { return "kii: --dither must be none, ordered or fs\n"; }
     }
     return "kii: argument parse error\n";

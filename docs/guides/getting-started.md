@@ -66,11 +66,11 @@ Options:
   -h, --help	show this help and exit
   -V, --version	print version and exit
   -w, --width <int>	output width in columns (0 = match terminal)
-  -c, --color <8|16|256|tc|none>	colour tier (none: ASCII glyphs only) (default: 16)
+  -c, --color <8|16|256|tc|none>	colour tier (none: ASCII or Braille glyphs only) (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
-  -m, --mode <halfblock|ascii|blocks>	render mode (default: halfblock)
+  -m, --mode <halfblock|ascii|blocks|braille>	render mode (default: halfblock)
   -d, --dither <none|ordered|fs>	dithering (default: none)
-  -i, --invert	ASCII lane: dark is ink, for light backgrounds
+  -i, --invert	ASCII and Braille lanes: dark is ink, for light backgrounds
 
 Examples:
   kii --version                              # version + etymology
@@ -81,6 +81,7 @@ Examples:
   kii --verbose image.png                    # frame + dimensions/format on stderr
   kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
   kii --mode blocks image.png                # every Block Element: 8x8 shapes, 2 colours a cell
+  kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour
   kii --mode ascii --invert image.png        # dark is ink, for a light terminal
   kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
@@ -119,7 +120,7 @@ Examples:
   kii does not read `COLORTERM`, `TERM` or `NO_COLOR`: the tier is what
   you pass. Within a row, an escape is written only when the colour
   changes, so a tier-16 frame is far smaller than it was before v1.8.0.
-- **`--mode halfblock|ascii|blocks`** (`-m`) — The render lane.
+- **`--mode halfblock|ascii|blocks|braille`** (`-m`) — The render lane.
   - `halfblock` (the default) draws every cell in two colours, one per
     half. Since v2.1.0 a cell is `▀` or `▄` (the same two colours either
     way round), or a space or `█` when both halves are one colour,
@@ -128,7 +129,8 @@ Examples:
   - `ascii` draws a text glyph per cell, chosen by its shape, in one
     colour ([ADR 0007](../adr/0007-rendering-mode-taxonomy.md)). It
     reads light as ink, for a dark terminal; `--invert` reverses that.
-    It is the only lane that takes `--invert` or `--color none`.
+    It and the Braille lane are the two that take `--invert` and
+    `--color none`.
   - `blocks` (since v2.0.0, [ADR 0012](../adr/0012-block-elements-lane.md))
     samples each cell 8 × 8 and draws the Block Element (`▁`..`▇`,
     `▏`..`▉`, the quadrants, `▚ ▞`, `▀ ▄ ▌ ▐ █`) that fits it best, in
@@ -139,6 +141,16 @@ Examples:
     Under `--dither ordered` or `fs` at 8 or 16 colours it also draws
     `░ ▒ ▓` as mixes of two colours. Very thin coloured detail averages
     to a dimmer colour than the half-block lane's single pixel shows.
+  - `braille` (since v2.3.0, [ADR 0013](../adr/0013-braille-lane.md))
+    draws each cell as a Braille Pattern (`⠁`..`⣿`): 2 × 4 dots, each
+    inked or not, in one colour (the mean of the inked dots) on the
+    terminal's own background. It is the finest shape of any lane, and
+    suits line art, logos and one-colour images more than photographs.
+    A dot is inked when its ink reaches one level chosen for the whole
+    frame from its own histogram (Otsu's method); under `--dither
+    ordered` or `fs` the dots are dithered instead, which shows tone.
+    Like the ASCII lane it reads light as ink, and takes `--invert`
+    and `--color none`. The Linux console's CP437 fonts have no Braille.
 - **`--dither none|ordered|fs`** (`-d`) — Dithering, since v1.9.0
   ([ADR 0011](../adr/0011-dithering.md)). The default `none` maps each
   pixel to its nearest colour, so a gradient becomes flat bands.
@@ -149,7 +161,9 @@ Examples:
     source more closely.
 
   Both work at tiers 8, 16 and 256 and in every `--mode`. At `tc` there
-  is nothing to dither, and the flag changes nothing. A dithered frame
+  is nothing to dither, and the flag changes nothing, except in the
+  Braille lane, where it also decides which dots are inked: there
+  `--dither fs --color none` gives the classic dithered Braille art. A dithered frame
   is larger, because a pattern of two colours breaks the runs that
   escape elision skips: about 1.4–1.6× at tier 8, 1.8–2× at tier 16,
   and 3–4× at tier 256.
@@ -268,10 +282,10 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: --verbose takes no value` | A switch given `=value`; the line names it (`--help`, `--version` likewise) |
 | `kii: flag takes no value` | The same, when no flag can be named |
 | `kii: --color must be 8, 16, 256, tc or none` | Any other `--color` value (`8 or 16` before v1.8.0; `none` since v2.2.0) |
-| `kii: --color none applies to --mode ascii only` | `--color none` in the half-block or blocks lane (since v2.2.0) |
-| `kii: --invert applies to --mode ascii only` | `--invert` in the half-block or blocks lane (since v2.2.0) |
+| `kii: --color none applies to --mode ascii or braille only` | `--color none` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
+| `kii: --invert applies to --mode ascii or braille only` | `--invert` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
-| `kii: --mode must be halfblock, ascii or blocks` | Any other `--mode` value |
+| `kii: --mode must be halfblock, ascii, blocks or braille` | Any other `--mode` value |
 | `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |
 | `kii: missing image path` | No path given |
 | `kii: too many arguments (expected one image path)` | More than one path |

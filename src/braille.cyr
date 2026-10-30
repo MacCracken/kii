@@ -1,0 +1,367 @@
+# braille.cyr — the Braille lane (`--mode braille`, v2.3.0, ADR 0013).
+#
+# A fourth render lane. Each character cell is one of the 256 Braille Patterns
+# (U+2800..U+28FF): a 2 x 4 grid of dots, each inked or not, in one colour on
+# the terminal's own background. That is the finest shape of any widely
+# carried glyph set, in exchange for one colour a cell.
+#
+#   1. Sampling. main downscales to the dot grid, (cols * 2) x (rows * 4),
+#      with the area sampler at 16 x 8 taps a dot (downscale_area_taps): the
+#      density at which the blocks lane reads a cell's 8 x 8 samples. Each dot
+#      gets the mean colour of its opaque pixels and, in the luminance plane,
+#      its ink: the mean luma over all its taps, transparent ones as 0, or
+#      under --invert the luma of the negative (src/downscale.cyr).
+#   2. Ink. Which dots are inked follows --dither:
+#        none     one level for the whole frame, Otsu's: the split of the
+#                 opaque dots' ink histogram with the largest between-class
+#                 variance (brl_otsu). A dot is inked at that level or above.
+#        ordered  a 4 x 4 Bayer threshold per dot, 16m + 8 for entry m.
+#        fs       Floyd-Steinberg over the dots, against 128.
+#      A dot with no opaque tap is never inked.
+#   3. Colour. A cell's colour is the rounded mean of its inked dots'
+#      colours, quantized at the active tier: under --dither fs the cells'
+#      colours go through quantize_rgb_buf as one field, otherwise each cell
+#      through kii_color_code_at (which applies the ordered offset).
+#   4. Glyph. U+2800 plus the dot bits, three bytes of UTF-8; a cell with no
+#      inked dot is a space. Each row elides a repeated foreground, takes no
+#      escape for a space, and ends with SGR 0 and a newline; at --color none
+#      it has no escape at all and ends with the newline alone.
+#
+# Every step is integer arithmetic, so every target draws the same bytes.
+# Multi-source: the dot grid and its bit order are Unicode's (the Braille
+# Patterns chart, as drawille and chafa use it); the global threshold is
+# Otsu (1979); the dithers are the ones quant.cyr already applies to colour.
+
+include "src/image.cyr"
+include "src/downscale.cyr"   # downscale_area_taps, _downscale_invert
+include "src/emit.cyr"        # _kii_sgr_fg, _kii_row_end, _kii_emit_frame
+include "src/quant.cyr"       # the tier, the dither mode, _QUANT_BAYER4
+include "src/ascii.cyr"       # _ascii_lum_plane, for a frame the area sampler delegated
+
+# Taps a dot, across and down (ADR 0013).
+var BRL_TAPS_X = 16;
+var BRL_TAPS_Y = 8;
+
+# The most cells a frame may hold: KII_MAX_CELLS (src/cli.cyr). At 8 dots a
+# cell that is 2^23 dots, which keeps every Otsu product below 2^62.
+var BRL_MAX_CELLS = 1048576;
+
+# ---- the dots ---------------------------------------------------------------
+# Unicode numbers the dots 1-2-3 down the left column, 4-5-6 down the right,
+# and 7, 8 below them, so dot (dx, dy) is bit:
+#     dy 0..2: dx 0 -> 1 << dy, dx 1 -> 8 << dy
+#     dy 3:    dx 0 -> 0x40,    dx 1 -> 0x80
+fn brl_dot_bit(dx, dy): i64 {
+    if (dy == 3) {
+        if (dx == 0) { return 64; }
+        return 128;
+    }
+    if (dx == 0) { return 1 << dy; }
+    return 8 << dy;
+}
+
+# Append the glyph for dot bits `b` (0..255): a space for 0, else U+2800 + b,
+# which is E2, A0 + (b >> 6), 80 + (b & 63). Returns the new pos.
+fn brl_put_glyph(buf, pos, b): i64 {
+    if (b == 0) {
+        store8(buf + pos, 32);
+        return pos + 1;
+    }
+    store8(buf + pos, 0xE2);
+    store8(buf + pos + 1, 0xA0 | (b >> 6));
+    store8(buf + pos + 2, 0x80 | (b & 63));
+    return pos + 3;
+}
+
+# ---- Otsu's level -------------------------------------------------------------
+# floor(a * b / c) for 0 <= a, b < 2^62 and 0 < c < 2^62, when the result and
+# (a / c) * b are below 2^62: no 128-bit product is formed. a * b is split as
+# (a / c) * c * b + (a % c) * b, and the second term is divided bit by bit
+# down b, keeping the remainder below c.
+fn brl_mul_div(a, b, c): i64 {
+    var qa = a / c;
+    var ra = a % c;
+    var q = 0;
+    var r = 0;
+    var i = 61;
+    while (i >= 0) {
+        q = q + q;
+        r = r + r;
+        if (r >= c) { r = r - c; q = q + 1; }
+        if (((b >> i) & 1) == 1) {
+            r = r + ra;
+            if (r >= c) { r = r - c; q = q + 1; }
+        }
+        i = i - 1;
+    }
+    return qa * b + q;
+}
+
+# Otsu's level for the 256-bin histogram `hist` (i64 counts): the t in 1..255
+# that splits it into ink < t and ink >= t with the largest between-class
+# variance. With N dots of total ink S, w0 of them below t with ink s0, that
+# variance times N^2 is (S * w0 - N * s0)^2 / (w0 * (N - w0)); its floor is
+# compared, exactly (brl_mul_div), and a tie goes to the lowest t. Returns 256
+# when the histogram is empty (nothing is inked), and 1 when no t splits it
+# (one ink value: every dot with any ink is inked). N is at most 2^23, so
+# S * w0 and N * s0 stay below 2^54 and the variance below 2^62.
+fn brl_otsu(hist): i64 {
+    var n = 0;
+    var s = 0;
+    var i = 0;
+    while (i < 256) {
+        var h = load64(hist + i * 8);
+        n = n + h;
+        s = s + i * h;
+        i = i + 1;
+    }
+    if (n == 0) { return 256; }
+    var best_f = 0 - 1;
+    var best_t = 1;
+    var w0 = 0;
+    var s0 = 0;
+    var t = 1;
+    while (t < 256) {
+        var h0 = load64(hist + (t - 1) * 8);
+        w0 = w0 + h0;
+        s0 = s0 + (t - 1) * h0;
+        if (w0 > 0 && w0 < n) {
+            var d = s * w0 - n * s0;
+            if (d < 0) { d = 0 - d; }
+            var f = brl_mul_div(d, d, w0 * (n - w0));
+            if (f > best_f) { best_f = f; best_t = t; }
+        }
+        t = t + 1;
+    }
+    return best_t;
+}
+
+# ---- which dots are inked -----------------------------------------------------
+# The dot bits of every cell, one byte a cell, row-major, from the dot grid's
+# plane `lum` and mask `mask` (or 0), dw = cols * 2 by dh = rows * 4, under the
+# active --dither. Returns the buffer, or 0 if it cannot be allocated.
+fn brl_dot_bits(lum, mask, cols, rows): i64 {
+    var cells = cols * rows;
+    var bits = alloc(cells);
+    if (bits == 0) { return 0; }
+    var z = 0;
+    while (z < cells) { store8(bits + z, 0); z = z + 1; }
+    var dw = cols * 2;
+    var dh = rows * 4;
+    var mode = quant_dither();
+    if (mode == KII_DITHER_FS) { return _brl_bits_fs(bits, lum, mask, cols, dw, dh); }
+    var level = 0;
+    if (mode != KII_DITHER_ORDERED) {
+        var hist = alloc(256 * 8);
+        if (hist == 0) { return 0; }
+        var k = 0;
+        while (k < 256) { store64(hist + k * 8, 0); k = k + 1; }
+        var j = 0;
+        while (j < dw * dh) {
+            if (mask == 0 || load8(mask + j) == 0) {
+                var v = load8(lum + j);
+                store64(hist + v * 8, load64(hist + v * 8) + 1);
+            }
+            j = j + 1;
+        }
+        level = brl_otsu(hist);
+    }
+    var y = 0;
+    while (y < dh) {
+        var x = 0;
+        while (x < dw) {
+            var i = y * dw + x;
+            if (mask == 0 || load8(mask + i) == 0) {
+                var t = level;
+                if (mode == KII_DITHER_ORDERED) {
+                    t = 16 * ((_QUANT_BAYER4 >> (4 * ((y & 3) * 4 + (x & 3)))) & 15) + 8;
+                }
+                if (load8(lum + i) >= t) {
+                    var c = (y / 4) * cols + x / 2;
+                    store8(bits + c, load8(bits + c) | brl_dot_bit(x & 1, y & 3));
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return bits;
+}
+
+# Floyd-Steinberg over the dots, as quant.cyr's _quant_fs does over pixels:
+# errors x16 in two rows, 7/16 right, 3/16, 5/16 and 1/16 below. A dot's value
+# is its ink plus its carried error, clamped to 0..255; it is inked at 128 or
+# above, and the rest (value - 255, or the value) is carried on. A dot with no
+# opaque tap is never inked and carries nothing: error sent to it is dropped.
+fn _brl_bits_fs(bits, lum, mask, cols, dw, dh): i64 {
+    var cur = alloc((dw + 2) * 8);
+    var nxt = alloc((dw + 2) * 8);
+    if (cur == 0 || nxt == 0) { return 0; }
+    var k = 0;
+    while (k < dw + 2) { store64(cur + k * 8, 0); store64(nxt + k * 8, 0); k = k + 1; }
+    var y = 0;
+    while (y < dh) {
+        var x = 0;
+        while (x < dw) {
+            var i = y * dw + x;
+            if (mask == 0 || load8(mask + i) == 0) {
+                var v = _quant_clamp8(load8(lum + i) + load64(cur + (x + 1) * 8) / 16);
+                var err = v;
+                if (v >= 128) {
+                    var c = (y / 4) * cols + x / 2;
+                    store8(bits + c, load8(bits + c) | brl_dot_bit(x & 1, y & 3));
+                    err = v - 255;
+                }
+                store64(cur + (x + 2) * 8, load64(cur + (x + 2) * 8) + 7 * err);
+                store64(nxt + x * 8,       load64(nxt + x * 8)       + 3 * err);
+                store64(nxt + (x + 1) * 8, load64(nxt + (x + 1) * 8) + 5 * err);
+                store64(nxt + (x + 2) * 8, load64(nxt + (x + 2) * 8) + err);
+            }
+            x = x + 1;
+        }
+        var t = cur;
+        cur = nxt;
+        nxt = t;
+        k = 0;
+        while (k < dw + 2) { store64(nxt + k * 8, 0); k = k + 1; }
+        y = y + 1;
+    }
+    return bits;
+}
+
+# ---- the frame ----------------------------------------------------------------
+# The lane's state, built once a frame by brl_prepare.
+var BRL_ST_COLS  = 0;
+var BRL_ST_BITS  = 8;     # one byte a cell: its dot bits
+var BRL_ST_CODES = 16;    # 4 bytes a cell: its colour code (0 at --color none)
+var BRL_ST_SIZE  = 24;
+
+# Every cell's dot bits and colour, from the dot grid in pstruct's downscaled
+# slots ((cols * 2) x (rows * 4) samples, the mask, the plane). The plane is
+# built here when the area sampler delegated to downscale_to_rgb and left none.
+# Returns the state, or 0 if the grid is not a dot grid or a buffer cannot be
+# allocated.
+fn brl_prepare(pstruct): i64 {
+    var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
+    var dw = load64(pstruct + STRUCT_DOWNSCALED_W_OFFSET);
+    var dh = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET);
+    if (rgb == 0 || dw < 2 || dh < 4) { return 0; }
+    if (dw % 2 != 0 || dh % 4 != 0) { return 0; }
+    var cols = dw / 2;
+    var rows = dh / 4;
+    if (rows > BRL_MAX_CELLS / cols) { return 0; }
+    var mask = load64(pstruct + STRUCT_ALPHA_MASK_OFFSET);
+    var lum = load64(pstruct + STRUCT_LUMA_PLANE_OFFSET);
+    if (lum == 0) {
+        lum = _ascii_lum_plane(rgb, mask, dw, dh);
+        if (lum == 0) { return 0; }
+        store64(pstruct + STRUCT_LUMA_PLANE_OFFSET, lum);
+    }
+    var bits = brl_dot_bits(lum, mask, cols, rows);
+    var st = alloc(BRL_ST_SIZE);
+    if (bits == 0 || st == 0) { return 0; }
+    store64(st + BRL_ST_COLS, cols);
+    store64(st + BRL_ST_BITS, bits);
+    store64(st + BRL_ST_CODES, 0);
+    if (quant_tier() == KII_TIER_NONE) { return st; }
+    var cells = cols * rows;
+    var mean = alloc(cells * 3);
+    var cmask = alloc(cells);
+    var codes = alloc(cells * 4);
+    if (mean == 0 || cmask == 0 || codes == 0) { return 0; }
+    var cy = 0;
+    while (cy < rows) {
+        var cx = 0;
+        while (cx < cols) {
+            var ci = cy * cols + cx;
+            var b = load8(bits + ci);
+            var sr = 0;
+            var sg = 0;
+            var sb = 0;
+            var n = 0;
+            var dy = 0;
+            while (dy < 4) {
+                var dx = 0;
+                while (dx < 2) {
+                    if ((b & brl_dot_bit(dx, dy)) != 0) {
+                        var o = rgb + ((cy * 4 + dy) * dw + cx * 2 + dx) * 3;
+                        sr = sr + load8(o);
+                        sg = sg + load8(o + 1);
+                        sb = sb + load8(o + 2);
+                        n = n + 1;
+                    }
+                    dx = dx + 1;
+                }
+                dy = dy + 1;
+            }
+            if (n == 0) {
+                store8(mean + ci * 3, 0); store8(mean + ci * 3 + 1, 0); store8(mean + ci * 3 + 2, 0);
+                store8(cmask + ci, 1);
+            } else {
+                var h = n / 2;
+                store8(mean + ci * 3,     (sr + h) / n);
+                store8(mean + ci * 3 + 1, (sg + h) / n);
+                store8(mean + ci * 3 + 2, (sb + h) / n);
+                store8(cmask + ci, 0);
+            }
+            cx = cx + 1;
+        }
+        cy = cy + 1;
+    }
+    if (quant_dither() == KII_DITHER_FS) {
+        if (quantize_rgb_buf(mean, cmask, cols, rows, codes) != 0) { return 0; }
+    } else {
+        var c = 0;
+        while (c < cells) {
+            if (load8(cmask + c) != 0) { store32(codes + c * 4, KII_COLOR_DEFAULT); }
+            else {
+                store32(codes + c * 4, kii_color_code_at(load8(mean + c * 3), load8(mean + c * 3 + 1),
+                    load8(mean + c * 3 + 2), c % cols, c / cols));
+            }
+            c = c + 1;
+        }
+    }
+    store64(st + BRL_ST_CODES, codes);
+    return st;
+}
+
+# One row of the frame, cell row `cy`, into `buf` at `pos`, in _kii_emit_frame's
+# (src, w, row, buf, pos) shape: `st` is brl_prepare's state, `cols` its width.
+# Returns the new pos, or -1 if a colour is not one of the tier's.
+fn emit_braille_row_buf(st, cols, cy, buf, pos): i64 {
+    var bits = load64(st + BRL_ST_BITS) + cy * cols;
+    var codes = load64(st + BRL_ST_CODES);
+    var cur_fg = 0 - 1;
+    var cx = 0;
+    while (cx < cols) {
+        var b = load8(bits + cx);
+        if (b != 0 && codes != 0) {
+            var fg = load32(codes + (cy * cols + cx) * 4);
+            if (fg != cur_fg) {
+                pos = _kii_sgr_fg(buf, pos, fg);
+                if (pos < 0) { return 0 - 1; }
+                cur_fg = fg;
+            }
+        }
+        pos = brl_put_glyph(buf, pos, b);
+        cx = cx + 1;
+    }
+    if (codes == 0) {
+        store8(buf + pos, 10);                   # '\n', and no reset: nothing was set
+        return pos + 1;
+    }
+    return _kii_row_end(buf, pos);
+}
+
+# emit_braille — render the dot grid in pstruct (main downscales to it with
+# downscale_area_taps(pstruct, cols * 2, rows * 4, BRL_TAPS_X, BRL_TAPS_Y)) to
+# fd 1. Returns 0, -1 if the grid is missing or not a dot grid, or a buffer
+# cannot be allocated, or -2 if a write to stdout failed. A cell is at most a
+# 19-byte truecolour fg and a 3-byte glyph; a row adds the reset and LF.
+fn emit_braille(pstruct): i64 {
+    var st = brl_prepare(pstruct);
+    if (st == 0) { return 0 - 1; }
+    var cols = load64(st + BRL_ST_COLS);
+    var rows = load64(pstruct + STRUCT_DOWNSCALED_H_OFFSET) / 4;
+    return _kii_emit_frame(&emit_braille_row_buf, st, cols, rows, cols * 22 + 16);
+}

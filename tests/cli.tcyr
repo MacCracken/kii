@@ -102,21 +102,24 @@ fn main() {
     assert_eq(cmdit_error(fsi3), CMDIT_ERR_UNEXPECTED_VALUE, "error = UNEXPECTED_VALUE");
     assert_streq(kii_err_flag_name(fsi3), "invert", "the error names --invert");
 
-    test_group("v2.2.0 — --invert and --color none need --mode ascii");
+    test_group("v2.2.0 — --invert and --color none need --mode ascii (or braille, v2.3.0)");
     assert_eq(kii_lane_conflict_line(KII_MODE_ASCII, KII_TIER_NONE, 1), 0, "ascii takes both");
+    assert_eq(kii_lane_conflict_line(KII_MODE_BRAILLE, KII_TIER_NONE, 1), 0, "braille takes both (v2.3.0)");
+    assert_eq(kii_lane_conflict_line(KII_MODE_BRAILLE, KII_TIER_16, 1), 0, "braille takes --invert alone");
+    assert_eq(kii_lane_conflict_line(KII_MODE_BRAILLE, KII_TIER_NONE, 0), 0, "braille takes --color none alone");
     assert_eq(kii_lane_conflict_line(KII_MODE_ASCII, KII_TIER_16, 0), 0, "ascii takes neither");
     assert_eq(kii_lane_conflict_line(KII_MODE_HALFBLOCK, KII_TIER_16, 0), 0, "half-block without them");
     assert_eq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_TC, 0), 0, "blocks without them");
     assert_streq(kii_lane_conflict_line(KII_MODE_HALFBLOCK, KII_TIER_NONE, 0),
-      "kii: --color none applies to --mode ascii only\n", "half-block refuses --color none");
+      "kii: --color none applies to --mode ascii or braille only\n", "half-block refuses --color none");
     assert_streq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_NONE, 0),
-      "kii: --color none applies to --mode ascii only\n", "blocks refuses --color none");
+      "kii: --color none applies to --mode ascii or braille only\n", "blocks refuses --color none");
     assert_streq(kii_lane_conflict_line(KII_MODE_HALFBLOCK, KII_TIER_8, 1),
-      "kii: --invert applies to --mode ascii only\n", "half-block refuses --invert");
+      "kii: --invert applies to --mode ascii or braille only\n", "half-block refuses --invert");
     assert_streq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_256, 1),
-      "kii: --invert applies to --mode ascii only\n", "blocks refuses --invert");
+      "kii: --invert applies to --mode ascii or braille only\n", "blocks refuses --invert");
     assert_streq(kii_lane_conflict_line(KII_MODE_BLOCKS, KII_TIER_NONE, 1),
-      "kii: --color none applies to --mode ascii only\n", "both: the --color line is the one printed");
+      "kii: --color none applies to --mode ascii or braille only\n", "both: the --color line is the one printed");
 
     # ---- v1.7.0: --mode is a cmdit enum ------------------------------
     # Until v1.7.0 kii validated --mode after the parse (kii_validate_mode)
@@ -133,7 +136,7 @@ fn main() {
     assert_eq(cmdit_error(fsm), CMDIT_ERR_BAD_ENUM, "error = BAD_ENUM");
     assert_streq(kii_err_flag_name(fsm), "mode", "BAD_ENUM names --mode");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, kii_err_flag_name(fsm)),
-      "kii: --mode must be halfblock, ascii or blocks\n", "the --mode line");
+      "kii: --mode must be halfblock, ascii, blocks or braille\n", "the --mode line");
     var fsm2 = cmdit_new("kii");
     kii_register_flags(fsm2);
     store64(&argvm + 16, "");
@@ -152,6 +155,15 @@ fn main() {
     kii_register_flags(fsm6);
     store64(&argvm + 16, "block");
     assert_eq(cmdit_parse_argv(fsm6, 3, &argvm), CMDIT_RESULT_ERR, "--mode block (singular) fails the parse");
+    var fsm7 = cmdit_new("kii");
+    kii_register_flags(fsm7);
+    store64(&argvm + 16, "braille");
+    assert_eq(cmdit_parse_argv(fsm7, 3, &argvm), CMDIT_OK, "--mode braille parses (v2.3.0)");
+    assert_eq(cmdit_get_enum(fsm7, KII_F_MODE), KII_MODE_BRAILLE, "braille → KII_MODE_BRAILLE");
+    var fsm8 = cmdit_new("kii");
+    kii_register_flags(fsm8);
+    store64(&argvm + 16, "Braille");
+    assert_eq(cmdit_parse_argv(fsm8, 3, &argvm), CMDIT_RESULT_ERR, "--mode Braille (capitalized) fails the parse");
     var fsm4 = cmdit_new("kii");
     kii_register_flags(fsm4);
     assert_eq(cmdit_parse_argv(fsm4, 1, &argvm), CMDIT_OK, "no --mode parses");
@@ -467,7 +479,7 @@ fn main() {
       "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n", "OUT_OF_RANGE");
     # v1.8.0: BAD_ENUM names the flag it came from (--color or --mode); with
     # no flag named it has nothing to say beyond the generic line.
-    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "mode"), "kii: --mode must be halfblock, ascii or blocks\n", "BAD_ENUM / mode");
+    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "mode"), "kii: --mode must be halfblock, ascii, blocks or braille\n", "BAD_ENUM / mode");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "color"), "kii: --color must be 8, 16, 256, tc or none\n", "BAD_ENUM / color");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "dither"), "kii: --dither must be none, ordered or fs\n", "BAD_ENUM / dither");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, 0), "kii: argument parse error\n", "BAD_ENUM / no flag");

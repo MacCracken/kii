@@ -1,0 +1,329 @@
+# tests/braille.tcyr — the Braille lane (v2.3.0, ADR 0013): the dot bits and
+# their UTF-8, the exact mul-div under Otsu's level, the three ink rules, the
+# cell colour and the row bytes at each tier, --invert and --color none.
+
+include "src/braille.cyr"
+include "lib/assert.cyr"
+
+# A pstruct holding a dot grid in its downscaled slots.
+fn _bp(ps, rgb, mask, lum, dw, dh): i64 {
+    var i = 0;
+    while (i < 160) { store64(ps + i, 0); i = i + 8; }
+    store64(ps + STRUCT_DOWNSCALED_BUF_OFFSET, rgb);
+    store64(ps + STRUCT_DOWNSCALED_W_OFFSET, dw);
+    store64(ps + STRUCT_DOWNSCALED_H_OFFSET, dh);
+    store64(ps + STRUCT_ALPHA_MASK_OFFSET, mask);
+    store64(ps + STRUCT_LUMA_PLANE_OFFSET, lum);
+    return 0;
+}
+
+fn _fill(buf, n, v): i64 {
+    var i = 0;
+    while (i < n) { store8(buf + i, v); i = i + 1; }
+    return 0;
+}
+
+# 1 if the n bytes at buf are the cstring `expect`.
+fn _bytes_are(buf, n, expect): i64 {
+    if (n != strlen(expect)) { return 0; }
+    return memeq(buf, expect, n);
+}
+
+# A 256-bin histogram with `n` at bin `v`, added to.
+fn _h(hist, v, n): i64 {
+    store64(hist + v * 8, load64(hist + v * 8) + n);
+    return 0;
+}
+
+fn _h_clear(hist): i64 {
+    var i = 0;
+    while (i < 256) { store64(hist + i * 8, 0); i = i + 1; }
+    return 0;
+}
+
+fn test_dots() {
+    test_group("v2.3.0 — dot bits follow Unicode's numbering");
+    assert_eq(brl_dot_bit(0, 0) + brl_dot_bit(0, 1) * 10 + brl_dot_bit(0, 2) * 100, 421, "left column: dots 1, 2, 3");
+    assert_eq(brl_dot_bit(1, 0) + brl_dot_bit(1, 1) * 100 + brl_dot_bit(1, 2) * 10000, 321608, "right column: dots 4, 5, 6");
+    assert_eq(brl_dot_bit(0, 3) * 1000 + brl_dot_bit(1, 3), 64128, "bottom row: dots 7, 8");
+    var g[8];
+    assert_eq(brl_put_glyph(&g, 0, 0), 1, "no dot: one byte");
+    assert_eq(load8(&g), 32, "...a space");
+    assert_eq(brl_put_glyph(&g, 0, 1), 3, "a dot: three bytes");
+    assert_eq(_bytes_are(&g, 3, "\xe2\xa0\x81"), 1, "dot 1 is U+2801");
+    brl_put_glyph(&g, 0, 255);
+    assert_eq(_bytes_are(&g, 3, "\xe2\xa3\xbf"), 1, "all eight is U+28FF");
+    brl_put_glyph(&g, 0, 128);
+    assert_eq(_bytes_are(&g, 3, "\xe2\xa2\x80"), 1, "dot 8 is U+2880");
+    brl_put_glyph(&g, 0, 64);
+    assert_eq(_bytes_are(&g, 3, "\xe2\xa1\x80"), 1, "dot 7 is U+2840");
+    return 0;
+}
+
+fn test_otsu() {
+    test_group("v2.3.0 — brl_mul_div is floor(a * b / c) without a wide product");
+    assert_eq(brl_mul_div(7, 9, 4), 15, "7 * 9 / 4");
+    assert_eq(brl_mul_div(0, 12345, 7), 0, "a = 0");
+    assert_eq(brl_mul_div(99, 0, 7), 0, "b = 0");
+    assert_eq(brl_mul_div(1000, 777, 1000), 777, "a = c gives b");
+    assert_eq(brl_mul_div(9007199254740991, 9007199254740991, 70368744177663), 1152921504606863104,
+      "(2^53 - 1)^2 / (2^46 - 1), the largest the lane forms");
+    assert_eq(brl_mul_div(123456789012345, 987654321, 55555555555), 2194787360268, "a mixed case");
+
+    test_group("v2.3.0 — brl_otsu: the largest between-class variance, ties to the lowest level");
+    var hist[2048];                    # 256 i64 bins: function-scope arrays are in bytes
+    _h_clear(&hist);
+    assert_eq(brl_otsu(&hist), 256, "no opaque dot: 256, nothing inked");
+    _h(&hist, 125, 7);
+    assert_eq(brl_otsu(&hist), 1, "one ink value: 1, every dot with ink");
+    _h_clear(&hist);
+    _h(&hist, 0, 9);
+    assert_eq(brl_otsu(&hist), 1, "all black: 1, so nothing is inked");
+    _h_clear(&hist);
+    _h(&hist, 0, 10); _h(&hist, 200, 10);
+    assert_eq(brl_otsu(&hist), 1, "0 and 200: every split between ties, the lowest wins");
+    _h_clear(&hist);
+    _h(&hist, 10, 4); _h(&hist, 200, 4);
+    assert_eq(brl_otsu(&hist), 11, "10 and 200: just above 10");
+    _h_clear(&hist);
+    _h(&hist, 50, 5); _h(&hist, 100, 5); _h(&hist, 200, 5);
+    assert_eq(brl_otsu(&hist), 101, "50, 100, 200: 200 alone");
+    _h_clear(&hist);
+    _h(&hist, 10, 3); _h(&hist, 20, 7); _h(&hist, 30, 2); _h(&hist, 180, 4); _h(&hist, 190, 1); _h(&hist, 250, 6);
+    assert_eq(brl_otsu(&hist), 31, "two clusters: the gap between them");
+    return 0;
+}
+
+fn test_ink_rules() {
+    var lum[8];
+    var mask[8];
+    var bits = 0;
+    test_group("v2.3.0 — --dither none: Otsu's level");
+    quant_set_dither(KII_DITHER_NONE);
+    store8(&lum, 10); store8(&lum + 1, 200); store8(&lum + 2, 10); store8(&lum + 3, 200);
+    store8(&lum + 4, 10); store8(&lum + 5, 200); store8(&lum + 6, 10); store8(&lum + 7, 200);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 184, "the bright right column (dots 4, 5, 6, 8)");
+    _fill(&lum, 8, 125);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 255, "one mid ink value (the Arch blue's 125): every dot");
+    _fill(&mask, 8, 0);
+    store8(&mask + 1, 1);
+    bits = brl_dot_bits(&lum, &mask, 1, 1);
+    assert_eq(load8(bits), 247, "a transparent dot is never inked (dot 4 off)");
+    # Transparent dots are not in the histogram: counted as ink 0, they would
+    # pull the level down to 1 and ink the 100s as well.
+    store8(&lum, 100); store8(&lum + 1, 100); store8(&lum + 2, 100); store8(&lum + 3, 100);
+    store8(&lum + 4, 200); store8(&lum + 5, 200); store8(&lum + 6, 0); store8(&lum + 7, 0);
+    _fill(&mask, 8, 0);
+    store8(&mask + 6, 1); store8(&mask + 7, 1);
+    bits = brl_dot_bits(&lum, &mask, 1, 1);
+    assert_eq(load8(bits), 36, "the level is the opaque dots' own: the 200s only (dots 3, 6)");
+
+    test_group("v2.3.0 — --dither ordered: a Bayer threshold per dot");
+    quant_set_dither(KII_DITHER_ORDERED);
+    _fill(&lum, 8, 128);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 149, "ink 128: the dots whose entry is 0..7 (1, 3, 5, 8)");
+    _fill(&lum, 8, 255);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 255, "ink 255: all");
+    _fill(&lum, 8, 7);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 0, "ink 7: none (the lowest threshold is 8)");
+    # Ink 40 passes entries 0..2 only, which sit at (0, 0), (2, 2) and (2, 0):
+    # not a symmetric set, so the matrix's orientation shows.
+    var lum2[16];
+    _fill(&lum2, 16, 40);
+    bits = brl_dot_bits(&lum2, 0, 2, 1);
+    assert_eq(load8(bits) * 10 + load8(bits + 1), 15, "ink 40 over two cells: dot 1, then dots 1 and 3");
+
+    test_group("v2.3.0 — --dither fs: Floyd-Steinberg over the dots");
+    quant_set_dither(KII_DITHER_FS);
+    _fill(&lum, 8, 128);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 149, "ink 128");
+    _fill(&lum, 8, 100);
+    bits = brl_dot_bits(&lum, 0, 1, 1);
+    assert_eq(load8(bits), 140, "ink 100");
+    _fill(&lum, 8, 200);
+    _fill(&mask, 8, 0);
+    store8(&mask + 1, 1); store8(&mask + 3, 1); store8(&mask + 5, 1); store8(&mask + 7, 1);
+    bits = brl_dot_bits(&lum, &mask, 1, 1);
+    assert_eq(load8(bits), 71, "the transparent right column stays off, error and all");
+    # Two cells where the 7/16 weight and the clamp both decide some dots.
+    var lum3[16];
+    store8(&lum3, 100); store8(&lum3 + 1, 100); store8(&lum3 + 2, 100); store8(&lum3 + 3, 200);
+    store8(&lum3 + 4, 100); store8(&lum3 + 5, 100); store8(&lum3 + 6, 255); store8(&lum3 + 7, 250);
+    store8(&lum3 + 8, 160); store8(&lum3 + 9, 0); store8(&lum3 + 10, 0); store8(&lum3 + 11, 128);
+    store8(&lum3 + 12, 250); store8(&lum3 + 13, 128); store8(&lum3 + 14, 100); store8(&lum3 + 15, 160);
+    bits = brl_dot_bits(&lum3, 0, 2, 1);
+    assert_eq(load8(bits) * 1000 + load8(bits + 1), 92218, "a mixed 4 x 4: 92 and 218 (as a reference FS gives)");
+    quant_set_dither(KII_DITHER_NONE);
+    return 0;
+}
+
+fn test_rows() {
+    # Two cells, 4 x 4 dots: cell 0 white, cell 1 black.
+    var rgb[48];
+    var lum[16];
+    var y = 0;
+    while (y < 4) {
+        var x = 0;
+        while (x < 4) {
+            var v = 0;
+            if (x < 2) { v = 255; }
+            store8(&rgb + (y * 4 + x) * 3, v); store8(&rgb + (y * 4 + x) * 3 + 1, v); store8(&rgb + (y * 4 + x) * 3 + 2, v);
+            store8(&lum + y * 4 + x, v);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var ps[160];
+    var out[128];
+    var st = 0;
+    var n = 0;
+    quant_set_dither(KII_DITHER_NONE);
+
+    test_group("v2.3.0 — rows: one colour a cell, the mean of its inked dots");
+    quant_set_tier(16);
+    _bp(&ps, &rgb, 0, &lum, 4, 4);
+    st = brl_prepare(&ps);
+    assert(st != 0, "brl_prepare builds the state");
+    n = emit_braille_row_buf(st, 2, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, "\x1b[97m\xe2\xa3\xbf \x1b[0m\n"), 1, "white cell: 97 and all dots; black: a space");
+    quant_set_tier(KII_TIER_TC);
+    st = brl_prepare(&ps);
+    n = emit_braille_row_buf(st, 2, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, "\x1b[38;2;255;255;255m\xe2\xa3\xbf \x1b[0m\n"), 1, "truecolour: 38;2");
+    quant_set_tier(KII_TIER_NONE);
+    st = brl_prepare(&ps);
+    n = emit_braille_row_buf(st, 2, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, "\xe2\xa3\xbf \n"), 1, "--color none: the glyphs and LF, no escape");
+
+    test_group("v2.3.0 — --invert: dark is ink");
+    quant_set_tier(16);
+    downscale_set_invert(1);
+    _bp(&ps, &rgb, 0, 0, 4, 4);                  # no plane: brl_prepare builds the inverted one
+    st = brl_prepare(&ps);
+    n = emit_braille_row_buf(st, 2, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, " \x1b[30m\xe2\xa3\xbf\x1b[0m\n"), 1, "the black cell is ink, in black (30)");
+    downscale_set_invert(0);
+
+    test_group("v2.3.0 — elision, and the colour of a cell's inked dots only");
+    _fill(&rgb, 48, 255);
+    _fill(&lum, 16, 255);
+    # Dot (3, 3), in cell 1, is dark and red; it is not inked, so it adds no colour.
+    store8(&rgb + 15 * 3, 255); store8(&rgb + 15 * 3 + 1, 0); store8(&rgb + 15 * 3 + 2, 0);
+    store8(&lum + 15, 0);
+    _bp(&ps, &rgb, 0, &lum, 4, 4);
+    st = brl_prepare(&ps);
+    n = emit_braille_row_buf(st, 2, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, "\x1b[97m\xe2\xa3\xbf\xe2\xa1\xbf\x1b[0m\n"), 1, "one 97 for both cells; dot 8 off in the second");
+
+    test_group("v2.3.0 — a cell's colour: the rounded mean of its inked dots, exactly");
+    # One cell: dots 1 and 4 inked, (1, 1, 1) and (2, 2, 2); the rest red and
+    # not inked. At truecolour the mean shows as it is: 1.5 rounds to 2.
+    var rgb1[24];
+    var lum1[8];
+    var d = 0;
+    while (d < 8) { store8(&rgb1 + d * 3, 200); store8(&rgb1 + d * 3 + 1, 0); store8(&rgb1 + d * 3 + 2, 0); d = d + 1; }
+    _fill(&rgb1, 3, 1);
+    _fill(&rgb1 + 3, 3, 2);
+    _fill(&lum1, 8, 0);
+    store8(&lum1, 255); store8(&lum1 + 1, 255);
+    quant_set_tier(KII_TIER_TC);
+    _bp(&ps, &rgb1, 0, &lum1, 2, 4);
+    st = brl_prepare(&ps);
+    n = emit_braille_row_buf(st, 1, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, "\x1b[38;2;2;2;2m\xe2\xa0\x89\x1b[0m\n"), 1, "(1+2)/2 rounds to 2; the red dots add nothing");
+
+    test_group("v2.3.0 — --dither ordered and fs reach the cell colours");
+    # Four cells of mid grey with every dot inked: the dots ignore the dither
+    # here (ink 255 passes every threshold), the colours do not.
+    var grey[96];
+    var gl[32];
+    _fill(&grey, 96, 128);
+    _fill(&gl, 32, 255);
+    _bp(&ps, &grey, 0, &gl, 8, 4);
+    quant_set_tier(16);
+    quant_set_dither(KII_DITHER_ORDERED);
+    st = brl_prepare(&ps);
+    n = emit_braille_row_buf(st, 4, 0, &out, 0);
+    assert_eq(_bytes_are(&out, n, "\x1b[90m\xe2\xa3\xbf\x1b[37m\xe2\xa3\xbf\x1b[90m\xe2\xa3\xbf\x1b[37m\xe2\xa3\xbf\x1b[0m\n"), 1,
+      "ordered: each cell's Bayer offset, 8 7 8 7 (90 37 90 37)");
+    quant_set_dither(KII_DITHER_FS);
+    st = brl_prepare(&ps);
+    var field[12];
+    _fill(&field, 12, 128);
+    var want[16];
+    quantize_rgb_buf(&field, 0, 4, 1, &want);
+    assert_eq(memeq(load64(st + BRL_ST_CODES), &want, 16), 1, "fs: the cells' colours are quantize_rgb_buf's field");
+    assert_eq(load32(&want) * 10 + load32(&want + 4), 78, "...which mixes two greys (7, then 8)");
+    quant_set_dither(KII_DITHER_NONE);
+    st = brl_prepare(&ps);
+    assert_eq(load32(load64(st + BRL_ST_CODES) + 4), kii_color_code(128, 128, 128), "none: each cell on its own");
+
+    test_group("v2.3.0 — brl_prepare refuses what is not a dot grid");
+    _bp(&ps, 0, 0, &lum, 4, 4);
+    assert_eq(brl_prepare(&ps), 0, "no samples");
+    _bp(&ps, &rgb, 0, &lum, 3, 4);
+    assert_eq(brl_prepare(&ps), 0, "an odd width");
+    _bp(&ps, &rgb, 0, &lum, 4, 6);
+    assert_eq(brl_prepare(&ps), 0, "a height not a multiple of 4");
+    _bp(&ps, 0, 0, 0, 0, 0);
+    assert_eq(emit_braille(&ps), 0 - 1, "emit_braille on an empty pstruct: -1");
+    quant_set_tier(16);
+    return 0;
+}
+
+fn test_sampler() {
+    test_group("v2.3.0 — downscale_area_taps: tap counts per axis");
+    # A 32 x 8 source, white on its odd columns, sampled to one dot.
+    var pix[1024];
+    var y = 0;
+    while (y < 8) {
+        var x = 0;
+        while (x < 32) {
+            var o = (y * 32 + x) * 4;
+            var v = 0;
+            if (x % 2 == 1) { v = 255; }
+            store8(&pix + o, v); store8(&pix + o + 1, v); store8(&pix + o + 2, v); store8(&pix + o + 3, 255);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var ps[160];
+    var i = 0;
+    while (i < 160) { store64(&ps + i, 0); i = i + 8; }
+    store64(&ps + STRUCT_WIDTH_OFFSET, 32);
+    store64(&ps + STRUCT_HEIGHT_OFFSET, 8);
+    store64(&ps + STRUCT_BIT_DEPTH_OFFSET, 8);
+    store64(&ps + STRUCT_COLOR_TYPE_OFFSET, 6);
+    store64(&ps + STRUCT_PIXELS_BUF_OFFSET, &pix);
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 1024);
+    assert_eq(downscale_area_taps(&ps, 1, 1, 0, 8), 0 - 1, "kx = 0 is refused");
+    assert_eq(downscale_area_taps(&ps, 1, 1, 16, 0), 0 - 1, "ky = 0 is refused");
+    assert_eq(downscale_area_taps(&ps, 1, 1, BRL_TAPS_X, BRL_TAPS_Y), 0, "16 x 8 taps -> 0");
+    assert_eq(load8(load64(&ps + STRUCT_DOWNSCALED_BUF_OFFSET)), 255, "16 taps over 32 columns read the odd ones");
+    assert_eq(load8(load64(&ps + STRUCT_LUMA_PLANE_OFFSET)), 255, "...so the dot is all ink");
+    assert_eq(downscale_area_taps(&ps, 1, 1, 32, 8), 0, "32 taps -> 0");
+    assert_eq(load8(load64(&ps + STRUCT_DOWNSCALED_BUF_OFFSET)), 128, "32 taps read every column: the mean");
+    assert_eq(downscale_area_taps(&ps, 2, 1, 4, 4), 0, "4 x 4 -> 0");
+    var a = load64(&ps + STRUCT_DOWNSCALED_BUF_OFFSET);
+    assert_eq(downscale_area_to_rgb(&ps, 2, 1), 0, "downscale_area_to_rgb -> 0");
+    assert_eq(memeq(a, load64(&ps + STRUCT_DOWNSCALED_BUF_OFFSET), 6), 1, "downscale_area_to_rgb is 4 x 4 taps");
+    return 0;
+}
+
+fn main() {
+    test_dots();
+    test_otsu();
+    test_ink_rules();
+    test_rows();
+    test_sampler();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(SYS_EXIT, exit_code);

@@ -4,6 +4,83 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-29
+
+**A fourth lane: Braille, `--mode braille`**
+([ADR 0013](docs/adr/0013-braille-lane.md)). Each cell is one of the 256 Braille Patterns:
+2 × 4 dots, each inked or not, in one colour on the terminal's own background. It is opt-in;
+the half-block, ASCII and blocks lanes are byte-identical to 2.2.0 (5,192 of 5,192 corpus
+cases).
+
+### Added
+
+- **`--mode braille`** draws the finest shapes of any lane, for logos, line art and one-colour
+  images.
+  - **Sampling**: the area sampler on the dot grid (`cols·2 × rows·4`), at 16 × 8 taps a dot,
+    the blocks lane's density.
+  - **Ink, under `--dither none`**: one level for the whole frame, Otsu's (the split of the
+    dots' ink histogram with the largest between-class variance, computed exactly). The user
+    chose it on 2026-10-29 from renders of four rules. A fixed 128 erased the Arch logo,
+    whose blue has a luma of 125, and lost 3 px lines. The cell's own mean hollowed filled
+    areas. Error diffusion broke lines into dots.
+  - **Under `--dither ordered` or `fs`** the dots are dithered for tone: a Bayer threshold per
+    dot, or Floyd-Steinberg against 128. This applies at `tc` and `--color none` too.
+  - **Colour**: a cell's colour is the mean of its inked dots, quantized at the tier (as one
+    field under `fs`).
+  - **`--invert` and `--color none` apply**, as in the ASCII lane. An inverted frame draws
+    exactly its negative's dots, and a colourless one is the coloured one with its escapes
+    removed.
+- **Example 05**: the Arch logo in Braille (`docs/examples/05-braille-logo/`).
+
+### Changed
+
+- The refusal lines name the new lane: `kii: --invert applies to --mode ascii or braille
+  only`, and the same for `--color none`.
+- An unknown `--mode` reads `kii: --mode must be halfblock, ascii, blocks or braille`.
+- `downscale_area_to_rgb` is now `downscale_area_taps` at 4 × 4 taps, with tap counts per
+  axis. ASCII bytes and CPU are unchanged.
+
+### Measured (472-image corpus)
+
+- **2,826 Braille cases**: every tier and dither, with and without `--invert`, widths 40 and
+  120.
+  - All 2,733 frames are exactly `cols` cells a row.
+  - The 93 refused cases are refused as in the ASCII lane.
+  - Every colourless frame is the coloured one with its escapes removed.
+- **`--invert` against ImageMagick negatives**: 422 of 422 images match under each rule, at
+  both widths.
+- **Blank frames**: 94 frames ink no dot.
+  - 93 of them are blank in the ASCII lane too: black content when light is ink, or no pixel
+    at alpha ≥ 128.
+  - One is a near-white image under `--invert --dither fs`.
+- **Size**: 0.92× half-block's bytes at `--width 40`.
+- **CPU**: RAMGON at `--width 200` takes 205.7 ms, against 246.5 ms in the blocks lane. The
+  archlinux logo there takes 6.57 ms, against 36.16 ms.
+
+### Tests
+
+- **1,101 assertions**, up from 1,035.
+  - A new suite, `tests/braille.tcyr` (60): the dot order and UTF-8, the exact mul-div at
+    the lane's widest products, Otsu on hand-checked histograms, each ink rule against a
+    reference, cell colours, rows at each tier, `--invert`, `--color none`, the refusals.
+  - cli 226 → 232: `--mode braille`, and the wider refusals.
+- **A 17th fuzz surface** (30,000 iterations, 8,651,000 in all).
+  - Random images and their negatives are sampled at 16 × 8. The samples are checked
+    against the area reference.
+  - The inked dots are checked against reimplementations of each rule, and against the
+    negative's.
+  - Every row is checked for structure, and against its escape-stripped twin.
+- Of 25 defects planted in the lane, the unit suite catches all 25 and the fuzz surface 15.
+- `scripts/check-builds-agree.sh` gains five Braille lanes and one CLI case: 175 → 221 cases.
+
+### Documentation
+
+- **ADR 0013**, the Braille lane.
+- ADRs 0002, 0004, 0005, 0007 and 0011 are amended: the emit surface, the opt-in lane, the
+  per-axis taps, the fourth `--mode`, and `--dither` on the dots.
+- The roadmap's 2.3.0 section is removed; 2.4.0 (iTerm2 images) is next. A fixed-level
+  override for the lane is a new candidate.
+
 ## [2.2.0] - 2026-10-29
 
 **The ASCII lane on light backgrounds, and without colour**

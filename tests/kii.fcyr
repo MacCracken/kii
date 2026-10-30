@@ -48,6 +48,7 @@ include "src/downscale.cyr"
 include "src/emit.cyr"
 include "src/ascii.cyr"
 include "src/blocks.cyr"
+include "src/braille.cyr"
 
 # Iteration counts.
 #
@@ -81,6 +82,7 @@ var BLK_CELL_FUZZ_ITERS   = 200000;    # v2.0.0 — the blocks lane's shape choi
 var BLK_FRAME_FUZZ_ITERS  = 20000;     # v2.0.0 — whole blocks frames, pad differential
 var HB_FUZZ_ITERS         = 200000;    # v2.1.0 — half-block rows decoded back to their colours
 var INV_FUZZ_ITERS        = 50000;     # v2.2.0 — --invert against the negative, --color none against the escapes
+var BRL_FUZZ_ITERS        = 30000;     # v2.3.0 — the Braille lane: sampler, ink rules, negative, escapes
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -626,7 +628,11 @@ fn fuzz_ascii_iter(rgb, mask, out_a, out_b): i64 {
 # Destination position i of n on an axis of w source pixels: the source
 # indices to read, into `out` (at most KII_AREA_TAPS i64s). Returns the count.
 fn _fz_area_axis(i, n, w, out): i64 {
-    var k = KII_AREA_TAPS;
+    return _fz_area_axis_k(i, n, w, KII_AREA_TAPS, out);
+}
+
+# The same with `k` taps (v2.3.0: the Braille lane samples at 16 x 8).
+fn _fz_area_axis_k(i, n, w, k, out): i64 {
     var c = 0;
     var first = 0 - 1;
     var s = 0;
@@ -651,7 +657,12 @@ fn _fz_area_axis(i, n, w, out): i64 {
 # 0 if pstruct's samples, mask and plane are what the definition gives for the
 # w x h image at `pix`, else -1.
 fn _fz_area_ref(pstruct, pix, w, h, dw, dh): i64 {
-    var k = KII_AREA_TAPS;
+    return _fz_area_ref_k(pstruct, pix, w, h, dw, dh, KII_AREA_TAPS, KII_AREA_TAPS);
+}
+
+# The same with kx taps across and ky down (v2.3.0), ky at most 16.
+fn _fz_area_ref_k(pstruct, pix, w, h, dw, dh, kx, ky): i64 {
+    var k = kx;
     var rgb = load64(pstruct + STRUCT_DOWNSCALED_BUF_OFFSET);
     var mask = load64(pstruct + STRUCT_ALPHA_MASK_OFFSET);
     var lum = load64(pstruct + STRUCT_LUMA_PLANE_OFFSET);
@@ -660,12 +671,12 @@ fn _fz_area_ref(pstruct, pix, w, h, dw, dh): i64 {
     var xt = alloc(dw * (k + 1) * 8);
     if (xt == 0) { return 0 - 1; }
     var dx = 0;
-    while (dx < dw) { store64(xt + dx * (k + 1) * 8, _fz_area_axis(dx, dw, w, xt + dx * (k + 1) * 8 + 8)); dx = dx + 1; }
-    var ys[32];                        # KII_AREA_TAPS (4) i64s: 32 bytes at function scope
+    while (dx < dw) { store64(xt + dx * (k + 1) * 8, _fz_area_axis_k(dx, dw, w, kx, xt + dx * (k + 1) * 8 + 8)); dx = dx + 1; }
+    var ys[128];                       # up to 16 i64s: 128 bytes at function scope
     var any_t = 0;
     var dy = 0;
     while (dy < dh) {
-        var ny = _fz_area_axis(dy, dh, h, &ys);
+        var ny = _fz_area_axis_k(dy, dh, h, ky, &ys);
         dx = 0;
         while (dx < dw) {
             var xe = xt + dx * (k + 1) * 8;
@@ -1365,6 +1376,260 @@ fn fuzz_invert_iter(pix, neg, out_a, out_b): i64 {
     return 0;
 }
 
+# ---- v2.3.0 Braille-lane fuzz surface ------------------------------
+# Each iteration builds a random RGBA8 image X (1..48 a side, the three alpha
+# mixes) and its negative N, picks 1..24 x 1..8 cells, a tier (8, 16, 256, tc
+# or none) and a dither, and samples the dot grid (2 x 4 dots a cell, 16 x 8
+# taps a dot) three times: X with --invert, N without, and X without. The
+# checks:
+#   - X's plain samples, mask and plane are the area sampler's definition at
+#     16 x 8 taps (_fz_area_ref_k);
+#   - X's inked dots under --invert are N's plain ones, under every rule;
+#   - X's plain inked dots are the rule's, worked out here: Otsu's level by
+#     direct division (the dot counts are small enough), the Bayer threshold,
+#     and Floyd-Steinberg over a whole error plane rather than two rows;
+#   - no dot without an opaque tap is inked;
+#   - every row is `cols` cells, each a space or a Braille Pattern, then the
+#     reset and LF (LF alone at none); X's inverted rows at none are N's; and
+#     each coloured row with its escapes removed is the row at none.
+# Draws use bits 16 and up of _fuzz_rand. It runs after every older surface.
+
+# Otsu's level for the dots of plane `lum` with mask `mask` (or 0), n dots,
+# computed directly: n is at most 1,536, so (S w0 - N s0)^2 fits.
+fn _fz_brl_otsu(lum, mask, n): i64 {
+    var hist[2048];                    # 256 i64 bins: function-scope arrays are in bytes
+    var k = 0;
+    while (k < 256) { store64(&hist + k * 8, 0); k = k + 1; }
+    var cnt = 0;
+    var sum = 0;
+    var i = 0;
+    while (i < n) {
+        if (mask == 0 || load8(mask + i) == 0) {
+            var v = load8(lum + i);
+            store64(&hist + v * 8, load64(&hist + v * 8) + 1);
+            cnt = cnt + 1;
+            sum = sum + v;
+        }
+        i = i + 1;
+    }
+    if (cnt == 0) { return 256; }
+    var best = 0 - 1;
+    var bt = 1;
+    var w0 = 0;
+    var s0 = 0;
+    var t = 1;
+    while (t < 256) {
+        w0 = w0 + load64(&hist + (t - 1) * 8);
+        s0 = s0 + (t - 1) * load64(&hist + (t - 1) * 8);
+        if (w0 > 0 && w0 < cnt) {
+            var d = sum * w0 - cnt * s0;
+            var f = (d * d) / (w0 * (cnt - w0));
+            if (f > best) { best = f; bt = t; }
+        }
+        t = t + 1;
+    }
+    return bt;
+}
+
+# The reference ink of dot (x, y): 1 or 0, by the active rule; `fsp` is the
+# Floyd-Steinberg plane _fz_brl_fs filled (or 0 for the other rules).
+fn _fz_brl_ink(lum, mask, dw, x, y, level, fsp): i64 {
+    var i = y * dw + x;
+    if (mask != 0 && load8(mask + i) != 0) { return 0; }
+    var mode = quant_dither();
+    if (mode == KII_DITHER_FS) { return load8(fsp + i); }
+    var t = level;
+    if (mode == KII_DITHER_ORDERED) {
+        var m = (_QUANT_BAYER4 >> (4 * ((y & 3) * 4 + (x & 3)))) & 15;
+        t = 16 * m + 8;
+    }
+    if (load8(lum + i) >= t) { return 1; }
+    return 0;
+}
+
+# Floyd-Steinberg over the whole dw x dh plane at once: `err` holds every
+# dot's carried error (x16). Writes 1 / 0 per dot into `on`. Returns 0.
+fn _fz_brl_fs(lum, mask, dw, dh, on, err): i64 {
+    var i = 0;
+    while (i < dw * dh) { store64(err + i * 8, 0); store8(on + i, 0); i = i + 1; }
+    var y = 0;
+    while (y < dh) {
+        var x = 0;
+        while (x < dw) {
+            i = y * dw + x;
+            if (mask == 0 || load8(mask + i) == 0) {
+                var v = load8(lum + i) + load64(err + i * 8) / 16;
+                if (v < 0) { v = 0; }
+                if (v > 255) { v = 255; }
+                var e = v;
+                if (v >= 128) { store8(on + i, 1); e = v - 255; }
+                if (x + 1 < dw) { store64(err + (i + 1) * 8, load64(err + (i + 1) * 8) + 7 * e); }
+                if (y + 1 < dh) {
+                    if (x > 0) { store64(err + (i + dw - 1) * 8, load64(err + (i + dw - 1) * 8) + 3 * e); }
+                    store64(err + (i + dw) * 8, load64(err + (i + dw) * 8) + 5 * e);
+                    if (x + 1 < dw) { store64(err + (i + dw + 1) * 8, load64(err + (i + dw + 1) * 8) + e); }
+                }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+# 1 if the row of n bytes is `cols` cells, each a space or E2 A0..A3 80..BF,
+# with escapes only when `colour`, ending in the reset and LF (LF alone if not).
+fn _fz_brl_row_ok(buf, n, cols, colour): i64 {
+    var tail = 5;
+    if (colour == 0) { tail = 1; }
+    if (n < tail) { return 0; }
+    if (load8(buf + n - 1) != 10) { return 0; }
+    if (colour == 1 && memeq(buf + n - 5, "\x1b[0m", 4) == 0) { return 0; }
+    var i = 0;
+    var cells = 0;
+    while (i < n - tail) {
+        var b = load8(buf + i);
+        if (b == 27) {
+            if (colour == 0) { return 0; }
+            while (i < n - tail && load8(buf + i) != 109) { i = i + 1; }
+            i = i + 1;
+        } else {
+            if (b == 32) { i = i + 1; }
+            else {
+                if (b != 0xE2) { return 0; }
+                var b1 = load8(buf + i + 1);
+                var b2 = load8(buf + i + 2);
+                if (b1 < 0xA0 || b1 > 0xA3 || b2 < 0x80 || b2 > 0xBF) { return 0; }
+                i = i + 3;
+            }
+            cells = cells + 1;
+        }
+    }
+    if (cells != cols) { return 0; }
+    return 1;
+}
+
+fn _fz_brl_sample(ps, cols, rows, inv): i64 {
+    downscale_set_invert(inv);
+    if (downscale_area_taps(ps, cols * 2, rows * 4, BRL_TAPS_X, BRL_TAPS_Y) != 0) { return 0 - 1; }
+    return 0;
+}
+
+fn fuzz_braille_iter(pix, neg, out_a, out_b): i64 {
+    var w = 1 + _fz_hb_rand(48);
+    var h = 1 + _fz_hb_rand(48);
+    var cols = 1 + _fz_hb_rand(24);
+    var rows = 1 + _fz_hb_rand(8);
+    var amode = _fz_hb_rand(3);
+    var tp = _fz_hb_rand(5);
+    var dither = _fz_hb_rand(3);
+    var n = w * h * 4;
+    var i = 0;
+    while (i < n) {
+        var v = _fz_hb_rand(256);
+        if (i % 4 == 3) {
+            if (amode == 0) { v = 255; }
+            if (amode == 1) {
+                var pick = _fz_hb_rand(6);
+                v = 255;
+                if (pick == 0) { v = 0; }
+                if (pick == 1) { v = KII_ALPHA_THRESHOLD - 1; }
+                if (pick == 2) { v = KII_ALPHA_THRESHOLD; }
+                if (pick == 3) { v = 200; }
+            }
+            store8(pix + i, v);
+            store8(neg + i, v);
+        } else {
+            store8(pix + i, v);
+            store8(neg + i, 255 - v);
+        }
+        i = i + 1;
+    }
+    var tier = KII_TIER_8;
+    if (tp == 1) { tier = KII_TIER_16; }
+    if (tp == 2) { tier = KII_TIER_256; }
+    if (tp == 3) { tier = KII_TIER_TC; }
+    if (tp == 4) { tier = KII_TIER_NONE; }
+    quant_set_dither(dither);
+    var ps_x[160];
+    var ps_n[160];
+    var ps_o[160];
+    _fz_inv_ps(&ps_x, pix, w, h);
+    _fz_inv_ps(&ps_n, neg, w, h);
+    _fz_inv_ps(&ps_o, pix, w, h);
+    var dw = cols * 2;
+    var dh = rows * 4;
+    var bad = 0;
+    var st_x = 0;
+    var st_n = 0;
+    var st_o = 0;
+    quant_set_tier(KII_TIER_NONE);
+    if (_fz_brl_sample(&ps_x, cols, rows, 1) != 0) { bad = 1; }
+    if (bad == 0) { st_x = brl_prepare(&ps_x); }
+    if (_fz_brl_sample(&ps_n, cols, rows, 0) != 0) { bad = 1; }
+    if (bad == 0) { st_n = brl_prepare(&ps_n); }
+    if (_fz_brl_sample(&ps_o, cols, rows, 0) != 0) { bad = 1; }
+    if (bad == 0) { st_o = brl_prepare(&ps_o); }
+    if (st_x == 0 || st_n == 0 || st_o == 0) { bad = 1; }
+    var cells = cols * rows;
+    if (bad == 0 && _fz_area_ref_k(&ps_o, pix, w, h, dw, dh, BRL_TAPS_X, BRL_TAPS_Y) != 0) { bad = 1; }
+    if (bad == 0 && memeq(load64(st_x + BRL_ST_BITS), load64(st_n + BRL_ST_BITS), cells) == 0) { bad = 1; }
+    if (bad == 0) {
+        var lum = load64(&ps_o + STRUCT_LUMA_PLANE_OFFSET);
+        var mask = load64(&ps_o + STRUCT_ALPHA_MASK_OFFSET);
+        var level = _fz_brl_otsu(lum, mask, dw * dh);
+        var fsp = 0;
+        if (dither == KII_DITHER_FS) {
+            fsp = alloc(dw * dh);
+            var err = alloc(dw * dh * 8);
+            if (fsp == 0 || err == 0) { bad = 1; }
+            else { _fz_brl_fs(lum, mask, dw, dh, fsp, err); }
+        }
+        var bits = load64(st_o + BRL_ST_BITS);
+        var y = 0;
+        while (bad == 0 && y < dh) {
+            var x = 0;
+            while (x < dw) {
+                var got = 0;
+                if ((load8(bits + (y / 4) * cols + x / 2) & brl_dot_bit(x & 1, y & 3)) != 0) { got = 1; }
+                if (got != _fz_brl_ink(lum, mask, dw, x, y, level, fsp)) { bad = 1; }
+                x = x + 1;
+            }
+            y = y + 1;
+        }
+    }
+    var cy = 0;
+    var st_c = 0;
+    if (bad == 0) {
+        quant_set_tier(tier);
+        st_c = brl_prepare(&ps_x);
+        if (st_c == 0) { bad = 1; }
+    }
+    var colour = 1;
+    if (tier == KII_TIER_NONE) { colour = 0; }
+    while (bad == 0 && cy < rows) {
+        quant_set_tier(KII_TIER_NONE);
+        var la = emit_braille_row_buf(st_x, cols, cy, out_a, 0);
+        var lb = emit_braille_row_buf(st_n, cols, cy, out_b, 0);
+        if (la < 0 || la != lb || memeq(out_a, out_b, la) == 0) { bad = 1; }
+        if (bad == 0 && _fz_brl_row_ok(out_a, la, cols, 0) == 0) { bad = 1; }
+        quant_set_tier(tier);
+        var lc = 0;
+        if (bad == 0) { lc = emit_braille_row_buf(st_c, cols, cy, out_b, 0); }
+        if (bad == 0 && (lc < 0 || _fz_brl_row_ok(out_b, lc, cols, colour) == 0)) { bad = 1; }
+        if (bad == 0) { lc = _fz_inv_strip(out_b, lc); }
+        if (bad == 0 && (lc != la || memeq(out_a, out_b, la) == 0)) { bad = 1; }
+        cy = cy + 1;
+    }
+    quant_set_tier(KII_TIER_16);
+    quant_set_dither(KII_DITHER_NONE);
+    downscale_set_invert(0);
+    alloc_reset();                     # the samples, planes, bits and codes are scratch
+    crc32_table = 0;                   # as the decoder surfaces do after a reset
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -1716,6 +1981,14 @@ fn main(): i64 {
         if (fuzz_invert_iter(&area_pix, &inv_neg, &inv_out_a, &inv_out_b) != 0) { inv_bad = inv_bad + 1; }
         inv_iter = inv_iter + 1;
     }
+    # v2.3.0: the Braille lane, on the same buffers (a row is at most 24 cells
+    # x 22 + 5 bytes).
+    var brl_iter = 0;
+    var brl_bad  = 0;
+    while (brl_iter < BRL_FUZZ_ITERS) {
+        if (fuzz_braille_iter(&area_pix, &inv_neg, &inv_out_a, &inv_out_b) != 0) { brl_bad = brl_bad + 1; }
+        brl_iter = brl_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -1798,11 +2071,16 @@ fn main(): i64 {
     vec_push(args_inv, inv_bad);
     fmt_printf("fuzz: %d iterations passed (--invert vs the negative, --color none vs the escapes; bad=%d)\n", args_inv);
 
+    var args_brl = vec_new();
+    vec_push(args_brl, brl_iter);
+    vec_push(args_brl, brl_bad);
+    fmt_printf("fuzz: %d iterations passed (braille lane: sampler, ink rules, negative, escapes; bad=%d)\n", args_brl);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

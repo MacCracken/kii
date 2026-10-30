@@ -488,3 +488,18 @@ The emit surface does not grow.
   is decoded.
 
 The 16th fuzz surface fails a colourless row that is not exactly `cols` glyphs and a LF.
+
+## Amendment — v2.3.0 (the Braille lane)
+
+The emit surface gains the Braille Patterns, `E2 A0..A3 80..BF` (U+2800..U+28FF), drawn by
+`--mode braille` ([ADR 0013](0013-braille-lane.md)). It is still SGR only: one foreground
+escape a cell at most, from the tier's set, and no background.
+- **A cell is at most 22 bytes.** That is a 19-byte truecolour foreground and a 3-byte
+  glyph; row buffers are sized from it (`cols * 22 + 16`).
+- **Reads are bounded as the blocks lane's are.** Each dot reads at most 16 × 8 source
+  pixels, so a cell reads at most 1,024.
+- **Otsu's level is exact integer arithmetic within bounds.** The frame cap gives at most
+  2^23 dots, which keeps every product below 2^62 (`brl_mul_div` forms no wider one).
+
+The 17th fuzz surface fails any row that is not `cols` cells of a space or a Braille
+Pattern, then the reset and LF.

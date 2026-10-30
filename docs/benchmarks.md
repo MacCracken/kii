@@ -576,3 +576,25 @@ The new settings, 2.2.0 only (a quieter host, so not comparable with the table a
 `--invert` gives RAMGON more cells with ink to match (15,693 of 16,000, against 12,976).
 `--color none` quantizes nothing and writes fewer bytes: the logo at `--width 60` is
 1,830 bytes against 2,090.
+
+## v2.3.0 — the Braille lane
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`. CPU per run (user + system), fastest of three
+rounds (five for the 2.2.0 comparison), interleaved:
+
+| Render | blocks | Braille |
+|---|---:|---:|
+| RAMGON, `--width 80` | 207.9 ms | 200.6 ms |
+| RAMGON, `--width 200` | 246.5 ms | 205.7 ms |
+| archlinux-logo, `--width 60` | 6.61 ms | 2.52 ms |
+| archlinux-logo, `--width 200` | 36.16 ms | 6.57 ms |
+
+The ASCII lane at `--width 200` renders the logo in 5.79 ms. On RAMGON at `--width 200` the
+Braille rules cost: `none` (Otsu) 204.8 ms, `ordered` 206.0 ms, `fs` 207.7 ms. The ASCII lane,
+which now reaches the area sampler through `downscale_area_taps`, against 2.2.0: RAMGON at
+`--width 200`, 210.68 → 210.66 ms; the logo, 5.76 → 5.85 ms fastest, both 5.88 ms at the
+median, a delegated frame that never enters the area loop.
+
+**Bytes** at `--width 40` and 16 colours, over the 456 corpus frames that render in every lane:
+half-block 2,249,021, blocks 0.69×, Braille 0.92×, ASCII 0.50×. RAMGON at `--width 80`:
+half-block 7,441, Braille 6,248.

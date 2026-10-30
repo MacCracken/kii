@@ -228,3 +228,10 @@ Over the 472-image corpus, in every tier and dither at `--width 40` and `120`
   planted in the rule, the unit suite and the fuzz surface each catch 13. The 14th is
   equivalent: for a dim colour, no cell leaves the fg and the bg equal to it, so the `█`
   rule's "and the bg does not" never decides.
+
+## Amendment — v2.3.0 (the Braille lane, opt-in)
+
+This ADR remains **Accepted**. The Braille Patterns, which § Decision placed post-v2, ship
+as their own opt-in lane, `--mode braille` ([ADR 0013](0013-braille-lane.md)). Each cell
+is 2 × 4 dots in one colour on the terminal's background. The half-block lane is the
+default and is byte-identical to 2.2.0.

@@ -295,7 +295,18 @@ fn _area_taps_from(tbl, i0, count, n, w, k, unit): i64 {
 }
 
 fn downscale_area_to_rgb(pstruct, dst_w, dst_h): i64 {
+    return downscale_area_taps(pstruct, dst_w, dst_h, KII_AREA_TAPS, KII_AREA_TAPS);
+}
+
+# The area sampler with its tap counts given per axis (v2.3.0): a span of up
+# to `kx` (across) or `ky` (down) pixels is read whole, and a longer one takes
+# that many evenly spaced taps. downscale_area_to_rgb is this at KII_AREA_TAPS
+# both ways. The Braille lane samples each dot at 16 x 8, the density at
+# which the blocks lane reads a cell's 8 x 8 samples (ADR 0013). kx and ky
+# must be at least 1.
+fn downscale_area_taps(pstruct, dst_w, dst_h, kx, ky): i64 {
     if (dst_w <= 0 || dst_h <= 0) { return 0 - 1; }
+    if (kx < 1 || ky < 1) { return 0 - 1; }
 
     var src_w     = load64(pstruct + STRUCT_WIDTH_OFFSET);
     var src_h     = load64(pstruct + STRUCT_HEIGHT_OFFSET);
@@ -317,15 +328,14 @@ fn downscale_area_to_rgb(pstruct, dst_w, dst_h): i64 {
     # plane): at --width 200 on a 256-pixel icon the general loop cost 10 %.
     if (src_w <= dst_w && src_h <= dst_h) { return downscale_to_rgb(pstruct, dst_w, dst_h); }
 
-    var k = KII_AREA_TAPS;
     var out_buf = alloc(dst_w * dst_h * 3);
     var mask = alloc(dst_w * dst_h);
     var lum = alloc(dst_w * dst_h);
-    var xt = alloc(dst_w * (k + 1) * 8);
-    var yt = alloc(dst_h * (k + 1) * 8);
+    var xt = alloc(dst_w * (kx + 1) * 8);
+    var yt = alloc(dst_h * (ky + 1) * 8);
     if (out_buf == 0 || mask == 0 || lum == 0 || xt == 0 || yt == 0) { return 0 - 1; }
-    _area_taps(xt, dst_w, src_w, k, 4);
-    _area_taps(yt, dst_h, src_h, k, src_w * 4);
+    _area_taps(xt, dst_w, src_w, kx, 4);
+    _area_taps(yt, dst_h, src_h, ky, src_w * 4);
     var any_transparent = 0;
 
     var dy = 0;
@@ -333,11 +343,11 @@ fn downscale_area_to_rgb(pstruct, dst_w, dst_h): i64 {
     var mp = mask;
     var lp = lum;
     while (dy < dst_h) {
-        var ye = yt + dy * (k + 1) * 8;
+        var ye = yt + dy * (ky + 1) * 8;
         var ny = load64(ye);
         var dx = 0;
         while (dx < dst_w) {
-            var xe = xt + dx * (k + 1) * 8;
+            var xe = xt + dx * (kx + 1) * 8;
             var nx = load64(xe);
             var sr = 0;
             var sg = 0;

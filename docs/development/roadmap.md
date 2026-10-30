@@ -3,7 +3,7 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.2.0**; 2.3.0 through
+> below has shipped, it should not be here. Current release **v2.3.0**; 2.4.0 through
 > 2.6.0 are pinned below.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
@@ -22,17 +22,6 @@ Two rules hold for every 2.x release:
 - **kii stays environment-blind.** No lane, tier or protocol is picked from `TERM`,
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
-
-## 2.3.0 — the Braille lane (`--mode braille`)
-
-The Braille Patterns block (U+2800..U+28FF) gives 2 × 4 dots per cell in one colour, the
-finest shape of any widely supported glyph set. [ADR 0004](../adr/0004-half-block-floor-glyph.md)
-set it aside as post-v2; it suits line art and one-colour images more than photographs.
-- Reuses the blocks lane's sampler (an 8 × 8 grid per cell reduces to 2 × 4).
-- One foreground colour per cell, the mean of the inked dots; the background is the
-  terminal's default.
-- The threshold between ink and paper is the decision the ADR has to make (a fixed
-  level, the cell's own mean, or an error-diffused one).
 
 ## 2.4.0 — Tier 3: iTerm2 inline images (`--mode iterm`)
 
@@ -121,6 +110,10 @@ others): pixels as six-row bands in up to 256 registers.
   the low bits hid a planted defect from it. Changing the shared generator changes every
   surface's random stream, so the fix should be one release, with each surface re-checked
   against its planted defects.
+- **The Braille lane's level by hand** (`--threshold N` or similar). The lane inks dots at one
+  level per frame, Otsu's ([ADR 0013](../adr/0013-braille-lane.md)), so the same picture at
+  another width, or a set of frames meant to match, may get different levels. A fixed level
+  is the obvious override; whether callers need it is not known.
 - **The directory diagnostic on agnos.** Run under mirshi, the agnos build reports a
   directory as `cannot open file`, not `is a directory, not an image file`: kii recognizes a
   directory by the read's `EISDIR`, and the agnos read error does not carry it (found at
@@ -130,8 +123,9 @@ others): pixels as six-row bands in up to 256 registers.
 ## Not scheduled (outside kii's control)
 
 - **Cross-terminal verification**: Linux console, xterm, Alacritty, kitty, tmux, now for
-  three lanes. The blocks lane needs it most: quadrants (U+2596..U+259F) and the eighths
-  are not in CP437, so a console font may not carry them. It needs a human eye on each
+  four lanes. The blocks and Braille lanes need it most: quadrants (U+2596..U+259F), the
+  eighths and the Braille Patterns are not in CP437, so a console font may not carry them,
+  and how large a font draws a Braille dot decides how dark a cell of dots looks. It needs a human eye on each
   terminal; kii ships byte-stable, so it can land at any time without gating a cut. The
   Linux console can also be read back: `/dev/vcsaN` holds each cell's glyph and attribute,
   which would check 2.1.0's console model against the kernel itself (it needs root).

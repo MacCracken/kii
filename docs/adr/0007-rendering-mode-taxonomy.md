@@ -334,3 +334,19 @@ The new flags, in two later sets of runs:
   a busier host), because more of its cells have ink to match: 15,693 of 16,000, against 12,976.
 - **`--color none`** is faster, since no cell is quantized and fewer bytes are written: RAMGON
   212.2 → 210.6 ms, and the archlinux logo 5.90 → 5.39 ms.
+
+## Amendment — v2.3.0 (a fourth lane)
+
+This ADR remains **Accepted**. `--mode` gains a fourth choice, `braille`
+([ADR 0013](0013-braille-lane.md)): `halfblock | ascii | blocks | braille`, still a cmdit
+enum, default `halfblock`. An unknown `--mode` now reads
+`kii: --mode must be halfblock, ascii, blocks or braille`.
+- **The cell grid is the ASCII and blocks lanes'** (cols × half-block rows). Each cell is
+  2 × 4 dots, sampled through the area sampler at 16 × 8 taps a dot.
+- **The Braille lane draws ink, as the ASCII lane does**, so it takes `--invert` and
+  `--color none` as well. The refusal lines now name both lanes:
+  `kii: --invert applies to --mode ascii or braille only`, and the same for `--color none`.
+  Under `--invert` the dots are exactly those of the image's negative, because the lane
+  reads the same plane 2.2.0's ASCII lane does.
+
+The half-block, ASCII and blocks lanes are byte-identical to 2.2.0.

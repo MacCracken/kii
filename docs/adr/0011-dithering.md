@@ -177,3 +177,19 @@ them that way:
   strictly nearer the mean than the flat colour.
 - **Under `none` no shade is drawn**, so this ADR's promise holds in every lane: `none` maps
   each colour to its nearest on its own.
+
+## Amendment — v2.3.0 (the Braille lane dithers its dots)
+
+This ADR remains **Accepted**. In the Braille lane ([ADR 0013](0013-braille-lane.md))
+`--dither` also decides which dots are inked, a one-bit quantization of each dot's ink:
+- **`none`**: one level for the whole frame (Otsu's), each dot on its own against it.
+- **`ordered`**: the same 4 × 4 Bayer matrix, as a threshold per dot (16m + 8).
+- **`fs`**: Floyd-Steinberg over the dots against 128, with the same weights, the same
+  clamp and the same ×16 integer error as the colour pass.
+
+The cells' colours are dithered as in the other lanes. Two consequences:
+- **In this lane `--dither` changes bytes at `tc` and at `--color none`.** Their colours
+  are not quantized, but the dots still are. § Decision's "at truecolour the flag changes
+  no byte" holds for colour only.
+- **`none` still quantizes each dot on its own.** It is against one level for the frame
+  rather than a fixed 128, so this ADR's promise for `none` holds.

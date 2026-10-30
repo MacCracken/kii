@@ -1,0 +1,23 @@
+Frame: 15 rows of 30 cells, each a space or a Braille Pattern (U+2800..U+28FF),
+ended by a newline: 743 bytes, no ESC byte. With colour (no --color none) it is
+868 bytes: SGR 36 before the first dot of each of the 13 rows that have one,
+and every row's reset. SHA-256 of the
+frame begins 2b769bb6d3aa0b73.
+
+The whole frame (trailing spaces included):
+
+                              
+              ⣸⣇              
+             ⢠⣿⣿⣆             
+            ⢠⣿⣿⣿⣿⡄            
+            ⢿⣿⣿⣿⣿⣿⡄           
+          ⢀⣶⣤⣙⢿⣿⣿⣿⣿⡄          
+         ⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄         
+        ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄        
+       ⢠⣿⣿⣿⣿⣿⡿⠟⠻⢿⣿⣿⣿⣿⣿⡄       
+      ⢠⣿⣿⣿⣿⣿⡏    ⠹⣿⣿⣿⣿⣿⡄      
+     ⣠⣿⣿⣿⣿⣿⣿      ⣿⣿⣿⣿⡿⠿⣆     
+    ⣰⣿⣿⣿⣿⣿⣿⣿      ⣿⣿⣿⣿⣿⣷⣤⡀    
+   ⣰⣿⣿⡿⠿⠛⠉⠁        ⠈⠉⠛⠿⢿⣿⣿⣆   
+  ⡰⠟⠋⠁                  ⠈⠙⠻⢦  
+                              
