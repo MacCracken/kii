@@ -1,0 +1,9 @@
+Frame: 11,738 bytes, one OSC 1337 sequence and a newline. SHA-256 of the frame
+begins dc50da6bf51d891e. It starts (ESC shown as ^[):
+
+  ^[]1337;File=inline=1;size=8746;width=40;height=20;preserveAspectRatio=1:iVBORw0KGgo...
+
+and ends with `=`, BEL (0x07) and LF. Between the `:` and the BEL is base64, which
+decodes to an 8,746-byte PNG: the signature, IHDR (256 x 256, 8-bit RGBA), one IDAT
+and IEND. The logo's own file is a 3,813-byte palette PNG; kii writes its own PNG of
+the decoded pixels instead of sending that file.

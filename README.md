@@ -6,7 +6,7 @@ Cyrius-native equivalent of [`chafa`](https://hpjansson.org/chafa/) / [`jp2a`](h
 
 ## Status
 
-**v2.3.0** (2026-10-29). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, four render lanes, terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64; each release ships a binary for all three (§ Building).
+**v2.4.0** (2026-10-29). Four input formats through the [`chitra`](https://github.com/MacCracken/chitra) substrate, four render lanes and the first image protocol (iTerm2), terminal-fit geometry. Builds on host, on the AGNOS target (`--agnos`), and on aarch64; each release ships a binary for all three (§ Building).
 
 `kii image.png` reads any spec-clean PNG (greyscale / RGB / palette / grey+alpha / RGBA, bit depths 1/2/4/8/16, interlaced or not), a **baseline JPEG** (`kii photo.jpg` — greyscale / YCbCr / RGB, 4:4:4 / 4:2:2 / 4:2:0), a **BMP** (`BI_RGB` 1/4/8/16/24/32 bpp, RLE4/RLE8, BITFIELDS) or a **GIF** (first frame), quantizes to a colour tier (the 16 ANSI colours by default; 8, 256 or 24-bit truecolour on request), optionally dithered, and emits half-block (`▀`) glyphs to stdout sized to the terminal (or, on request, text glyphs, also as dark-on-light or plain text, the full Block Elements set, or Braille dots):
 
@@ -121,7 +121,7 @@ All four arrive from the [`chitra`](https://github.com/MacCracken/chitra) substr
 
 - **Animated GIF beyond frame 1** — kii is a still-frame renderer; chitra decodes the first frame by design (chitra ADR 0005)
 - **Progressive / arithmetic / 12-bit / CMYK JPEG** — rejected cleanly as `unsupported JPEG feature …` (chitra is baseline-only)
-- **Sixel / Kitty / iTerm2 image protocols** — tier 3, pinned to 2.4.0–2.6.0 ([roadmap](docs/development/roadmap.md))
+- **Sixel / Kitty image protocols** — tier 3, pinned to 2.5.0 and 2.6.0 ([roadmap](docs/development/roadmap.md)); iTerm2's shipped at 2.4.0
 
 ## Usage
 
@@ -133,7 +133,7 @@ kii [OPTIONS] <image>
 |---|---|---|
 | `-w, --width <N>` | `0` (match terminal) | Output width in columns. Height is aspect-derived. Capped at 100000; negative values are refused. |
 | `-c, --color <8\|16\|256\|tc\|none>` | `16` | Colour tier. `16` uses the 16 ANSI colours (SGR 30–37 / 90–97), `8` the normal-intensity half only (30–37, for the strictest terminals), `256` the xterm 6×6×6 cube and grey ramp, `tc` 24-bit truecolour. `none` (v2.2.0, `--mode ascii` and `braille` only) writes no escapes at all: glyphs and newlines, for pipes, logs and mail. kii never reads `COLORTERM` or `NO_COLOR`: the tier is what you ask for. |
-| `-m, --mode <M>` | `halfblock` | `halfblock` emits two colours per cell at double vertical resolution (`▀`, `▄`, `█` or a space, whichever needs fewest escapes); `ascii` emits text glyphs chosen by shape; `blocks` (v2.0.0) emits whichever Block Element fits each cell's 8 × 8 samples best, in two colours (needs a font with the quadrants and eighths). `braille` (v2.3.0) emits Braille Patterns, 2 × 4 dots a cell in one colour: the finest shapes, for line art and logos; dots are inked above one level for the whole frame (Otsu's), or dithered under `--dither`. |
+| `-m, --mode <M>` | `halfblock` | `halfblock` emits two colours per cell at double vertical resolution (`▀`, `▄`, `█` or a space, whichever needs fewest escapes); `ascii` emits text glyphs chosen by shape; `blocks` (v2.0.0) emits whichever Block Element fits each cell's 8 × 8 samples best, in two colours (needs a font with the quadrants and eighths). `braille` (v2.3.0) emits Braille Patterns, 2 × 4 dots a cell in one colour: the finest shapes, for line art and logos; dots are inked above one level for the whole frame (Otsu's), or dithered under `--dither`. `iterm` (v2.4.0) sends the picture itself as one iTerm2 inline image (OSC 1337), for iTerm2, WezTerm and other terminals that read that protocol: a PNG kii writes from the decoded pixels, scaled by the terminal into the cell box; it takes no `--color`, `--dither` or `--invert`, and a terminal without the protocol draws nothing. |
 | `-d, --dither <none\|ordered\|fs>` | `none` | Dithering at tiers 8, 16 and 256. `ordered` adds a 4×4 Bayer pattern; `fs` diffuses each pixel's error (Floyd-Steinberg). Both turn bands into a mix of two neighbouring colours, and make the frame larger. No effect at `tc`. In `--mode braille` it also decides which dots are inked, so it applies at `tc` and `none` too. |
 | `-i, --invert` | off | `--mode ascii` and `braille` only (v2.2.0, v2.3.0): dark is ink, for a light terminal. The glyphs are the image's negative's, in the image's own colours; partial alpha sits on white. |
 | `-v, --verbose` | off | Print a dimensions/format summary to **stderr** after the frame. |
@@ -146,6 +146,7 @@ kii --width 120 image.png          # explicit width; height follows the aspect r
 kii --mode ascii image.png         # text-glyph art instead of half-blocks
 kii --mode blocks image.png        # eighths, quadrants and diagonals: finer edges
 kii --mode braille logo.png        # Braille dots, 2 x 4 a cell: line art and logos
+kii --mode iterm photo.jpg         # the picture itself, in iTerm2 or WezTerm
 kii --mode ascii --invert img.png  # dark ink, for a light terminal
 kii --mode ascii --color none img.png > art.txt   # plain text, no escapes
 kii --color 8 image.png            # 8-colour tier for the strictest terminals
@@ -173,7 +174,7 @@ The world prior art (`chafa`) ships every tier from monochrome through 24-bit tr
 
 - **Tier 1 — shipped**: 8/16-color ANSI palette + half-block (`▀`/`▄`) glyph quantization. Historically-correct rendering target for BBS / MUD clients of the early-90s era; maximum terminal compatibility; well-defined floor. Palette quantization landed at v0.5.0, glyph emit at v0.6.0, terminal-size detection at v0.7.0, and the tier was completed at **v1.5.1**, when `--color 8` stopped being a flag that parsed its argument and ignored it.
 - **Tier 2 — shipped**: `--color 256` (the xterm cube and grey ramp) and `--color tc` (24-bit, `\x1b[38;2;R;G;Bm`) landed at **v1.8.0** ([ADR 0010](docs/adr/0010-tier-2-colour-and-emit-encoding.md)); ordered and Floyd-Steinberg dithering (`--dither`, for tiers 8, 16 and 256) at **v1.9.0** ([ADR 0011](docs/adr/0011-dithering.md)).
-- **Tier 3 — future**: Sixel / Kitty / iTerm2 image-protocol direct rendering (skips ASCII art entirely on supporting terminals). Animated GIF / video frame-pipe support.
+- **Tier 3 — in progress**: the image protocols, which skip cells entirely on terminals that read them ([ADR 0014](docs/adr/0014-tier-3-image-protocols.md)). iTerm2 inline images (`--mode iterm`) landed at **v2.4.0**; Kitty and Sixel are pinned to 2.5.0 and 2.6.0. Each is chosen by flag, never detected. Animation stays out of scope: kii sends one still frame.
 
 ## Naming
 
@@ -203,6 +204,7 @@ Per AGNOS `feedback_redesign_dont_reinvent` the convergent shape comes from mult
 | Half-block glyph quantization | `chafa` source `chafa-canvas.c` glyph-selection routines | Various ASCII-art-converter tutorials; Unicode Block Elements block (`U+2580`-`U+259F`) spec |
 | Block Elements lane (`--mode blocks`, v2.0.0) | `chafa`'s `block` symbols: two colours per cell, each region's mean, least error | notcurses' quadrant blitter (per-cell colour pair); the complement choice ADR 0004 noted for `▀`/`▄` |
 | Braille lane (`--mode braille`, v2.3.0) | The Unicode Braille Patterns chart (U+2800..U+28FF: the dot order, dots 1–3 and 7 down the left); Otsu (1979) for the frame's ink level | `drawille` (the 2 × 4 dot canvas), `chafa`'s braille symbols, image-to-Braille tools that threshold and optionally dither (Floyd-Steinberg, ordered) |
+| iTerm2 inline images (`--mode iterm`, v2.4.0) | iTerm2's "Inline Images Protocol" (OSC 1337 `File=`); the PNG specification (W3C, 3rd edition) for the writer, with its adaptive-filter heuristic | iTerm2's `imgcat`, `chafa -f iterm` (the same keys, its own re-encoded image), WezTerm's support for the protocol; RFC 4648 base64 |
 
 ## Building
 
@@ -228,8 +230,8 @@ x86_64 Linux binary named `kii`.
 ### Running the test + bench + fuzz suites
 
 ```sh
-cyrius test                           # 1,101 assertions across 7 suites (cli/quant/render/ascii/blocks/braille/decode)
-cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 17 fuzz surfaces, 8,651,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area/blocks ×2/half-block rows/invert + none/braille)
+cyrius test                           # 1,151 assertions across 8 suites (cli/quant/render/ascii/blocks/braille/iterm/decode)
+cyrius build tests/kii.fcyr build/kii-fuzz && ./build/kii-fuzz   # 18 fuzz surfaces, 8,671,000 iters (arg/path/path-diff/envelope/geom/emit/PNG/JPEG/BMP/GIF/ASCII/area/blocks ×2/half-block rows/invert + none/braille/PNG writer)
 ./scripts/gen-shape-table.sh --check                            # the ASCII glyph table is the generator's output (needs ImageMagick 7 + Liberation Mono)
 cyrius bench tests/kii.bcyr                                     # 13 benches (quantize, end-to-end, ASCII sampling, blocks, decode-latency)
 ```

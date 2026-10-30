@@ -350,3 +350,19 @@ enum, default `halfblock`. An unknown `--mode` now reads
   reads the same plane 2.2.0's ASCII lane does.
 
 The half-block, ASCII and blocks lanes are byte-identical to 2.2.0.
+
+## Amendment — v2.4.0 (a protocol among the modes)
+
+This ADR remains **Accepted**. `--mode` gains `iterm`
+([ADR 0014](0014-tier-3-image-protocols.md)), the first value that is not a cell lane: kii
+sends the picture and the terminal draws it. The enum is
+`halfblock | ascii | blocks | braille | iterm`, and an unknown value reads
+`kii: --mode must be halfblock, ascii, blocks, braille or iterm`.
+- **It shares the cell lanes' geometry**: the same columns and half-block rows give the cell
+  box the terminal draws into.
+- **It takes none of their settings.** `--color`, `--dither` and `--invert` act on cells and
+  glyphs, so `--mode iterm` refuses each one when it is given, even at its default, with
+  `kii: --color does not apply to --mode iterm (the terminal draws the image)` (and
+  likewise for the other two). `cmdit_seen` tells a given flag from a default.
+
+The four cell lanes are byte-identical to 2.3.0.

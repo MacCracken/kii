@@ -503,3 +503,28 @@ escape a cell at most, from the tier's set, and no background.
 
 The 17th fuzz surface fails any row that is not `cols` cells of a space or a Braille
 Pattern, then the reset and LF.
+
+## Amendment — v2.4.0 (the first image protocol)
+
+`--mode iterm` ([ADR 0014](0014-tier-3-image-protocols.md)) writes the first escape that is
+not SGR: one OSC 1337 sequence. This is the re-audit § Alternatives asked of any post-v1
+expansion. The restricted-emit posture holds, for these reasons:
+- **The sequence is kii's own text.** It is a fixed string with four decimal numbers: the
+  payload's size, the cell box, and the aspect flag. No filename or path is sent (`name=` is
+  omitted).
+- **The payload cannot carry a control byte.** It is base64 (`A–Z a–z 0–9 + / =`), and BEL
+  ends the sequence.
+- **The terminal's decoder sees only what kii decoded.** The payload is a PNG kii writes:
+  IHDR, one IDAT and IEND, holding chitra's RGBA8. None of the input's own bytes reach it: no
+  metadata, colour profile, trailing data, second frame or other format. What the terminal
+  parses (macOS ImageIO behind iTerm2, for one) is a minimal PNG whose structure kii chose;
+  only its pixel values come from the input.
+- **The size is bounded.** chitra refuses images past 16.7 M pixels, so the raw rows are
+  under 68 MB. The deflate stream is at most that plus its block overhead, and the text is
+  4/3 of the PNG.
+- **Inputs are refused as in every lane.** A file chitra cannot decode is refused before
+  anything is written. `--color`, `--dither` and `--invert` are refused with this lane
+  rather than ignored.
+
+The 18th fuzz surface checks the PNG writer's chunk structure and every CRC, chitra's
+reading of each PNG back to the same pixels, and base64 against a reference decoder.

@@ -1,0 +1,167 @@
+# tests/iterm.tcyr — Tier 3's first protocol (v2.4.0, ADR 0014): base64, the
+# PNG writer (its chunks, its filter choice, a round trip through chitra), and
+# the OSC 1337 sequence's head and frame.
+
+include "src/iterm.cyr"
+include "lib/assert.cyr"
+
+fn _bytes_are(buf, n, expect): i64 {
+    if (n != strlen(expect)) { return 0; }
+    return memeq(buf, expect, n);
+}
+
+# The be32 at p.
+fn _be32(p): i64 {
+    return (load8(p) << 24) | (load8(p + 1) << 16) | (load8(p + 2) << 8) | load8(p + 3);
+}
+
+fn test_base64() {
+    test_group("v2.4.0 — base64 is RFC 4648's, with padding");
+    var out[64];
+    assert_eq(kii_b64_encode("", 0, &out), 0, "empty -> nothing");
+    var n = kii_b64_encode("f", 1, &out);
+    assert_eq(_bytes_are(&out, n, "Zg=="), 1, "f");
+    n = kii_b64_encode("fo", 2, &out);
+    assert_eq(_bytes_are(&out, n, "Zm8="), 1, "fo");
+    n = kii_b64_encode("foo", 3, &out);
+    assert_eq(_bytes_are(&out, n, "Zm9v"), 1, "foo");
+    n = kii_b64_encode("foob", 4, &out);
+    assert_eq(_bytes_are(&out, n, "Zm9vYg=="), 1, "foob");
+    n = kii_b64_encode("fooba", 5, &out);
+    assert_eq(_bytes_are(&out, n, "Zm9vYmE="), 1, "fooba");
+    n = kii_b64_encode("foobar", 6, &out);
+    assert_eq(_bytes_are(&out, n, "Zm9vYmFy"), 1, "foobar");
+    # All 256 byte values, at once and in pieces of three: the same text.
+    var all[256];
+    var i = 0;
+    while (i < 256) { store8(&all + i, i); i = i + 1; }
+    var one[344];
+    var parts[344];
+    assert_eq(kii_b64_encode(&all, 256, &one), 344, "256 bytes -> 344 characters");
+    assert_eq(_bytes_are(&one, 40, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwd"), 1, "...beginning as RFC 4648 gives");
+    assert_eq(memeq(&one + 332, "+fr7/P3+/w==", 12), 1, "...and ending so: + and / are the last two letters");
+    var o = 0;
+    i = 0;
+    while (i < 256) {
+        var k = 255 - i;
+        if (k > 33) { k = 33; }
+        if (k == 0) { k = 256 - i; }
+        o = o + kii_b64_encode(&all + i, k, &parts + o);
+        i = i + k;
+    }
+    assert_eq(o, 344, "in pieces: the same length");
+    assert_eq(memeq(&one, &parts, 344), 1, "in pieces of a multiple of three: the same text");
+    return 0;
+}
+
+# A 3 x 5 RGBA image whose five rows choose filters 3, 2, 1, 4 and 0, and the
+# filtered stream a reference implementation of the heuristic gives.
+var _T_IMG = "\x50\x03\x03\xfa\x01\xff\x50\x50\x78\x78\x28\x02\x01\x50\x00\xc8\x00\x28\x28\x00\xa0\x78\x28\x50\xfa\xc8\x03\xff\x78\xff\x03\xfa\x78\x03\xc8\xff\x03\xfa\x28\xc8\xfa\xa0\x28\x78\x01\x03\xfa\x50\x00\xa0\x50\xfa\xc8\x50\x03\x03\xfa\x28\x00\x50";
+var _T_FILT = "\x03\x50\x03\x03\xfa\xd9\xfe\x4f\xd3\x78\xf9\x00\xda\x02\xb1\x4d\xfd\xce\xff\x29\xd8\xb0\x28\x00\x00\x4e\x01\xfa\xc8\x03\xff\x7e\x37\x00\xfb\x00\x04\xc5\x05\x04\x09\x32\x25\xc9\xf7\xa1\x00\xb0\x07\x00\x32\xd8\x00\x00\xa0\x50\xfa\xc8\x50\x03\x03\xfa\x28\x00\x50";
+
+fn test_png() {
+    test_group("v2.4.0 — the PNG: signature, IHDR, one IDAT, IEND");
+    var img = _T_IMG;
+    var n = 0;
+    var png = kii_png_encode(img, 3, 5, &n);
+    assert(png != 0, "a 3 x 5 image encodes");
+    assert_eq(_bytes_are(png, 8, "\x89PNG\r\n\x1a\n"), 1, "the signature");
+    assert_eq(_be32(png + 8), 13, "IHDR is 13 bytes");
+    assert_eq(_bytes_are(png + 12, 4, "IHDR"), 1, "IHDR first");
+    assert_eq(_be32(png + 16) * 100 + _be32(png + 20), 305, "3 x 5");
+    assert_eq(memeq(png + 24, "\x08\x06\x00\x00\x00", 5), 1, "8-bit RGBA, deflate, adaptive, no interlace");
+    assert_eq(_be32(png + 29), 0x807156a2, "IHDR's CRC");
+    assert_eq(_bytes_are(png + 37, 4, "IDAT"), 1, "then one IDAT");
+    var zn = _be32(png + 33);
+    assert_eq(n, 8 + 25 + 12 + zn + 12, "and nothing between IDAT and IEND");
+    assert_eq(memeq(png + n - 12, "\x00\x00\x00\x00IEND\xae\x42\x60\x82", 12), 1, "IEND, with its CRC");
+
+    test_group("v2.4.0 — each row takes the filter with the least sum of |byte|");
+    var raw[128];
+    var dn = zlib_decompress(png + 41, zn, &raw, 128);
+    assert_eq(dn, 65, "the IDAT inflates to 5 rows of 1 + 12 bytes");
+    assert_eq(load8(&raw) * 10000 + load8(&raw + 13) * 1000 + load8(&raw + 26) * 100 + load8(&raw + 39) * 10 + load8(&raw + 52),
+      32140, "rows choose Average, Up, Sub, Paeth, None");
+    assert_eq(memeq(&raw, _T_FILT, 65), 1, "the filtered bytes are the reference's");
+
+    # Ties go to the lower filter: on an all-zero image every filter scores 0,
+    # so every row is None.
+    var zeros[64];
+    var zi = 0;
+    while (zi < 64) { store8(&zeros + zi, 0); zi = zi + 1; }
+    var zlen = 0;
+    var zpng = kii_png_encode(&zeros, 4, 4, &zlen);
+    var zraw[128];
+    assert_eq(zlib_decompress(zpng + 41, _be32(zpng + 33), &zraw, 128), 68, "4 rows of 1 + 16 bytes");
+    assert_eq(load8(&zraw) + load8(&zraw + 17) + load8(&zraw + 34) + load8(&zraw + 51), 0, "a tie is None, every row");
+
+    test_group("v2.4.0 — the PNG decodes back to the same pixels (chitra)");
+    var err = 0;
+    var back = chitra_image_decode(png, n, &err);
+    assert(back != 0, "chitra decodes it");
+    assert_eq(chitra_image_width(back) * 100 + chitra_image_height(back), 305, "3 x 5 again");
+    assert_eq(memeq(chitra_image_pixels(back), img, 60), 1, "every byte, alpha included");
+    # A wider image with transparency and a gradient, through every filter.
+    var big = alloc(64 * 48 * 4);
+    var y = 0;
+    while (y < 48) {
+        var x = 0;
+        while (x < 64) {
+            var p = big + (y * 64 + x) * 4;
+            store8(p, x * 4); store8(p + 1, y * 5); store8(p + 2, (x * y) & 255);
+            var a = 255;
+            if ((x + y) % 7 == 0) { a = 0; }
+            if ((x * 3 + y) % 11 == 0) { a = 127; }
+            store8(p + 3, a);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    png = kii_png_encode(big, 64, 48, &n);
+    back = chitra_image_decode(png, n, &err);
+    assert(back != 0, "a 64 x 48 gradient with alpha decodes");
+    assert_eq(memeq(chitra_image_pixels(back), big, 64 * 48 * 4), 1, "...to the same pixels");
+
+    test_group("v2.4.0 — kii_png_encode refuses what it cannot write");
+    assert_eq(kii_png_encode(0, 3, 5, &n), 0, "no pixels");
+    assert_eq(n, 0, "...and the length is 0");
+    assert_eq(kii_png_encode(img, 0, 5, &n), 0, "a zero width");
+    assert_eq(kii_png_encode(img, 3, 70000, &n), 0, "past PNG's practical 65535 a side (chitra's own limit)");
+    return 0;
+}
+
+fn test_osc() {
+    test_group("v2.4.0 — the OSC 1337 head");
+    var head[128];
+    var n = iterm_head(&head, 8746, 40, 20);
+    assert_eq(_bytes_are(&head, n, "\x1b]1337;File=inline=1;size=8746;width=40;height=20;preserveAspectRatio=1:"), 1,
+      "inline, the PNG's size, the cell box, the aspect kept");
+    n = iterm_head(&head, 0, 1, 1);
+    assert_eq(_bytes_are(&head, n, "\x1b]1337;File=inline=1;size=0;width=1;height=1;preserveAspectRatio=1:"), 1,
+      "the smallest box");
+
+    test_group("v2.4.0 — emit_iterm refuses an image it does not have");
+    var ps[160];
+    var i = 0;
+    while (i < 160) { store64(&ps + i, 0); i = i + 8; }
+    assert_eq(emit_iterm(&ps, 40, 20), 0 - 1, "no decoded pixels: -1");
+    store64(&ps + STRUCT_PIXELS_BUF_OFFSET, _T_IMG);
+    store64(&ps + STRUCT_WIDTH_OFFSET, 3);
+    store64(&ps + STRUCT_HEIGHT_OFFSET, 5);
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 59);
+    assert_eq(emit_iterm(&ps, 40, 20), 0 - 1, "a pixel buffer short of w x h x 4: -1");
+    store64(&ps + STRUCT_PIXELS_SIZE_OFFSET, 60);
+    assert_eq(emit_iterm(&ps, 0, 20), 0 - 1, "no columns: -1");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_base64();
+    test_png();
+    test_osc();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(SYS_EXIT, exit_code);

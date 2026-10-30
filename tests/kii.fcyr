@@ -49,6 +49,7 @@ include "src/emit.cyr"
 include "src/ascii.cyr"
 include "src/blocks.cyr"
 include "src/braille.cyr"
+include "src/iterm.cyr"
 
 # Iteration counts.
 #
@@ -83,6 +84,7 @@ var BLK_FRAME_FUZZ_ITERS  = 20000;     # v2.0.0 — whole blocks frames, pad dif
 var HB_FUZZ_ITERS         = 200000;    # v2.1.0 — half-block rows decoded back to their colours
 var INV_FUZZ_ITERS        = 50000;     # v2.2.0 — --invert against the negative, --color none against the escapes
 var BRL_FUZZ_ITERS        = 30000;     # v2.3.0 — the Braille lane: sampler, ink rules, negative, escapes
+var PNG_OUT_FUZZ_ITERS    = 20000;     # v2.4.0 — the PNG writer through chitra, and base64
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -1630,6 +1632,167 @@ fn fuzz_braille_iter(pix, neg, out_a, out_b): i64 {
     return 0;
 }
 
+# ---- v2.4.0 PNG-writer / iTerm2 fuzz surface -----------------------
+# Each iteration builds a random RGBA8 image (1..48 a side; noise, a gradient
+# across or down with noise, or flat blocks; alpha all opaque, from the
+# threshold's neighbourhood, or any byte), writes it with kii_png_encode, and
+# checks:
+#   - the chunks: the signature, IHDR (the size, 8-bit RGBA, no interlace),
+#     one IDAT, IEND, each with a correct CRC-32 and nothing after IEND;
+#   - chitra decodes the PNG to the same size and every same byte;
+#   - base64 of the PNG written in random pieces of a multiple of three is the
+#     one-shot text, and decodes (by a reference here) back to the PNG.
+# Draws use bits 16 and up of _fuzz_rand. It runs after every older surface.
+
+# The 6-bit value of base64 character ch, or -1.
+fn _fz_b64_val(ch): i64 {
+    if (ch >= 65 && ch <= 90) { return ch - 65; }
+    if (ch >= 97 && ch <= 122) { return ch - 71; }
+    if (ch >= 48 && ch <= 57) { return ch + 4; }
+    if (ch == 43) { return 62; }
+    if (ch == 47) { return 63; }
+    return 0 - 1;
+}
+
+# Decode n characters of padded base64 at `src` into `dst`. Returns the bytes
+# written, or -1 on a malformed text.
+fn _fz_b64_decode(src, n, dst): i64 {
+    if (n % 4 != 0) { return 0 - 1; }
+    var i = 0;
+    var o = 0;
+    while (i < n) {
+        var c0 = _fz_b64_val(load8(src + i));
+        var c1 = _fz_b64_val(load8(src + i + 1));
+        if (c0 < 0 || c1 < 0) { return 0 - 1; }
+        var p2 = load8(src + i + 2);
+        var p3 = load8(src + i + 3);
+        store8(dst + o, (c0 << 2) | (c1 >> 4));
+        o = o + 1;
+        if (p2 == 61) {
+            if (p3 != 61 || i + 4 != n) { return 0 - 1; }
+        } else {
+            var c2 = _fz_b64_val(p2);
+            if (c2 < 0) { return 0 - 1; }
+            store8(dst + o, ((c1 & 15) << 4) | (c2 >> 2));
+            o = o + 1;
+            if (p3 == 61) {
+                if (i + 4 != n) { return 0 - 1; }
+            } else {
+                var c3 = _fz_b64_val(p3);
+                if (c3 < 0) { return 0 - 1; }
+                store8(dst + o, ((c2 & 3) << 6) | c3);
+                o = o + 1;
+            }
+        }
+        i = i + 4;
+    }
+    return o;
+}
+
+fn _fz_be32(p): i64 {
+    return (load8(p) << 24) | (load8(p + 1) << 16) | (load8(p + 2) << 8) | load8(p + 3);
+}
+
+# 0 if the n bytes at png are the signature, IHDR for w x h 8-bit RGBA, one
+# IDAT and IEND, each chunk's CRC right and nothing after IEND; else -1.
+fn _fz_png_chunks_ok(png, n, w, h): i64 {
+    if (n < 8 + 25 + 12 + 12) { return 0 - 1; }
+    if (memeq(png, "\x89PNG\r\n\x1a\n", 8) == 0) { return 0 - 1; }
+    crc32_init_table();
+    var pos = 8;
+    var k = 0;
+    while (k < 3) {
+        if (pos + 12 > n) { return 0 - 1; }
+        var len = _fz_be32(png + pos);
+        if (pos + 12 + len > n) { return 0 - 1; }
+        var want = "IHDR";
+        if (k == 1) { want = "IDAT"; }
+        if (k == 2) { want = "IEND"; }
+        if (memeq(png + pos + 4, want, 4) == 0) { return 0 - 1; }
+        if (crc32(png + pos + 4, len + 4) != _fz_be32(png + pos + 8 + len)) { return 0 - 1; }
+        if (k == 0) {
+            if (len != 13 || _fz_be32(png + pos + 8) != w || _fz_be32(png + pos + 12) != h) { return 0 - 1; }
+            if (memeq(png + pos + 16, "\x08\x06\x00\x00\x00", 5) == 0) { return 0 - 1; }
+        }
+        if (k == 2 && len != 0) { return 0 - 1; }
+        pos = pos + 12 + len;
+        k = k + 1;
+    }
+    if (pos != n) { return 0 - 1; }
+    return 0;
+}
+
+fn fuzz_png_out_iter(pix): i64 {
+    var w = 1 + _fz_hb_rand(48);
+    var h = 1 + _fz_hb_rand(48);
+    var kind = _fz_hb_rand(4);
+    var amode = _fz_hb_rand(3);
+    var y = 0;
+    while (y < h) {
+        var x = 0;
+        while (x < w) {
+            var p = pix + (y * w + x) * 4;
+            var c = 0;
+            while (c < 3) {
+                var v = _fz_hb_rand(256);
+                if (kind == 1) { v = (x * 5 + c * 40 + _fz_hb_rand(9)) & 255; }
+                if (kind == 2) { v = (y * 5 + c * 40 + _fz_hb_rand(9)) & 255; }
+                if (kind == 3) { v = ((x / 8) * 70 + (y / 8) * 30 + c * 50) & 255; }
+                store8(p + c, v);
+                c = c + 1;
+            }
+            var a = 255;
+            if (amode == 1) {
+                var pick = _fz_hb_rand(6);
+                if (pick == 0) { a = 0; }
+                if (pick == 1) { a = KII_ALPHA_THRESHOLD - 1; }
+                if (pick == 2) { a = KII_ALPHA_THRESHOLD; }
+                if (pick == 3) { a = 200; }
+            }
+            if (amode == 2) { a = _fz_hb_rand(256); }
+            store8(p + 3, a);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var bad = 0;
+    var n = 0;
+    var png = kii_png_encode(pix, w, h, &n);
+    if (png == 0) { bad = 1; }
+    if (bad == 0 && _fz_png_chunks_ok(png, n, w, h) != 0) { bad = 1; }
+    if (bad == 0) {
+        var err = 0;
+        var img = chitra_image_decode(png, n, &err);
+        if (img == 0) { bad = 1; }
+        else {
+            if (chitra_image_width(img) != w || chitra_image_height(img) != h) { bad = 1; }
+            if (bad == 0 && memeq(chitra_image_pixels(img), pix, w * h * 4) == 0) { bad = 1; }
+        }
+    }
+    if (bad == 0) {
+        var tn = ((n + 2) / 3) * 4;
+        var one = alloc(tn);
+        var parts = alloc(tn);
+        var back = alloc(n + 3);
+        if (one == 0 || parts == 0 || back == 0) { bad = 1; }
+        if (bad == 0 && kii_b64_encode(png, n, one) != tn) { bad = 1; }
+        var i = 0;
+        var o = 0;
+        while (bad == 0 && i < n) {
+            var k = 3 * (1 + _fz_hb_rand(400));
+            if (k > n - i) { k = n - i; }
+            o = o + kii_b64_encode(png + i, k, parts + o);
+            i = i + k;
+        }
+        if (bad == 0 && (o != tn || memeq(one, parts, tn) == 0)) { bad = 1; }
+        if (bad == 0 && (_fz_b64_decode(one, tn, back) != n || memeq(back, png, n) == 0)) { bad = 1; }
+    }
+    alloc_reset();                     # the PNG, its text and the decode are scratch
+    crc32_table = 0;                   # as the decoder surfaces do after a reset
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -1989,6 +2152,13 @@ fn main(): i64 {
         if (fuzz_braille_iter(&area_pix, &inv_neg, &inv_out_a, &inv_out_b) != 0) { brl_bad = brl_bad + 1; }
         brl_iter = brl_iter + 1;
     }
+    # v2.4.0: the PNG writer and base64 (an image is at most 48 x 48 x 4 bytes).
+    var pout_iter = 0;
+    var pout_bad  = 0;
+    while (pout_iter < PNG_OUT_FUZZ_ITERS) {
+        if (fuzz_png_out_iter(&area_pix) != 0) { pout_bad = pout_bad + 1; }
+        pout_iter = pout_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -2076,11 +2246,16 @@ fn main(): i64 {
     vec_push(args_brl, brl_bad);
     fmt_printf("fuzz: %d iterations passed (braille lane: sampler, ink rules, negative, escapes; bad=%d)\n", args_brl);
 
+    var args_pout = vec_new();
+    vec_push(args_pout, pout_iter);
+    vec_push(args_pout, pout_bad);
+    fmt_printf("fuzz: %d iterations passed (PNG writer through chitra, base64 round trip; bad=%d)\n", args_pout);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad + pout_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

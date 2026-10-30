@@ -3,8 +3,8 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.3.0**; 2.4.0 through
-> 2.6.0 are pinned below.
+> below has shipped, it should not be here. Current release **v2.4.0**; 2.5.0 and 2.6.0
+> are pinned below.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
@@ -23,22 +23,13 @@ Two rules hold for every 2.x release:
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
 
-## 2.4.0 — Tier 3: iTerm2 inline images (`--mode iterm`)
-
-The first image protocol, and the smallest: OSC 1337 `File=` with the image's own bytes,
-base64-encoded, sized in cells. iTerm2 (and WezTerm, which reads the same protocol) decode
-PNG, JPEG, GIF and BMP themselves, so kii sends the file it read rather than re-encoding.
-- An ADR for Tier 3 as a whole: how a protocol is chosen (by flag, never by detection),
-  what a protocol lane promises when the terminal ignores it (nothing: no fallback inside
-  one run), and how cell sizing maps to each protocol.
-- The decoded image still goes through chitra, so a file kii cannot decode is refused
-  exactly as in the other lanes.
-
 ## 2.5.0 — Tier 3: the Kitty graphics protocol (`--mode kitty`)
 
-APC `_G` transmissions of the decoded RGBA8 (`f=32`), base64 in 4096-byte chunks, placed
-over the frame's cells (`c=`, `r=`). No encoder is needed. Transparency survives, which no
-cell lane can show.
+APC `_G` transmissions of the decoded image, base64 in 4096-byte chunks, placed over the
+frame's cells (`c=`, `r=`), under [ADR 0014](../adr/0014-tier-3-image-protocols.md)'s rules.
+- The payload is 2.5.0's to measure. Raw RGBA8 (`f=32`) needs no encoder but is the largest;
+  `o=z` compresses it with sankoch's zlib; and the PNG writer 2.4.0 added gives `f=100`.
+- As in the iTerm2 lane, the terminal sees only pixels kii decoded, with their transparency.
 
 ## 2.6.0 — Tier 3: Sixel (`--mode sixel`)
 
@@ -110,6 +101,14 @@ others): pixels as six-row bands in up to 256 registers.
   the low bits hid a planted defect from it. Changing the shared generator changes every
   surface's random stream, so the fix should be one release, with each surface re-checked
   against its planted defects.
+- **iTerm2 images inside tmux.** tmux drops an OSC it does not know. iTerm2 3.5's
+  `MultipartFile` form works in its tmux integration, and a DCS-wrapped passthrough works where
+  tmux's `allow-passthrough` is on. kii sends the single `File=` form and does not know when it
+  is inside tmux, so either would be a flag (ADR 0014).
+- **The image protocols at the cell box's pixel size.** `--mode iterm` sends the decoded image
+  at its own resolution, and the terminal scales it; a 1-megapixel image costs about 0.65 s to
+  write. With the cell's pixel size (§ Gated on upstream, darshana) kii could send no more pixels
+  than the box shows.
 - **The Braille lane's level by hand** (`--threshold N` or similar). The lane inks dots at one
   level per frame, Otsu's ([ADR 0013](../adr/0013-braille-lane.md)), so the same picture at
   another width, or a set of frames meant to match, may get different levels. A fixed level

@@ -68,7 +68,7 @@ Options:
   -w, --width <int>	output width in columns (0 = match terminal)
   -c, --color <8|16|256|tc|none>	colour tier (none: ASCII or Braille glyphs only) (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
-  -m, --mode <halfblock|ascii|blocks|braille>	render mode (default: halfblock)
+  -m, --mode <halfblock|ascii|blocks|braille|iterm>	render mode (default: halfblock)
   -d, --dither <none|ordered|fs>	dithering (default: none)
   -i, --invert	ASCII and Braille lanes: dark is ink, for light backgrounds
 
@@ -82,6 +82,7 @@ Examples:
   kii --mode ascii image.png                 # text-glyph art (shape-vector, colored)
   kii --mode blocks image.png                # every Block Element: 8x8 shapes, 2 colours a cell
   kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour
+  kii --mode iterm photo.jpg                 # the picture itself, as an iTerm2 / WezTerm image
   kii --mode ascii --invert image.png        # dark is ink, for a light terminal
   kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
@@ -120,7 +121,7 @@ Examples:
   kii does not read `COLORTERM`, `TERM` or `NO_COLOR`: the tier is what
   you pass. Within a row, an escape is written only when the colour
   changes, so a tier-16 frame is far smaller than it was before v1.8.0.
-- **`--mode halfblock|ascii|blocks|braille`** (`-m`) — The render lane.
+- **`--mode halfblock|ascii|blocks|braille|iterm`** (`-m`) — The render lane, or (`iterm`) an image protocol.
   - `halfblock` (the default) draws every cell in two colours, one per
     half. Since v2.1.0 a cell is `▀` or `▄` (the same two colours either
     way round), or a space or `█` when both halves are one colour,
@@ -151,6 +152,17 @@ Examples:
     ordered` or `fs` the dots are dithered instead, which shows tone.
     Like the ASCII lane it reads light as ink, and takes `--invert`
     and `--color none`. The Linux console's CP437 fonts have no Braille.
+  - `iterm` (since v2.4.0, [ADR 0014](../adr/0014-tier-3-image-protocols.md))
+    is not a cell lane: it sends the picture itself, as one iTerm2
+    inline image (OSC 1337), and the terminal draws it in full colour
+    and resolution, with its transparency. iTerm2 and WezTerm read the
+    protocol. The image is a PNG kii writes from the pixels it decoded,
+    never the file's own bytes, scaled by the terminal into the same cell
+    box the other lanes fill. It takes no `--color`, `--dither` or
+    `--invert`. A terminal that does not know the protocol, the Linux
+    console included, draws nothing, and kii does not fall back: run a
+    cell lane instead. Inside tmux the sequence is dropped unless tmux
+    passes it through, which kii does not arrange.
 - **`--dither none|ordered|fs`** (`-d`) — Dithering, since v1.9.0
   ([ADR 0011](../adr/0011-dithering.md)). The default `none` maps each
   pixel to its nearest colour, so a gradient becomes flat bands.
@@ -285,7 +297,8 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: --color none applies to --mode ascii or braille only` | `--color none` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --invert applies to --mode ascii or braille only` | `--invert` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
-| `kii: --mode must be halfblock, ascii, blocks or braille` | Any other `--mode` value |
+| `kii: --mode must be halfblock, ascii, blocks, braille or iterm` | Any other `--mode` value |
+| `kii: --color does not apply to --mode iterm (the terminal draws the image)` | `--color`, `--dither` or `--invert` (each has its line) given with `--mode iterm`, even at its default (since v2.4.0) |
 | `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |
 | `kii: missing image path` | No path given |
 | `kii: too many arguments (expected one image path)` | More than one path |

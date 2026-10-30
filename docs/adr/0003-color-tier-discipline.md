@@ -186,3 +186,11 @@ the emit rework, which changes every frame's bytes and so rides the same release
 pointed to ADR 0002 "§ Tier-3 expansions". ADR 0002 has no such section; the relevant text
 is its Sixel / Kitty alternative and its note that post-v1 expansions need a re-audit. Both
 citations were corrected in place.
+
+## Amendment — v2.4.0 (tier 3 opens)
+
+This ADR remains **Accepted**. Tier 3, the image protocols, starts at 2.4.0 with iTerm2
+inline images (`--mode iterm`); Kitty and Sixel are pinned to 2.5.0 and 2.6.0. How a
+protocol is chosen, what it promises, and what it sends are
+[ADR 0014](0014-tier-3-image-protocols.md)'s. The tier-1 floor is unchanged: a protocol
+is chosen only by flag, and `kii image.png` is still the half-block lane at 16 colours.

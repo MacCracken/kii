@@ -4,6 +4,80 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-29
+
+**Tier 3 opens: iTerm2 inline images, `--mode iterm`**
+([ADR 0014](docs/adr/0014-tier-3-image-protocols.md)). kii sends the picture itself as one
+OSC 1337 sequence, and the terminal draws it: true colour, full resolution and real
+transparency, in iTerm2, WezTerm and other terminals that read the protocol. The four cell
+lanes are byte-identical to 2.3.0 (6,608 of 6,608 corpus cases).
+
+### Added
+
+- **`--mode iterm`** writes `ESC ] 1337 ; File=inline=1;size=N;width=C;height=R;preserveAspectRatio=1 :`,
+  the payload's base64, BEL and a newline.
+  - **The payload is a PNG kii writes from the decoded pixels**, never the file it read: IHDR
+    (8-bit RGBA), one IDAT and IEND, with adaptive filters and sankoch's zlib (`src/png.cyr`).
+    The user chose this on 2026-10-29. So the terminal's decoder sees only a minimal PNG of
+    what chitra decoded, with no metadata, colour profile, trailing data or second GIF frame.
+  - **The box is the cell lanes'**: their columns and rows, with the aspect ratio kept, so
+    the terminal draws the largest undistorted image that fits.
+  - **Chosen by flag only.** kii does not detect the terminal, and does not fall back. A
+    terminal without the protocol draws nothing; the Linux console swallows the sequence
+    (`vt.c`), and tmux drops it.
+  - **`--color`, `--dither` and `--invert` are refused** with it whenever given, at their
+    defaults too (exit 2): `kii: --color does not apply to --mode iterm (the terminal draws
+    the image)`.
+  - `--verbose` reports `→ iTerm2 inline image (N-byte PNG)`.
+- **Example 06**: the Arch logo as an iTerm2 image, and how to check its PNG without such a
+  terminal.
+
+### Changed
+
+- An unknown `--mode` reads `kii: --mode must be halfblock, ascii, blocks, braille or iterm`.
+
+### Measured (472-image corpus)
+
+- **Structure.** All 942 iTerm2 cases match the half-block lane's exit code and stderr: 911
+  frames and 31 refusals. Every frame is exactly the head, strict base64, BEL and LF, with
+  the half-block frame's box.
+- **ImageMagick reads all 456 PNGs** as clean 8-bit RGBA.
+- **Pixels.**
+  - Every PNG draws byte-identical frames to its original in kii's own lanes.
+  - For the 425 images ImageMagick decodes as chitra does, its pixels of kii's PNG are its
+    pixels of the original.
+- **Size against the file as read**: BMP 0.08×, GIF 0.63×, PNG 1.01×, JPEG 5.29×.
+- **CPU**, most of it the PNG encode (zlib 520 ms and filters 117 ms on RAMGON):
+  - RAMGON: 881 ms, against 201 ms in the half-block lane;
+  - a 4.5-megapixel JPEG: 3.1 s;
+  - the archlinux logo: 13 ms.
+- **Not seen on a live terminal**: none that reads the protocol is installed here. The
+  sequence follows iTerm2's documentation and matches chafa's `-f iterm` keys.
+
+### Tests
+
+- **1,151 assertions**, up from 1,101.
+  - A new suite, `tests/iterm.tcyr` (41): RFC 4648 base64; the PNG's chunks and CRCs; its
+    filter choice against a reference on rows that take all five filters; ties; the round
+    trip through chitra; the OSC head; the refusals.
+  - cli 232 → 244: `--mode iterm`, each refusal, `cmdit_seen`.
+- **An 18th fuzz surface** (20,000 iterations, 8,671,000 in all).
+  - Each random image's PNG is checked chunk by chunk, CRC by CRC.
+  - chitra must read it back to the same pixels.
+  - Its base64, written in random pieces, is checked against a reference decoder.
+- Of 18 planted defects, the unit suite catches 17 and the fuzz surface 12 (between them all
+  18).
+- `scripts/check-builds-agree.sh` gains an iTerm2 lane and three CLI cases: 221 → 233.
+
+### Documentation
+
+- **ADR 0014**, Tier 3: how a protocol is chosen, what it promises where it is missing, how
+  each sizes to the cell box, and the iTerm2 sequence and its PNG.
+- ADR 0002 is amended: the first non-SGR escape, and why the restricted-emit posture holds.
+  ADR 0003 records that tier 3 has opened, and ADR 0007 gains a protocol among the modes.
+- The roadmap's 2.4.0 section is removed. 2.5.0 (Kitty) now weighs raw RGBA against the PNG
+  writer. New candidates: iTerm2 inside tmux, and protocols at the box's pixel size.
+
 ## [2.3.0] - 2026-10-29
 
 **A fourth lane: Braille, `--mode braille`**

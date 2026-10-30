@@ -1,0 +1,133 @@
+# iterm.cyr — Tier 3's first protocol: iTerm2 inline images (`--mode iterm`,
+# v2.4.0, ADR 0014).
+#
+# One OSC 1337 sequence holds the whole image, and the terminal draws it:
+#
+#     ESC ] 1337 ; File=inline=1;size=N;width=C;height=R;preserveAspectRatio=1 :
+#         <base64 of a PNG> BEL LF
+#
+#   - The payload is a PNG kii writes from chitra's decoded RGBA8 (png.cyr),
+#     never the input's own bytes, so the terminal's decoder sees nothing kii
+#     did not decode (the user's choice, 2026-10-29). Alpha is sent as it is.
+#   - `size` is the PNG's length in bytes (iTerm2 uses it for its progress
+#     indicator); no `name` is sent, so the path never leaves kii.
+#   - `width` and `height` are the cell box kii's geometry gives every lane:
+#     the columns, and the rows at kii's 2:1 cell assumption. With
+#     preserveAspectRatio=1 the terminal draws the largest undistorted image
+#     that fits the box, so a terminal whose cells are not 2:1 still draws it
+#     unstretched, filling the box one way.
+#   - BEL ends the sequence, as iTerm2's own imgcat and chafa write it (ST is
+#     allowed too), and a newline follows.
+# One sequence, not iTerm2 3.5's MultipartFile: every terminal that reads the
+# protocol (iTerm2, WezTerm and others) takes the single form.
+# Multi-source: iTerm2's "Inline Images Protocol" page, its imgcat script, and
+# chafa's `-f iterm` output; RFC 4648 for base64.
+
+include "src/image.cyr"
+include "src/emit.cyr"        # _kii_write_all
+include "src/png.cyr"
+
+var _B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+# Base64 (RFC 4648 § 4, with padding) of the n bytes at `src` into `dst`.
+# Returns the bytes written, 4 * ceil(n / 3).
+fn kii_b64_encode(src, n, dst): i64 {
+    var a = _B64_ALPHABET;
+    var i = 0;
+    var o = 0;
+    while (i + 3 <= n) {
+        var v = (load8(src + i) << 16) | (load8(src + i + 1) << 8) | load8(src + i + 2);
+        store8(dst + o,     load8(a + ((v >> 18) & 63)));
+        store8(dst + o + 1, load8(a + ((v >> 12) & 63)));
+        store8(dst + o + 2, load8(a + ((v >> 6) & 63)));
+        store8(dst + o + 3, load8(a + (v & 63)));
+        i = i + 3;
+        o = o + 4;
+    }
+    var left = n - i;
+    if (left > 0) {
+        var w = load8(src + i) << 16;
+        if (left == 2) { w = w | (load8(src + i + 1) << 8); }
+        store8(dst + o,     load8(a + ((w >> 18) & 63)));
+        store8(dst + o + 1, load8(a + ((w >> 12) & 63)));
+        if (left == 2) { store8(dst + o + 2, load8(a + ((w >> 6) & 63))); }
+        else { store8(dst + o + 2, 61); }               # '='
+        store8(dst + o + 3, 61);
+        o = o + 4;
+    }
+    return o;
+}
+
+# Append the cstring `s` at buf + pos. Returns the new pos.
+fn _iterm_put(buf, pos, s): i64 {
+    var n = strlen(s);
+    memcpy(buf + pos, s, n);
+    return pos + n;
+}
+
+# Append the decimal of v >= 0. Returns the new pos.
+fn _iterm_num(buf, pos, v): i64 {
+    var t[24];
+    var n = fmt_int_buf(v, &t);
+    memcpy(buf + pos, &t, n);
+    return pos + n;
+}
+
+# The sequence's head, up to and including the ':' before the payload, for a
+# payload of `size` bytes drawn in a cols x rows cell box, into `buf` (at
+# least 128 bytes). Returns its length.
+fn iterm_head(buf, size, cols, rows): i64 {
+    var pos = _iterm_put(buf, 0, "\x1b]1337;File=inline=1;size=");
+    pos = _iterm_num(buf, pos, size);
+    pos = _iterm_put(buf, pos, ";width=");
+    pos = _iterm_num(buf, pos, cols);
+    pos = _iterm_put(buf, pos, ";height=");
+    pos = _iterm_num(buf, pos, rows);
+    return _iterm_put(buf, pos, ";preserveAspectRatio=1:");
+}
+
+# Base64 is written in pieces of ITERM_CHUNK input bytes (a multiple of 3, so
+# only the last piece pads): 48 KiB in, 64 KiB out.
+var ITERM_CHUNK = 49152;
+
+# The whole frame for `png` (n bytes) in a cols x rows box, to fd 1.
+# Returns 0, -1 if a buffer cannot be allocated, or -2 if a write failed.
+fn iterm_write(png, n, cols, rows): i64 {
+    var head[128];
+    var hn = iterm_head(&head, n, cols, rows);
+    if (_kii_write_all(1, &head, hn) != 0) { return 0 - 2; }
+    var out = alloc(ITERM_CHUNK / 3 * 4);
+    if (out == 0) { return 0 - 1; }
+    var i = 0;
+    while (i < n) {
+        var k = n - i;
+        if (k > ITERM_CHUNK) { k = ITERM_CHUNK; }
+        var on = kii_b64_encode(png + i, k, out);
+        if (_kii_write_all(1, out, on) != 0) { return 0 - 2; }
+        i = i + k;
+    }
+    var tail[8];
+    store8(&tail, 7);                     # BEL ends the sequence
+    store8(&tail + 1, 10);
+    if (_kii_write_all(1, &tail, 2) != 0) { return 0 - 2; }
+    return 0;
+}
+
+# The PNG's length in bytes after emit_iterm, for --verbose.
+var _iterm_png_len = 0;
+
+# emit_iterm — the decoded image in pstruct as one iTerm2 inline image in a
+# cols x rows cell box. Returns 0, -1 if the image is missing or the PNG
+# cannot be written, or -2 if a write to stdout failed.
+fn emit_iterm(pstruct, cols, rows): i64 {
+    var pixels = load64(pstruct + STRUCT_PIXELS_BUF_OFFSET);
+    var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
+    var h = load64(pstruct + STRUCT_HEIGHT_OFFSET);
+    if (pixels == 0 || w <= 0 || h <= 0 || cols <= 0 || rows <= 0) { return 0 - 1; }
+    if (load64(pstruct + STRUCT_PIXELS_SIZE_OFFSET) < w * h * 4) { return 0 - 1; }
+    var n = 0;
+    var png = kii_png_encode(pixels, w, h, &n);
+    if (png == 0) { return 0 - 1; }
+    _iterm_png_len = n;
+    return iterm_write(png, n, cols, rows);
+}

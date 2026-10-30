@@ -598,3 +598,31 @@ median, a delegated frame that never enters the area loop.
 **Bytes** at `--width 40` and 16 colours, over the 456 corpus frames that render in every lane:
 half-block 2,249,021, blocks 0.69×, Braille 0.92×, ASCII 0.50×. RAMGON at `--width 80`:
 half-block 7,441, Braille 6,248.
+
+## v2.4.0 — iTerm2 inline images
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`, shared with other work (load ~2.4). CPU per run
+(user + system), fastest of three rounds, `--width 80`:
+
+| Image | half-block | `--mode iterm` |
+|---|---:|---:|
+| archlinux-logo, 256² | 1.94 ms | 13.2 ms |
+| RAMGON, 1152 × 925 | 200.7 ms | 880.9 ms |
+| background.jpg, 2592 × 1754 | 565.1 ms | 3,140.5 ms |
+
+The PNG encode is the difference. On RAMGON the filter pass takes 117 ms (318 ms in a first draft
+that called a function per byte) and sankoch's `zlib_compress` 520 ms at level 6.
+
+| zlib level | ms | bytes |
+|---:|---:|---:|
+| 1 | 228 | 2,531,767 |
+| 2–3 | 479–485 | 2,432,115 |
+| 4–6 | 520–533 | 1,858,662 |
+| 7–8 | 690–695 | 1,838,049 |
+| 9 | 907 | 1,825,414 |
+
+Level 6 is the default: smaller than RAMGON's own file (1,973,484 bytes). The half-block lane is
+unchanged against 2.3.0 (RAMGON 204.1 → 206.1 ms on the busy host, within its noise).
+
+**Bytes**, kii's PNG against the file as read, over the corpus: BMP 0.08×, GIF 0.63×, PNG 1.01×,
+JPEG 5.29× (ADR 0014 § Measurements). On the wire base64 adds a third.

@@ -10,7 +10,7 @@ example is a directory with:
   representative
 
 Every example is run from the kii repo root (`cd kii && ./build/kii ...`).
-All five were last run against their `expected.txt` at v2.3.0. Byte-exact
+All six were last run against their `expected.txt` at v2.4.0. Byte-exact
 reproduction across minor cuts is part of the [v1.0 stable-emit contract](../adr/0003-color-tier-discipline.md);
 when a release changes emitted bytes on purpose, as v1.6.4 did for
 transparent pixels, v1.8.0 for the emit encoding, v1.9.0 for sampling and
@@ -26,6 +26,7 @@ the CHANGELOG lists it and the affected example says so.
 | [`03-not-a-png-rejection/`](03-not-a-png-rejection/) | Error path — non-PNG input rejected with diagnostic on stderr |
 | [`04-ascii-plain-text/`](04-ascii-plain-text/) | `--mode ascii --color none` (v2.2.0) — plain-text art, no escapes |
 | [`05-braille-logo/`](05-braille-logo/) | `--mode braille` (v2.3.0) — a logo whose blue a fixed threshold would erase |
+| [`06-iterm-inline-image/`](06-iterm-inline-image/) | `--mode iterm` (v2.4.0) — the picture itself, as one OSC 1337 PNG |
 
 ## Adding an example
 
