@@ -66,6 +66,7 @@ var KII_F_VERBOSE = 0 - 1;
 var KII_F_MODE    = 0 - 1;
 var KII_F_DITHER  = 0 - 1;
 var KII_F_INVERT  = 0 - 1;
+var KII_F_CELL    = 0 - 1;
 
 # Register kii's flag surface into a cmdit context `fs` (caller owns
 # cmdit_new + cmdit_parse). cmdit_new already registered --help/-h (h=104)
@@ -102,11 +103,12 @@ fn kii_register_flags(fs): i64 {
     # per cell in two colours (v2.0.0, ADR 0012); "braille" = the Braille
     # Patterns, 2 x 4 dots a cell in one colour (v2.3.0, ADR 0013); "iterm" =
     # Tier 3's first image protocol, the picture itself as an iTerm2 inline
-    # image (v2.4.0, ADR 0014); "kitty" = the kitty graphics protocol (v2.5.0).
+    # image (v2.4.0, ADR 0014); "kitty" = the kitty graphics protocol (v2.5.0);
+    # "sixel" = DEC Sixel, which kii encodes itself in device pixels (v2.6.0).
     # A cmdit enum since v1.7.0: any other value
     # fails the parse with CMDIT_ERR_BAD_ENUM, and cmdit_get_enum gives the
     # choice's index (KII_MODE_*), in the order of the choices string.
-    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii|blocks|braille|iterm|kitty", "render mode");
+    KII_F_MODE    = cmdit_enum(fs, 109, "mode", "halfblock", "halfblock|ascii|blocks|braille|iterm|kitty|sixel", "render mode");
     # --dither / -d (100): v1.9.0 (ADR 0011). none (the default) quantizes
     # each pixel on its own; ordered adds a 4x4 Bayer offset; fs diffuses the
     # error (Floyd-Steinberg). No effect at --color tc, where nothing is
@@ -118,6 +120,52 @@ fn kii_register_flags(fs): i64 {
     # the half-block and blocks lanes draw colours, not ink, so main refuses
     # it there (kii_lane_conflict_line).
     KII_F_INVERT  = cmdit_bool(fs, 105, "invert", "ASCII and Braille lanes: dark is ink, for light backgrounds");
+    # --cell-size WxH (no short form): v2.6.0, --mode sixel only. Sixel is
+    # drawn in device pixels, so kii needs the terminal's cell size; darshana
+    # does not report the window's pixel size yet, so it is given here, and
+    # 10x20 (the 2:1 cell every lane assumes, and chafa's own fallback) when it
+    # is not. kii_cell_size parses it.
+    KII_F_CELL    = cmdit_str(fs, 0, "cell-size", "10x20", "Sixel: the terminal's cell size in pixels, WxH");
+    return 0;
+}
+
+# The largest cell side --cell-size takes, in pixels.
+var KII_MAX_CELL_PX = 256;
+
+# The most pixels a Sixel frame may hold: chitra's own decode ceiling,
+# 16,777,216. The cell cap alone would allow 1,048,576 cells of up to 256 x 256
+# pixels each.
+var KII_MAX_SIXEL_PX = 16777216;
+
+# Parse --cell-size `s` as W "x" H, decimal, each 1..KII_MAX_CELL_PX, into
+# out_w / out_h. Returns 0, or -1 if it is anything else (both outs then 0).
+fn kii_cell_size(s, out_w, out_h): i64 {
+    store64(out_w, 0);
+    store64(out_h, 0);
+    if (s == 0) { return 0 - 1; }
+    var i = 0;
+    var w = 0;
+    var digits = 0;
+    while (load8(s + i) >= 48 && load8(s + i) <= 57) {
+        w = w * 10 + load8(s + i) - 48;
+        if (w > KII_MAX_CELL_PX) { return 0 - 1; }
+        digits = digits + 1;
+        i = i + 1;
+    }
+    if (digits == 0 || load8(s + i) != 120) { return 0 - 1; }     # 'x'
+    i = i + 1;
+    var h = 0;
+    digits = 0;
+    while (load8(s + i) >= 48 && load8(s + i) <= 57) {
+        h = h * 10 + load8(s + i) - 48;
+        if (h > KII_MAX_CELL_PX) { return 0 - 1; }
+        digits = digits + 1;
+        i = i + 1;
+    }
+    if (digits == 0 || load8(s + i) != 0) { return 0 - 1; }
+    if (w < 1 || h < 1) { return 0 - 1; }
+    store64(out_w, w);
+    store64(out_h, h);
     return 0;
 }
 
@@ -144,14 +192,25 @@ fn kii_color_tier(fs): i64 {
 }
 
 # --mode's choices, as cmdit_get_enum(fs, KII_F_MODE) indexes them (the
-# order of "halfblock|ascii|blocks|braille|iterm|kitty" in kii_register_flags).
+# order of "halfblock|ascii|blocks|braille|iterm|kitty|sixel" in kii_register_flags).
 var KII_MODE_HALFBLOCK = 0;
 var KII_MODE_ASCII     = 1;
 var KII_MODE_BLOCKS    = 2;
 var KII_MODE_BRAILLE   = 3;
 var KII_MODE_ITERM     = 4;
 var KII_MODE_KITTY     = 5;
+var KII_MODE_SIXEL     = 6;
 
+# The usage line for a setting --mode sixel cannot honour, or 0 (v2.6.0). Sixel
+# takes the cell lanes' --color 8, 16 or 256 and --dither, because kii
+# quantizes its registers; it refuses truecolour (Sixel holds at most 256
+# registers), none (it draws colours), and --invert (it draws no ink).
+fn kii_sixel_conflict_line(tier, invert): i64 {
+    if (tier == KII_TIER_TC)   { return "kii: --color tc does not apply to --mode sixel (it holds at most 256 colours; use 256)\n"; }
+    if (tier == KII_TIER_NONE) { return "kii: --color none does not apply to --mode sixel\n"; }
+    if (invert == 1)           { return "kii: --invert does not apply to --mode sixel\n"; }
+    return 0;
+}
 # 1 if `mode` is an image protocol (ADR 0014): iTerm2 (v2.4.0) or kitty (v2.5.0).
 fn kii_mode_is_protocol(mode): i64 {
     if (mode == KII_MODE_ITERM || mode == KII_MODE_KITTY) { return 1; }
@@ -186,6 +245,7 @@ fn kii_protocol_conflict_line(mode, color_seen, dither_seen, invert): i64 {
 # accepted command draws.
 fn kii_lane_conflict_line(mode, tier, invert): i64 {
     if (mode == KII_MODE_ASCII || mode == KII_MODE_BRAILLE) { return 0; }
+    if (mode == KII_MODE_SIXEL) { return 0; }             # kii_sixel_conflict_line's
     if (tier == KII_TIER_NONE) { return "kii: --color none applies to --mode ascii or braille only\n"; }
     if (invert == 1) { return "kii: --invert applies to --mode ascii or braille only\n"; }
     return 0;
@@ -235,7 +295,7 @@ fn kii_parse_error_line(err, flag): i64 {
     if (err == CMDIT_ERR_OUT_OF_RANGE)     { return "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n"; }
     if (err == CMDIT_ERR_BAD_ENUM && flag != 0) {
         if (streq(flag, "color") == 1) { return "kii: --color must be 8, 16, 256, tc or none\n"; }
-        if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty\n"; }
+        if (streq(flag, "mode") == 1)  { return "kii: --mode must be halfblock, ascii, blocks, braille, iterm, kitty or sixel\n"; }
         if (streq(flag, "dither") == 1) { return "kii: --dither must be none, ordered or fs\n"; }
     }
     return "kii: argument parse error\n";

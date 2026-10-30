@@ -1,0 +1,189 @@
+# sixel.cyr — Tier 3's third protocol: DEC Sixel (`--mode sixel`, v2.6.0,
+# ADR 0014 § v2.6.0).
+#
+# Sixel is drawn in device pixels from colour registers, so kii encodes it
+# itself, from a frame it has resampled to a pixel size and quantized:
+#
+#     ESC P 0;1;0 q "1;1;W;H  #r;2;R;G;B ...  <bands>  ESC \  LF
+#
+#   - P2 = 1: a pixel no colour sets keeps the terminal's background, so a
+#     transparent pixel (KII_COLOR_DEFAULT) is simply never drawn.
+#   - "1;1;W;H: square pixels, and the image's size.
+#   - The registers are the colour codes the frame uses, numbered 0, 1, ... in
+#     code order, each defined once as #r;2;R;G;B: the RGB the code stands for at
+#     the active tier (quant.cyr's _quant_code_channel), in percent, rounded.
+#   - A band is six pixel rows. For each colour in it, in register order: #r,
+#     then one sixel character a column (0x3F plus a bit for each of the six
+#     rows that are that colour, the top row the low bit) from column 0 to the
+#     last column the colour has, a run of four or more of one character as
+#     !n<char>. $ goes back to the band's start between colours, and - starts
+#     the next band.
+# Integer throughout, so every target writes the same bytes.
+# Multi-source: the VT330/VT340 Programmer Reference Manual's Sixel chapter;
+# xterm's ctlseqs (DECGRA, colour introducer); libsixel's and chafa's encoders.
+
+include "src/image.cyr"
+include "src/emit.cyr"        # _kii_write_all
+include "src/quant.cyr"       # _quant_code_channel, KII_COLOR_DEFAULT
+include "src/iterm.cyr"       # _iterm_put, _iterm_num
+
+# A channel byte as the percent Sixel's RGB colour definitions take, rounded.
+fn sixel_pct(v): i64 {
+    return (v * 100 + 127) / 255;
+}
+
+# The register map for the w x h frame of colour codes `codes` (4 bytes a
+# pixel): `regmap` (256 i64s) gets each used code's register (in code order)
+# and -1 for the rest. Returns the register count.
+fn sixel_registers(codes, w, h, regmap): i64 {
+    var c = 0;
+    while (c < 256) { store64(regmap + c * 8, 0 - 1); c = c + 1; }
+    var n = w * h;
+    var i = 0;
+    while (i < n) {
+        var code = load32(codes + i * 4);
+        if (code >= 0 && code < 256) { store64(regmap + code * 8, 0); }
+        i = i + 1;
+    }
+    var r = 0;
+    c = 0;
+    while (c < 256) {
+        if (load64(regmap + c * 8) == 0) { store64(regmap + c * 8, r); r = r + 1; }
+        c = c + 1;
+    }
+    return r;
+}
+
+# The head: the DCS, the raster attributes and every register's definition,
+# into `buf` (at least 32 + 24 * 256 bytes). Returns its length.
+fn sixel_head(buf, w, h, regmap): i64 {
+    var pos = _iterm_put(buf, 0, "\x1bP0;1;0q\"1;1;");
+    pos = _iterm_num(buf, pos, w);
+    store8(buf + pos, 59);                # ';'
+    pos = _iterm_num(buf, pos + 1, h);
+    var c = 0;
+    while (c < 256) {
+        var r = load64(regmap + c * 8);
+        if (r >= 0) {
+            store8(buf + pos, 35);        # '#'
+            pos = _iterm_num(buf, pos + 1, r);
+            pos = _iterm_put(buf, pos, ";2;");
+            pos = _iterm_num(buf, pos, sixel_pct(_quant_code_channel(c, 0)));
+            store8(buf + pos, 59);
+            pos = _iterm_num(buf, pos + 1, sixel_pct(_quant_code_channel(c, 1)));
+            store8(buf + pos, 59);
+            pos = _iterm_num(buf, pos + 1, sixel_pct(_quant_code_channel(c, 2)));
+        }
+        c = c + 1;
+    }
+    return pos;
+}
+
+# Append `n` copies of sixel character `ch`: as !n<ch> from four up, which is
+# never longer. Returns the new pos.
+fn _sixel_run(buf, pos, ch, n): i64 {
+    if (n >= 4) {
+        store8(buf + pos, 33);            # '!'
+        pos = _iterm_num(buf, pos + 1, n);
+        store8(buf + pos, ch);
+        return pos + 1;
+    }
+    var k = 0;
+    while (k < n) { store8(buf + pos + k, ch); k = k + 1; }
+    return pos + n;
+}
+
+# Band b of the w x h frame (rows 6b .. 6b + 5) into `buf` at `pos`, with
+# `masks` (256 x w bytes, all 0 on entry and on return) and `last` (256 i64s)
+# as scratch. The band ends with '-' unless it is the frame's last. Returns
+# the new pos. The buffer needs room for every colour's #r, its run of at most
+# w characters and its '$': 256 * (w + 6) + 2 bytes.
+fn sixel_band(codes, w, h, b, regmap, masks, last, buf, pos): i64 {
+    var y0 = b * 6;
+    var rows = h - y0;
+    if (rows > 6) { rows = 6; }
+    var c = 0;
+    while (c < 256) { store64(last + c * 8, 0 - 1); c = c + 1; }
+    var k = 0;
+    while (k < rows) {
+        var row = codes + (y0 + k) * w * 4;
+        var bit = 1 << k;
+        var x = 0;
+        while (x < w) {
+            var code = load32(row + x * 4);
+            if (code >= 0 && code < 256) {
+                var m = masks + code * w + x;
+                store8(m, load8(m) | bit);
+                if (x > load64(last + code * 8)) { store64(last + code * 8, x); }
+            }
+            x = x + 1;
+        }
+        k = k + 1;
+    }
+    var first = 1;
+    c = 0;
+    while (c < 256) {
+        var lx = load64(last + c * 8);
+        if (lx >= 0) {
+            if (first == 0) { store8(buf + pos, 36); pos = pos + 1; }     # '$'
+            first = 0;
+            store8(buf + pos, 35);                                          # '#'
+            pos = _iterm_num(buf, pos + 1, load64(regmap + c * 8));
+            var mrow = masks + c * w;
+            var run_ch = 63 + load8(mrow);
+            var run_n = 1;
+            store8(mrow, 0);
+            var x2 = 1;
+            while (x2 <= lx) {
+                var ch = 63 + load8(mrow + x2);
+                store8(mrow + x2, 0);
+                if (ch == run_ch) { run_n = run_n + 1; }
+                else {
+                    pos = _sixel_run(buf, pos, run_ch, run_n);
+                    run_ch = ch;
+                    run_n = 1;
+                }
+                x2 = x2 + 1;
+            }
+            pos = _sixel_run(buf, pos, run_ch, run_n);
+        }
+        c = c + 1;
+    }
+    if (y0 + 6 < h) { store8(buf + pos, 45); pos = pos + 1; }               # '-'
+    return pos;
+}
+
+# The registers' count after emit_sixel, for --verbose.
+var _sixel_regs = 0;
+
+# emit_sixel — the w x h frame of colour codes as one Sixel image to fd 1.
+# Returns 0, -1 if a buffer cannot be allocated, or -2 if a write failed.
+fn emit_sixel(codes, w, h): i64 {
+    if (codes == 0 || w <= 0 || h <= 0) { return 0 - 1; }
+    var regmap = alloc(256 * 8);
+    var last = alloc(256 * 8);
+    var masks = alloc(256 * w);
+    var cap = 256 * (w + 6) + 32 + 24 * 256;
+    var buf = alloc(cap);
+    if (regmap == 0 || last == 0 || masks == 0 || buf == 0) { return 0 - 1; }
+    var z = 0;
+    while (z < 256 * w) { store8(masks + z, 0); z = z + 1; }
+    _sixel_regs = sixel_registers(codes, w, h, regmap);
+    var pos = sixel_head(buf, w, h, regmap);
+    var bands = (h + 5) / 6;
+    var b = 0;
+    while (b < bands) {
+        pos = sixel_band(codes, w, h, b, regmap, masks, last, buf, pos);
+        # Write out before the next band could overflow the buffer.
+        if (pos > cap - 256 * (w + 6) - 8 || b + 1 == bands) {
+            if (_kii_write_all(1, buf, pos) != 0) { return 0 - 2; }
+            pos = 0;
+        }
+        b = b + 1;
+    }
+    store8(buf, 27);                      # ESC \ ends the DCS, then LF
+    store8(buf + 1, 92);
+    store8(buf + 2, 10);
+    if (_kii_write_all(1, buf, 3) != 0) { return 0 - 2; }
+    return 0;
+}

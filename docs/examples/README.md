@@ -10,7 +10,7 @@ example is a directory with:
   representative
 
 Every example is run from the kii repo root (`cd kii && ./build/kii ...`).
-All seven were last run against their `expected.txt` at v2.5.0. Byte-exact
+All eight were last run against their `expected.txt` at v2.6.0. Byte-exact
 reproduction across minor cuts is part of the [v1.0 stable-emit contract](../adr/0003-color-tier-discipline.md);
 when a release changes emitted bytes on purpose, as v1.6.4 did for
 transparent pixels, v1.8.0 for the emit encoding, v1.9.0 for sampling and
@@ -28,6 +28,7 @@ the CHANGELOG lists it and the affected example says so.
 | [`05-braille-logo/`](05-braille-logo/) | `--mode braille` (v2.3.0) — a logo whose blue a fixed threshold would erase |
 | [`06-iterm-inline-image/`](06-iterm-inline-image/) | `--mode iterm` (v2.4.0) — the picture itself, as one OSC 1337 PNG |
 | [`07-kitty-graphics/`](07-kitty-graphics/) | `--mode kitty` (v2.5.0) — the same PNG in APC chunks, checked with kitty's own parser |
+| [`08-sixel/`](08-sixel/) | `--mode sixel` (v2.6.0) — Sixel encoded by kii, in device pixels from `--cell-size` |
 
 ## Adding an example
 

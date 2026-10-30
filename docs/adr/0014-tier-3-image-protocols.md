@@ -288,3 +288,111 @@ iTerm2 lane within noise: 12.9 against 13.1 ms for the logo, 841 against 838 ms 
 - Of 12 defects planted in the escapes and the CLI, the unit suite catches all 12 and the fuzz
   surface the 10 in the escapes.
 - Every 2.4.0 lane, iTerm2 included, is byte-identical: 7,080 of 7,080 corpus cases.
+
+## Amendment — v2.6.0 (Sixel)
+
+This ADR remains **Accepted**. `--mode sixel` is Tier 3's third protocol, and the last the roadmap
+pinned. § Decision 1, 2 and 7 apply: it is chosen by flag only, has no fallback, and decodes and
+refuses as every lane does. It differs from the other two in what it sends and in how it sizes.
+
+**1. kii encodes the pixels itself.** Sixel is drawn in device pixels from colour registers, so
+there is no PNG for the terminal to scale. The frame is:
+
+    ESC P 0;1;0 q "1;1;W;H  #r;2;R;G;B ...  <bands>  ESC \   LF
+
+- **`P2 = 1`**: a pixel no colour sets keeps the terminal's background, so a transparent pixel
+  (below alpha 128, as in every lane) is never drawn.
+- **`"1;1;W;H`**: square pixels, and the image's size.
+- **The registers are the colour codes the frame uses**, numbered 0, 1, ... in code order. Each
+  is defined once, as the RGB its code stands for at the tier, in percent and rounded.
+- **A band is six pixel rows.** For each colour in it, in register order, comes `#r` and then one
+  character a column (0x3F plus a bit for each of the six rows that colour holds, the top row
+  the low bit). The characters run from column 0 to the colour's last column, and a run of four
+  or more becomes `!n<char>`. `$` goes back to the band's start between colours, and `-` moves to
+  the next band.
+- **One pass a band** builds a column mask per colour, so the cost is the band's pixels plus
+  each colour's span.
+
+**2. Colour: the cell lanes' quantizer, 256 colours unless told.** The roadmap pinned the
+256-colour quantizer. `--mode sixel` uses the xterm cube and grey ramp at `--color 256`, which is
+its default when `--color` is not given. It also takes `--color 8` and `16`, and `--dither none |
+ordered | fs`, exactly as the cell lanes apply them. It refuses three settings:
+- `--color tc`: Sixel holds at most 256 registers;
+- `--color none`: it draws colours;
+- `--invert`: it draws no ink.
+
+**3. Sizing: the cell box in pixels, from `--cell-size`.** The box's bound side (the columns,
+or the rows when the terminal's rows bind) times the cell's pixel size gives one dimension. The
+image's aspect gives the other, rounded, so the image is never distorted. kii cannot measure the
+cell yet: darshana reads the window's rows and columns but not its pixel fields (roadmap
+§ Gated on upstream). So the size is `--cell-size WxH`, each side 1 to 256, with a default of
+`10x20`. That is kii's 2:1 cell, and the size chafa itself falls back to when it cannot ask; for
+`--size 40x20` chafa drew 400 × 400. A wrong cell size gives an image too large or too small for
+the box, but never a distorted one. `--cell-size` with any other mode is a usage error.
+
+A frame's pixels are capped at 16,777,216, chitra's own decode ceiling. The cell cap alone would
+allow a million cells of up to 256 × 256 pixels. Past the ceiling kii says `Sixel image too large
+(over 16777216 pixels); use a smaller --width or --cell-size`, exit 1.
+
+**4. Checked by a decoder written from the manual.** No Sixel terminal is installed here, and this
+host's ImageMagick (7.1.2-34) decodes every Sixel as black, even its own, so it cannot check.
+Instead a decoder written from the VT330/VT340 manual, in Python and independent of kii's
+Cyrius encoder, read kii's output. A Cyrius tool ran kii's pipeline up to the encoder (area
+sample, quantize) and dumped the colour each pixel should have.
+- **Over the corpus** (832 images; 2.6.0's corpus, § 6) under three sets (`--width 40`, 10 × 20
+  cells, 256 colours; `60`, 9 × 19, 16 colours, `fs`; `40`, 8 × 16, 8 colours, `ordered`): every
+  one of 2,427 frames decodes to exactly the pixels the pipeline produced. Transparency matches
+  too, and nothing lies outside the raster.
+- 36 cases are refused as the half-block lane refuses them.
+- 33 are refused by the pixel ceiling alone. They are strips 1 or 6 pixels wide (a 1 × 400 strip
+  at `--width 40` is 400 × 160,000 pixels), which the half-block lane, capped by cells, draws.
+- Frames use at most 197 registers.
+
+The same decoder read chafa's `-f sixel` output without trouble, and its image matched a box
+resize of the source within 4.4 a channel.
+
+**5. Quality and size.** The registers come from a fixed palette, not one fitted to the image.
+On the Arch logo kii's frame is within 14.1 a channel of a box resize, against chafa's 4.4 with
+a fitted palette (17 registers). On RAMGON at 400 × 321, kii is within 7.15 without dither and
+10.62 with `fs`. An adaptive palette is a roadmap candidate. Sizes at `--width 80`:
+
+| Image | No dither | `--dither fs` |
+|---|---:|---:|
+| archlinux-logo | 8,541 bytes | 179,109 bytes |
+| RAMGON | 432,598 bytes | 605,462 bytes |
+
+A flat colour dithered into cube colours breaks the runs. CPU per run (`--width 80`, fastest of
+three):
+
+| Image | Half-block | Sixel | Sixel `fs` | iTerm2 |
+|---|---:|---:|---:|---:|
+| archlinux-logo | 2.01 ms | 20.98 ms | 41.35 ms | 13.11 ms |
+| RAMGON | 197.4 ms | 250.4 ms | 295.3 ms | 851.4 ms |
+
+Sixel needs no zlib, so it is cheaper than the PNG protocols on photographs.
+
+**6. A new corpus.** Through 2.5.0 the corpus was a 472-image list whose recipe was not kept,
+and the list itself was lost with a scratch directory. From 2.6.0, `scripts/corpus.sh` prints it:
+every PNG, JPEG, GIF and BMP under `/usr/share` outside the icon themes, then the fixtures. That
+is 832 images here (763 PNG, 40 JPEG, 26 GIF, 3 BMP). Every older lane is byte-identical to 2.5.0
+over it: 13,312 of 13,312 cases, 16 flag sets across half-block, ASCII, blocks, Braille, iTerm2
+and kitty.
+
+**Tests.**
+- `tests/sixel.tcyr`, 25 assertions: percent colours, the register map, the head, each band form
+  (bits, `$`, `-`, a partial band, an empty band, runs of three, four and 200), the masks left
+  clean, `--cell-size`, and the refusals.
+- cli: `--mode sixel` and the `--cell-size` default.
+- A 20th fuzz surface, 20,000 random frames at tiers 8, 16 and 256 with transparency, decoded
+  back to their codes by a reference decoder in the fuzz file.
+- Of 15 defects planted in the encoder and its parser, the unit suite catches all 15 and the
+  fuzz surface 9. The six it cannot see are:
+  - the percent rounding and the register order, which it takes from the code it checks;
+  - a `-` after the last band, which its decoder accepts as harmless;
+  - two defects in the `--cell-size` parser, and the `tc` refusal, which it never calls.
+
+**Consequences.** Sixel reaches the terminals the other protocols do not: xterm (with `-ti vt340`
+or a Sixel-enabled build), foot, mlterm, and WezTerm, which reads all three. It costs a guess at
+the cell size until darshana can say, and a fixed palette's error on flat colours. It also writes
+more bytes than the PNG protocols: RAMGON's frame is 433 KB, against the iTerm2 lane's 2.48 MB of
+base64 at full resolution, but at 800 × 642 pixels.

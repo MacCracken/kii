@@ -648,3 +648,21 @@ Both send the same PNG, so the encode is the whole cost; the chunking adds nothi
 | raw RGBA8 (`f=32`) | 226,080,028 | — |
 
 By format, zlib-raw against the PNG: BMP 0.83×, GIF 0.86×, PNG 1.02×, JPEG 1.31×.
+
+## v2.6.0 — Sixel
+
+Host: x86_64 Linux, 16 cores, Cyrius `6.7.18`. CPU per run (user + system), fastest of three
+rounds, `--width 80` (Sixel at the default 10 × 20 cell):
+
+| Image | half-block | `--mode sixel` | `sixel --dither fs` | `--mode iterm` |
+|---|---:|---:|---:|---:|
+| archlinux-logo, 256² (800 × 800 px) | 2.01 ms | 20.98 ms | 41.35 ms | 13.11 ms |
+| RAMGON, 1152 × 925 (800 × 642 px) | 197.42 ms | 250.35 ms | 295.31 ms | 851.37 ms |
+
+Sixel needs no zlib, so on a photograph it costs a quarter more than half-block and far less
+than the PNG protocols. Bytes at `--width 80`: the logo 8,541 (179,109 with `fs`: a flat colour
+dithered into cube colours breaks the runs), RAMGON 432,598 (605,462).
+
+**Corpus.** From 2.6.0 the corpus is `scripts/corpus.sh`'s list, 832 images on this host (763 PNG,
+40 JPEG, 26 GIF, 3 BMP). Through 2.5.0 it was a 472-image list without a recorded recipe, so earlier
+corpus figures are not directly comparable with later ones.

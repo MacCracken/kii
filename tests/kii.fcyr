@@ -51,6 +51,7 @@ include "src/blocks.cyr"
 include "src/braille.cyr"
 include "src/iterm.cyr"
 include "src/kitty.cyr"
+include "src/sixel.cyr"
 
 # Iteration counts.
 #
@@ -87,6 +88,7 @@ var INV_FUZZ_ITERS        = 50000;     # v2.2.0 — --invert against the negativ
 var BRL_FUZZ_ITERS        = 30000;     # v2.3.0 — the Braille lane: sampler, ink rules, negative, escapes
 var PNG_OUT_FUZZ_ITERS    = 20000;     # v2.4.0 — the PNG writer through chitra, and base64
 var KITTY_FUZZ_ITERS      = 20000;     # v2.5.0 — kitty escapes: keys, chunks, the payload back
+var SIXEL_FUZZ_ITERS      = 20000;     # v2.6.0 — Sixel frames decoded back to their codes
 
 # Per-iter argv shape. argc ∈ [1, FUZZ_MAX_ARGC]; each arg's body
 # is ≤ FUZZ_MAX_ARG_LEN bytes plus an optional "-"/"--" prefix.
@@ -1866,6 +1868,196 @@ fn fuzz_kitty_iter(): i64 {
     return 0;
 }
 
+# ---- v2.6.0 Sixel fuzz surface --------------------------------------
+# Each iteration builds a random frame of colour codes (1..64 x 1..40; noise,
+# horizontal runs, or blocks; a random set of up to 24 codes of a random tier,
+# 8, 16 or 256; transparent pixels on some), encodes it with sixel_registers,
+# sixel_head and sixel_band, and decodes it here from the format alone:
+#   - the head is ESC P 0;1;0 q "1;1;W;H with the frame's size;
+#   - every register is defined once, as its code's RGB in percent;
+#   - every pixel decodes to its own code's register, and a transparent one
+#     to none; nothing is drawn outside the frame;
+#   - only the format's bytes appear, and the masks come back all zero.
+# Draws use bits 16 and up of _fuzz_rand. It runs after every older surface.
+
+# Parse the decimal at buf + i into *out; returns the index after it, or -1.
+fn _fz_sx_num(buf, i, n, out): i64 {
+    var v = 0;
+    var d = 0;
+    while (i < n && load8(buf + i) >= 48 && load8(buf + i) <= 57) {
+        v = v * 10 + load8(buf + i) - 48;
+        if (v > 100000000) { return 0 - 1; }
+        i = i + 1;
+        d = d + 1;
+    }
+    if (d == 0) { return 0 - 1; }
+    store64(out, v);
+    return i;
+}
+
+# Decode the n bytes at buf (head and bands, no ST) into `px` (w x h i64s:
+# the register drawn last at each pixel, -1 where none), checking each
+# register's RGB against `rgb` (256 x 3 i64s, by register; -1 if unused).
+# Returns 0, or -1 on anything that is not the format kii writes.
+fn _fz_sx_decode(buf, n, w, h, px, rgb): i64 {
+    var hd = "\x1bP0;1;0q\"1;1;";
+    if (n < 14 || memeq(buf, hd, 13) == 0) { return 0 - 1; }
+    var v = 0;
+    var i = _fz_sx_num(buf, 13, n, &v);
+    if (i < 0 || v != w || load8(buf + i) != 59) { return 0 - 1; }
+    i = _fz_sx_num(buf, i + 1, n, &v);
+    if (i < 0 || v != h) { return 0 - 1; }
+    var k = 0;
+    while (k < w * h) { store64(px + k * 8, 0 - 1); k = k + 1; }
+    var cur = 0 - 1;
+    var x = 0;
+    var band = 0;
+    while (i < n) {
+        var c = load8(buf + i);
+        if (c == 35) {                                       # '#'
+            var r = 0;
+            i = _fz_sx_num(buf, i + 1, n, &r);
+            if (i < 0 || r > 255) { return 0 - 1; }
+            if (i < n && load8(buf + i) == 59) {             # a definition: ;2;R;G;B
+                var u = 0;
+                var cr = 0;
+                var cg = 0;
+                var cb = 0;
+                i = _fz_sx_num(buf, i + 1, n, &u);
+                if (i < 0 || u != 2 || load8(buf + i) != 59) { return 0 - 1; }
+                i = _fz_sx_num(buf, i + 1, n, &cr);
+                if (i < 0 || load8(buf + i) != 59) { return 0 - 1; }
+                i = _fz_sx_num(buf, i + 1, n, &cg);
+                if (i < 0 || load8(buf + i) != 59) { return 0 - 1; }
+                i = _fz_sx_num(buf, i + 1, n, &cb);
+                if (i < 0) { return 0 - 1; }
+                var want = rgb + r * 24;
+                if (load64(want) != cr || load64(want + 8) != cg || load64(want + 16) != cb) { return 0 - 1; }
+                store64(want, 0 - 2);                        # defined: once only
+            } else {
+                if (load64(rgb + r * 24) != 0 - 2) { return 0 - 1; }
+                cur = r;
+            }
+        } else {
+            if (c == 36) { x = 0; i = i + 1; }
+            else {
+                if (c == 45) { x = 0; band = band + 1; i = i + 1; }
+                else {
+                    var cnt = 1;
+                    if (c == 33) {
+                        i = _fz_sx_num(buf, i + 1, n, &cnt);
+                        if (i < 0 || cnt < 4) { return 0 - 1; }
+                        c = load8(buf + i);
+                    }
+                    if (c < 63 || c > 126 || cur < 0) { return 0 - 1; }
+                    var bits = c - 63;
+                    var t = 0;
+                    while (t < cnt) {
+                        var b = 0;
+                        while (b < 6) {
+                            if (((bits >> b) & 1) == 1) {
+                                var yy = band * 6 + b;
+                                if (x >= w || yy >= h) { return 0 - 1; }
+                                store64(px + (yy * w + x) * 8, cur);
+                            }
+                            b = b + 1;
+                        }
+                        x = x + 1;
+                        t = t + 1;
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+fn fuzz_sixel_iter(): i64 {
+    var w = 1 + _fz_hb_rand(64);
+    var h = 1 + _fz_hb_rand(40);
+    var tp = _fz_hb_rand(3);
+    var tier = KII_TIER_8;
+    var lo = 0;
+    var span = 8;
+    if (tp == 1) { tier = KII_TIER_16; span = 16; }
+    if (tp == 2) { tier = KII_TIER_256; lo = 16; span = 240; }
+    quant_set_tier(tier);
+    var ncol = 1 + _fz_hb_rand(24);
+    var pal[200];                         # up to 24 codes (i64): 192 bytes
+    var k = 0;
+    while (k < ncol) { store64(&pal + k * 8, lo + _fz_hb_rand(span)); k = k + 1; }
+    var kind = _fz_hb_rand(3);
+    var tmode = _fz_hb_rand(3);
+    var f = alloc(w * h * 4);
+    var regmap = alloc(256 * 8);
+    var last = alloc(256 * 8);
+    var masks = alloc(256 * w);
+    var buf = alloc(32 + 24 * 256 + ((h + 5) / 6) * (256 * (w + 6) + 2));
+    var px = alloc(w * h * 8);
+    var rgb = alloc(256 * 24);
+    if (f == 0 || regmap == 0 || last == 0 || masks == 0 || buf == 0 || px == 0 || rgb == 0) { return 0 - 1; }
+    var z = 0;
+    while (z < 256 * w) { store8(masks + z, 0); z = z + 1; }
+    var y = 0;
+    while (y < h) {
+        var x = 0;
+        var run = 0 - 1;
+        while (x < w) {
+            var code = load64(&pal + _fz_hb_rand(ncol) * 8);
+            if (kind == 1) {
+                if (run < 0 || _fz_hb_rand(8) == 0) { run = code; }
+                code = run;
+            }
+            if (kind == 2) { code = load64(&pal + (((x / 5) + (y / 4) * 7) % ncol) * 8); }
+            if (tmode == 1 && _fz_hb_rand(4) == 0) { code = KII_COLOR_DEFAULT; }
+            if (tmode == 2 && _fz_hb_rand(40) == 0) { code = KII_COLOR_DEFAULT; }
+            store32(f + (y * w + x) * 4, code);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var nreg = sixel_registers(f, w, h, regmap);
+    var c = 0;
+    while (c < 256) {
+        var r = load64(regmap + c * 8);
+        if (r >= 0) {
+            store64(rgb + r * 24, sixel_pct(_quant_code_channel(c, 0)));
+            store64(rgb + r * 24 + 8, sixel_pct(_quant_code_channel(c, 1)));
+            store64(rgb + r * 24 + 16, sixel_pct(_quant_code_channel(c, 2)));
+        }
+        c = c + 1;
+    }
+    var pos = sixel_head(buf, w, h, regmap);
+    var b = 0;
+    while (b < (h + 5) / 6) {
+        pos = sixel_band(f, w, h, b, regmap, masks, last, buf, pos);
+        b = b + 1;
+    }
+    var bad = 0;
+    if (_fz_sx_decode(buf, pos, w, h, px, rgb) != 0) { bad = 1; }
+    var i = 0;
+    while (bad == 0 && i < w * h) {
+        var code = load32(f + i * 4);
+        var got = load64(px + i * 8);
+        if (code == KII_COLOR_DEFAULT) { if (got != 0 - 1) { bad = 1; } }
+        else { if (got != load64(regmap + code * 8)) { bad = 1; } }
+        i = i + 1;
+    }
+    c = 0;
+    while (bad == 0 && c < nreg) {
+        if (load64(rgb + c * 24) != 0 - 2) { bad = 1; }       # every register defined
+        c = c + 1;
+    }
+    z = 0;
+    while (bad == 0 && z < 256 * w) { if (load8(masks + z) != 0) { bad = 1; } z = z + 1; }
+    quant_set_tier(KII_TIER_16);
+    alloc_reset();                     # the frame, its encoding and the decode are scratch
+    crc32_table = 0;                   # as the decoder surfaces do after a reset
+    if (bad != 0) { return 0 - 1; }
+    return 0;
+}
+
 # One PNG-fuzz iteration. Builds a random byte buffer (optionally
 # prefixed with a valid sig + IHDR), writes it to /tmp, drives
 # kii_decode_image. Whatever the function returns is fine —
@@ -2239,6 +2431,13 @@ fn main(): i64 {
         if (fuzz_kitty_iter() != 0) { kt_bad = kt_bad + 1; }
         kt_iter = kt_iter + 1;
     }
+    # v2.6.0: Sixel frames.
+    var sx_iter = 0;
+    var sx_bad  = 0;
+    while (sx_iter < SIXEL_FUZZ_ITERS) {
+        if (fuzz_sixel_iter() != 0) { sx_bad = sx_bad + 1; }
+        sx_iter = sx_iter + 1;
+    }
 
     # ---- report ----------------------------------------------------
     # fmt_printf takes a vec for varargs (per lib/fmt.cyr — vec_get
@@ -2336,11 +2535,16 @@ fn main(): i64 {
     vec_push(args_kt, kt_bad);
     fmt_printf("fuzz: %d iterations passed (kitty escapes: keys, chunks, the payload back; bad=%d)\n", args_kt);
 
+    var args_sx = vec_new();
+    vec_push(args_sx, sx_iter);
+    vec_push(args_sx, sx_bad);
+    fmt_printf("fuzz: %d iterations passed (Sixel frames decoded back to their codes; bad=%d)\n", args_sx);
+
     # v1.6.0: a non-zero bad count FAILS the run. Through v1.5.2 the bad
     # tallies were printed and the harness still said "fuzz: ok" and exited
     # 0, so CI's `./build/kii-fuzz` step could not go red on a contract
     # violation — only on a crash.
-    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad + pout_bad + kt_bad != 0) {
+    if (path_bad + geom_bad + emit_bad + diff_bad + env_bad + ascii_bad + area_bad + blk_cell_bad + blk_frame_bad + hb_bad + inv_bad + brl_bad + pout_bad + kt_bad + sx_bad != 0) {
         println("fuzz: FAIL");
         return 1;
     }

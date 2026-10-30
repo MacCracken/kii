@@ -4,7 +4,7 @@
 #
 # Status: SHIPPED at v1.6.x — four input formats (PNG, baseline JPEG, BMP,
 # GIF first-frame) through the chitra substrate, four render lanes and,
-# since v2.4.0 and v2.5.0, the image protocols (--mode iterm, --mode kitty)
+# since v2.4.0–v2.6.0, the image protocols (--mode iterm, kitty, sixel)
 # (half-block default, --mode ascii shape-vector, since v2.0.0
 # --mode blocks, every Block Element, and since v2.3.0 --mode braille,
 # 2 x 4 dots a cell), terminal-fit geometry.
@@ -34,6 +34,7 @@ include "src/blocks.cyr"
 include "src/braille.cyr"
 include "src/iterm.cyr"
 include "src/kitty.cyr"
+include "src/sixel.cyr"
 
 # Write a null-terminated string to fd 2 (stderr). Usage / help
 # text rides this so the happy-path stdout pipe stays pure once
@@ -79,13 +80,18 @@ fn _eprint_path_msg(path, msg): i64 {
 # --color none reads "→ no color" (no dither either: nothing is quantized),
 # and --invert adds ", inverted" at any tier. v2.4.0: --mode iterm reads
 # "→ iTerm2 inline image (N-byte PNG)", and v2.5.0's --mode kitty
-# "→ kitty graphics (N-byte PNG)". M5 routes this
+# "→ kitty graphics (N-byte PNG)"; v2.6.0's --mode sixel
+# "→ Sixel WxH pixels, N of T colours[, dither]". M5 routes this
 # to fd 2 since the ANSI frame now owns stdout (pipe-purity for
 # `kii img.png > frame.ansi`). P(-1) (v1.6.4): the tier was the literal
 # "16" until now, so `--color 8 --verbose` reported a 16-color render.
 # Each number buffer holds 24 bytes: fmt_int_buf writes up to 21 for an
 # i64 (dimensions are ≤ 65535 today, but the buffer should not depend on it).
-fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane): i64 {
+# The Sixel frame's pixel size, for --verbose (set by main, v2.6.0).
+var _sixel_px_w = 0;
+var _sixel_px_h = 0;
+
+fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane, sixel_lane): i64 {
     _eprint_path_safe(path);
     _eprint(": ");
     var w = load64(pstruct + STRUCT_WIDTH_OFFSET);
@@ -116,6 +122,25 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane): i64 {
         _eprint("-byte PNG)\n");
         return 0;
     }
+    if (sixel_lane == 1) {
+        _eprint(") → Sixel ");
+        var sbuf[24]; var slen = fmt_int_buf(_sixel_px_w, &sbuf);
+        sys_write(2, &sbuf, slen);
+        _eprint("x");
+        slen = fmt_int_buf(_sixel_px_h, &sbuf);
+        sys_write(2, &sbuf, slen);
+        _eprint(" pixels, ");
+        slen = fmt_int_buf(_sixel_regs, &sbuf);
+        sys_write(2, &sbuf, slen);
+        _eprint(" of ");
+        slen = fmt_int_buf(quant_tier(), &sbuf);
+        sys_write(2, &sbuf, slen);
+        _eprint(" colours");
+        if (quant_dither() == KII_DITHER_ORDERED) { _eprint(", ordered dither"); }
+        if (quant_dither() == KII_DITHER_FS)      { _eprint(", fs dither"); }
+        _eprint("\n");
+        return 0;
+    }
     var tier = quant_tier();
     if (tier == KII_TIER_TC)   { _eprint(") → truecolor"); }
     if (tier == KII_TIER_NONE) { _eprint(") → no color"); }
@@ -137,7 +162,7 @@ fn _eprint_quant_summary(path, pstruct, iterm_lane, kitty_lane): i64 {
 # the version line see exactly `kii X.Y.Z` on stdout's first
 # line; humans get the Hawaiian gloss on the second.
 fn print_version(): i64 {
-    println("kii 2.5.0");
+    println("kii 2.6.0");
     println("kiʻi (Hawaiian: image / picture / likeness) — image → ANSI/ASCII-art converter");
     return 0;
 }
@@ -157,6 +182,7 @@ fn print_usage(fs): i64 {
     _eprint("  kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour\n");
     _eprint("  kii --mode iterm photo.jpg                 # the picture itself, as an iTerm2 / WezTerm image\n");
     _eprint("  kii --mode kitty photo.jpg                 # the picture itself, by the kitty graphics protocol\n");
+    _eprint("  kii --mode sixel --cell-size 9x19 img.png  # Sixel, encoded by kii (give your cell size)\n");
     _eprint("  kii --mode ascii --invert image.png        # dark is ink, for a light terminal\n");
     _eprint("  kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)\n");
     _eprint("  kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)\n");
@@ -228,6 +254,31 @@ fn main(): i64 {
     if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_ITERM) { iterm_lane = 1; }
     var kitty_lane = 0;
     if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_KITTY) { kitty_lane = 1; }
+    var sixel_lane = 0;
+    if (cmdit_get_enum(fs, KII_F_MODE) == KII_MODE_SIXEL) { sixel_lane = 1; }
+    # --cell-size is Sixel's (v2.6.0); Sixel refuses tc, none and --invert, and
+    # takes 256 colours unless --color says otherwise.
+    var cell_w = 0;
+    var cell_h = 0;
+    if (sixel_lane == 0 && cmdit_seen(fs, KII_F_CELL) == 1) {
+        _eprint("kii: --cell-size applies to --mode sixel only\n");
+        print_usage(fs);
+        return KII_EXIT_USAGE;
+    }
+    if (sixel_lane == 1) {
+        if (kii_cell_size(cmdit_get_str(fs, KII_F_CELL), &cell_w, &cell_h) != 0) {
+            _eprint("kii: --cell-size must be WxH in pixels, each 1 to 256 (as 10x20)\n");
+            print_usage(fs);
+            return KII_EXIT_USAGE;
+        }
+        var sconflict = kii_sixel_conflict_line(quant_tier(), downscale_invert());
+        if (sconflict != 0) {
+            _eprint(sconflict);
+            print_usage(fs);
+            return KII_EXIT_USAGE;
+        }
+        if (cmdit_seen(fs, KII_F_COLOR) == 0) { quant_set_tier(KII_TIER_256); }
+    }
     # An image protocol takes none of the cell lanes' settings (v2.4.0).
     var pconflict = kii_protocol_conflict_line(cmdit_get_enum(fs, KII_F_MODE), cmdit_seen(fs, KII_F_COLOR),
         cmdit_seen(fs, KII_F_DITHER), downscale_invert());
@@ -376,6 +427,51 @@ fn main(): i64 {
     #   kitty (v2.5.0) — the same PNG as APC escapes in 4,096-character
     #     chunks, sized by the side the geometry is bound by (c= or r=), so the
     #     terminal keeps the aspect with its own cell size.
+    #   sixel (v2.6.0) — the cell box in device pixels (--cell-size, 10x20
+    #     unless given): the bound side's cells times the cell's pixels, the
+    #     other side from the image's aspect. Area-sampled to that size,
+    #     quantized at the tier (256 by default) with the dither, and encoded
+    #     in six-row bands by emit_sixel.
+    if (sixel_lane == 1) {
+        var px_w = 0;
+        var px_h = 0;
+        if (rows_bound == 1) {
+            var srows = target_src_rows / 2;
+            if (srows < 1) { srows = 1; }
+            px_h = srows * cell_h;
+            px_w = (px_h * src_w * 2 + src_h) / (2 * src_h);
+        } else {
+            px_w = target_w * cell_w;
+            px_h = (px_w * src_h * 2 + src_w) / (2 * src_w);
+        }
+        if (px_w < 1) { px_w = 1; }
+        if (px_h < 1) { px_h = 1; }
+        if (px_h > KII_MAX_SIXEL_PX / px_w) {
+            _eprint_path_msg(path, "Sixel image too large (over 16777216 pixels); use a smaller --width or --cell-size");
+            return KII_EXIT_RUN;
+        }
+        _sixel_px_w = px_w;
+        _sixel_px_h = px_h;
+        if (downscale_area_to_rgb(&pstruct, px_w, px_h) != 0) {
+            _eprint_path_msg(path, "downscale failed (out of memory)");
+            return KII_EXIT_RUN;
+        }
+        var sxcodes = alloc(px_w * px_h * 4);
+        if (sxcodes == 0 || quantize_rgb_buf(load64(&pstruct + STRUCT_DOWNSCALED_BUF_OFFSET),
+                load64(&pstruct + STRUCT_ALPHA_MASK_OFFSET), px_w, px_h, sxcodes) != 0) {
+            _eprint_path_msg(path, "quantization failed (OOM)");
+            return KII_EXIT_RUN;
+        }
+        var sxrc = emit_sixel(sxcodes, px_w, px_h);
+        if (sxrc == 0 - 2) {
+            _eprint_path_msg(path, "failed to write frame to stdout");
+            return KII_EXIT_RUN;
+        }
+        if (sxrc != 0) {
+            _eprint_path_msg(path, "sixel image failed (out of memory)");
+            return KII_EXIT_RUN;
+        }
+    }
     if (kitty_lane == 1) {
         var kt_cells = target_w;
         if (rows_bound == 1) {
@@ -456,7 +552,7 @@ fn main(): i64 {
             return KII_EXIT_RUN;
         }
     }
-    if (ascii_lane == 0 && blocks_lane == 0 && braille_lane == 0 && iterm_lane == 0 && kitty_lane == 0) {
+    if (ascii_lane == 0 && blocks_lane == 0 && braille_lane == 0 && iterm_lane == 0 && kitty_lane == 0 && sixel_lane == 0) {
         var drc = downscale_to_rgb(&pstruct, target_w, target_src_rows);
         if (drc != 0) {
             _eprint_path_msg(path, "downscale failed (out of memory)");
@@ -483,7 +579,7 @@ fn main(): i64 {
     # see the dimensions/format line on the next stderr-routed line.
     # Pure-pipe consumers (`kii img.png | feh -`) don't pay for it.
     if (cmdit_get_bool(fs, KII_F_VERBOSE) == 1) {
-        _eprint_quant_summary(path, &pstruct, iterm_lane, kitty_lane);
+        _eprint_quant_summary(path, &pstruct, iterm_lane, kitty_lane, sixel_lane);
     }
     # "Did the stream end the way its format says it should?" chitra 0.7.0
     # generalized seen_iend from the literal PNG IEND to that question, per

@@ -41,14 +41,14 @@ Other deps need a written rationale in the PR (what does it own that we can't do
 
 Every behavior change needs at least:
 
-- One happy-path test in the suite that owns the area. The monolithic `tests/kii.tcyr` was **retired at v1.2.0** and split into standalone suites, nine since v2.5.0: `tests/cli.tcyr` (flag parsing + the path sanitizer), `tests/quant.tcyr` (palette + quantizer), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii`), `tests/blocks.tcyr` (`--mode blocks`), `tests/braille.tcyr` (`--mode braille`), `tests/iterm.tcyr` (`--mode iterm`, base64, the PNG writer), `tests/kitty.tcyr` (`--mode kitty`), `tests/decode.tcyr` (the chitra adapter, per format).
+- One happy-path test in the suite that owns the area. The monolithic `tests/kii.tcyr` was **retired at v1.2.0** and split into standalone suites, ten since v2.6.0: `tests/cli.tcyr` (flag parsing + the path sanitizer), `tests/quant.tcyr` (palette + quantizer), `tests/render.tcyr` (downscale + emit + geometry), `tests/ascii.tcyr` (`--mode ascii`), `tests/blocks.tcyr` (`--mode blocks`), `tests/braille.tcyr` (`--mode braille`), `tests/iterm.tcyr` (`--mode iterm`, base64, the PNG writer), `tests/kitty.tcyr` (`--mode kitty`), `tests/sixel.tcyr` (`--mode sixel`, `--cell-size`), `tests/decode.tcyr` (the chitra adapter, per format).
 - One error-path test (malformed input, out-of-range arg, etc.)
-- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **nineteen** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF, the path-sanitizer differential, the terminal envelope, the ASCII lane, v1.10.0, its area sampler, v1.11.0, the blocks lane's shape choice and frames, v2.0.0, half-block rows read back to their colours, v2.1.0, `--invert` against the negative with `--color none` against the stripped escapes, v2.2.0, the Braille lane's sampler, ink rules, negative and escapes, v2.3.0, the PNG writer read back by chitra with base64 against a reference, v2.4.0, and the kitty escapes read back by an independent parser, v2.5.0); a new surface goes after the last one, so the older surfaces keep the random stream they have always drawn; add to whichever the change touches, and give a new surface a `bad` count — any non-zero count fails the run. If you add a surface that calls `alloc_reset()`, also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it once silently voided a million iterations. (sankoch's arena canary has covered this upstream since 2.7.10, re-verified at cyrius 6.7.9; the line stays as a second guard.)
+- For image-decode contributions: at least one fuzz seed in `tests/kii.fcyr` — it hosts **twenty** surfaces (arg-parser, path-sanitizer, geometry, emit-pipeline, PNG, JPEG, BMP, GIF, the path-sanitizer differential, the terminal envelope, the ASCII lane, v1.10.0, its area sampler, v1.11.0, the blocks lane's shape choice and frames, v2.0.0, half-block rows read back to their colours, v2.1.0, `--invert` against the negative with `--color none` against the stripped escapes, v2.2.0, the Braille lane's sampler, ink rules, negative and escapes, v2.3.0, the PNG writer read back by chitra with base64 against a reference, v2.4.0, the kitty escapes read back by an independent parser, v2.5.0, and Sixel frames decoded back to their codes, v2.6.0); a new surface goes after the last one, so the older surfaces keep the random stream they have always drawn; add to whichever the change touches, and give a new surface a `bad` count — any non-zero count fails the run. If you add a surface that calls `alloc_reset()`, also clear `crc32_table` — see the note in `fuzz_png_iter`, where omitting it once silently voided a million iterations. (sankoch's arena canary has covered this upstream since 2.7.10, re-verified at cyrius 6.7.9; the line stays as a second guard.)
 - For performance-critical paths: a bench in `tests/kii.bcyr` with the result captured in `docs/benchmarks.md`. A bench guarded on a system fixture must report a visible SKIP when the fixture is absent, never vanish from the output.
 
 - The ASCII lane's glyph table, `src/ascii_shape.cyr`, is generated: change `scripts/gen-shape-table.sh`, run `./scripts/gen-shape-table.sh > src/ascii_shape.cyr`, and confirm with `./scripts/gen-shape-table.sh --check`. It needs ImageMagick 7 (`magick`) and Liberation Mono, so CI does not run it; `tests/ascii.tcyr` pins the properties the matcher relies on instead.
 
-PRs without test coverage will be asked to add it. Current state: **1,193 unit assertions + 8,691,000 fuzz iters/run + 13 benches** as of v2.5.0.
+PRs without test coverage will be asked to add it. Current state: **1,223 unit assertions + 8,711,000 fuzz iters/run + 13 benches** as of v2.6.0.
 
 ## Commits and PRs
 
@@ -85,7 +85,9 @@ Before a cut, the maintainer also runs what CI cannot:
 
   One case differs today, a directory argument (roadmap § Candidates);
 - for a release that claims frames are unchanged, the same comparison over a large image
-  corpus against the previous release's binary, in every lane.
+  corpus against the previous release's binary, in every lane. `scripts/corpus.sh` prints
+  the corpus (since 2.6.0): every PNG, JPEG, GIF and BMP under `/usr/share` outside the icon
+  themes, then the fixtures. It depends on the host, so a release states its count.
 
 ## Code of Conduct
 

@@ -193,3 +193,10 @@ The cells' colours are dithered as in the other lanes. Two consequences:
   no byte" holds for colour only.
 - **`none` still quantizes each dot on its own.** It is against one level for the frame
   rather than a fixed 128, so this ADR's promise for `none` holds.
+
+## Amendment — v2.6.0 (Sixel)
+
+This ADR remains **Accepted**. `--mode sixel` quantizes its pixels exactly as the cell lanes'
+`quantize_rgb_buf` does, so `none`, `ordered` and `fs` mean what § Decision says, at tiers 8, 16
+and 256. A dithered Sixel frame is larger, because a pattern of two colours breaks the `!n` runs.
+At `--width 80`, `fs` makes RAMGON 1.4× and the flat archlinux logo 21× the bytes.

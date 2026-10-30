@@ -68,9 +68,10 @@ Options:
   -w, --width <int>	output width in columns (0 = match terminal)
   -c, --color <8|16|256|tc|none>	colour tier (none: ASCII or Braille glyphs only) (default: 16)
   -v, --verbose	print decode summary to stderr after the frame
-  -m, --mode <halfblock|ascii|blocks|braille|iterm|kitty>	render mode (default: halfblock)
+  -m, --mode <halfblock|ascii|blocks|braille|iterm|kitty|sixel>	render mode (default: halfblock)
   -d, --dither <none|ordered|fs>	dithering (default: none)
   -i, --invert	ASCII and Braille lanes: dark is ink, for light backgrounds
+      --cell-size <str>	Sixel: the terminal's cell size in pixels, WxH (default: 10x20)
 
 Examples:
   kii --version                              # version + etymology
@@ -84,6 +85,7 @@ Examples:
   kii --mode braille logo.png                # Braille dots: 2x4 a cell, one colour
   kii --mode iterm photo.jpg                 # the picture itself, as an iTerm2 / WezTerm image
   kii --mode kitty photo.jpg                 # the picture itself, by the kitty graphics protocol
+  kii --mode sixel --cell-size 9x19 img.png  # Sixel, encoded by kii (give your cell size)
   kii --mode ascii --invert image.png        # dark is ink, for a light terminal
   kii --mode ascii --color none image.png    # glyphs only, no escapes (pipes, logs, mail)
   kii --color 256 photo.jpg                  # 256 colours (tc = 24-bit truecolour)
@@ -122,7 +124,7 @@ Examples:
   kii does not read `COLORTERM`, `TERM` or `NO_COLOR`: the tier is what
   you pass. Within a row, an escape is written only when the colour
   changes, so a tier-16 frame is far smaller than it was before v1.8.0.
-- **`--mode halfblock|ascii|blocks|braille|iterm|kitty`** (`-m`) — The render lane, or (`iterm`, `kitty`) an image protocol.
+- **`--mode halfblock|ascii|blocks|braille|iterm|kitty|sixel`** (`-m`) — The render lane, or (`iterm`, `kitty`, `sixel`) an image protocol.
   - `halfblock` (the default) draws every cell in two colours, one per
     half. Since v2.1.0 a cell is `▀` or `▄` (the same two colours either
     way round), or a space or `█` when both halves are one colour,
@@ -174,6 +176,17 @@ Examples:
     terminal without the protocol draws nothing. When the image fills the
     terminal's width, kitty moves the cursor to the next line itself, so a
     blank line follows the image.
+  - `sixel` (since v2.6.0) encodes the picture as DEC Sixel, the oldest
+    protocol and the most widely implemented (xterm with `-ti vt340`,
+    foot, mlterm, WezTerm). kii does the work: it resamples the image to
+    the cell box in device pixels, quantizes it to 256 colours (or to
+    `--color 8` or `16`; `--dither` applies), and writes it in six-row
+    bands. Transparent pixels are left unset, so the terminal's background
+    shows. Sixel needs the terminal's cell size in pixels, which kii cannot
+    measure yet: give it as `--cell-size WxH` (the default is `10x20`, the
+    2:1 cell kii assumes). With the wrong size the image is too large or
+    too small, never distorted. `--color tc`, `--color none` and
+    `--invert` are refused.
 - **`--dither none|ordered|fs`** (`-d`) — Dithering, since v1.9.0
   ([ADR 0011](../adr/0011-dithering.md)). The default `none` maps each
   pixel to its nearest colour, so a gradient becomes flat bands.
@@ -308,7 +321,10 @@ A bad command line prints one `kii: …` line on stderr, then the
 | `kii: --color none applies to --mode ascii or braille only` | `--color none` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --invert applies to --mode ascii or braille only` | `--invert` in the half-block or blocks lane (since v2.2.0; `or braille` since v2.3.0) |
 | `kii: --width must be between 0 and 100000 (0 = fit the terminal)` | `--width` over 100000 or negative (one line since v1.7.0, when cmdit took over the check; a negative width meant "fit the terminal" before v1.6.4) |
-| `kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty` | Any other `--mode` value |
+| `kii: --mode must be halfblock, ascii, blocks, braille, iterm, kitty or sixel` | Any other `--mode` value |
+| `kii: --cell-size must be WxH in pixels, each 1 to 256 (as 10x20)` | A malformed `--cell-size` with `--mode sixel` (since v2.6.0) |
+| `kii: --cell-size applies to --mode sixel only` | `--cell-size` in any other mode (since v2.6.0) |
+| `kii: --color tc does not apply to --mode sixel (it holds at most 256 colours; use 256)` | `--color tc` with `--mode sixel`; `--color none` and `--invert` have lines of their own (since v2.6.0) |
 | `kii: --color does not apply to --mode iterm (the terminal draws the image)` | `--color`, `--dither` or `--invert` (each has its line) given with `--mode iterm`, even at its default (since v2.4.0; the same lines name `--mode kitty` since v2.5.0) |
 | `kii: --dither must be none, ordered or fs` | Any other `--dither` value (since v1.9.0) |
 | `kii: missing image path` | No path given |

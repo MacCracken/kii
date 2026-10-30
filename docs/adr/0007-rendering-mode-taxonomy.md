@@ -375,3 +375,13 @@ This ADR remains **Accepted**. `--mode` gains `kitty`
 `kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty`. Like `iterm`, it
 refuses `--color`, `--dither` and `--invert` when they are given, with lines that name
 `--mode kitty`. Every other mode is byte-identical to 2.4.0.
+
+## Amendment — v2.6.0 (Sixel, and `--cell-size`)
+
+This ADR remains **Accepted**. `--mode` gains `sixel`
+([ADR 0014](0014-tier-3-image-protocols.md) § v2.6.0):
+`halfblock | ascii | blocks | braille | iterm | kitty | sixel`. Unlike the other two protocols, it
+takes the cell lanes' `--color 8 | 16 | 256` (256 when not given) and `--dither`, because kii
+quantizes its registers. It refuses `--color tc`, `--color none` and `--invert`. A new flag,
+`--cell-size WxH` (default `10x20`), gives its pixel size, and any other mode refuses it. Every
+other mode is byte-identical to 2.5.0.

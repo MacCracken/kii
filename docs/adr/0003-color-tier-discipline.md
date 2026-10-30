@@ -194,3 +194,10 @@ inline images (`--mode iterm`); Kitty and Sixel are pinned to 2.5.0 and 2.6.0. H
 protocol is chosen, what it promises, and what it sends are
 [ADR 0014](0014-tier-3-image-protocols.md)'s. The tier-1 floor is unchanged: a protocol
 is chosen only by flag, and `kii image.png` is still the half-block lane at 16 colours.
+
+## Amendment — v2.6.0 (tier 3 complete)
+
+This ADR remains **Accepted**. With Sixel (`--mode sixel`, 2.6.0) all three protocols the tier
+named are in: iTerm2 (2.4.0), kitty (2.5.0) and Sixel ([ADR 0014](0014-tier-3-image-protocols.md)).
+Sixel brings the tier's palettes back in, since kii quantizes its registers at `--color 8`, `16`
+or `256`.

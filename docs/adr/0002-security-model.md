@@ -541,3 +541,17 @@ point:
 - **`q=2` with no image id**: the terminal writes nothing back into the session's input.
 
 kitty's own parser read all 911 corpus frames as one image each, with no reply.
+
+## Amendment — v2.6.0 (Sixel)
+
+`--mode sixel` writes one DCS (`ESC P … q … ESC \`), all of it kii's own text:
+- **The head** is fixed bytes and decimal numbers: the size, and each register's index and
+  percent.
+- **The body** is the Sixel alphabet (`?`..`~`), digits, and `# ! $ - ;`. It holds no ESC and no
+  other control byte, and no byte of the input reaches it: the pixels are kii's resampled,
+  quantized frame.
+- **The size is bounded** by the 16,777,216-pixel ceiling. A band's buffer is
+  `256 × (W + 6) + 2` bytes, written band by band.
+
+The 20th fuzz surface fails a frame whose bytes are not that grammar, or that decodes to anything
+but its input.

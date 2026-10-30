@@ -1,0 +1,164 @@
+# tests/sixel.tcyr — Tier 3's third protocol (v2.6.0, ADR 0014 § v2.6.0): the
+# percent colours, the register map, the head, the bands (their bits, runs, $
+# and -), transparency, and --cell-size.
+
+include "src/sixel.cyr"
+include "src/cli.cyr"
+include "lib/assert.cyr"
+
+fn _bytes_are(buf, n, expect): i64 {
+    if (n != strlen(expect)) { return 0; }
+    return memeq(buf, expect, n);
+}
+
+# A w x h frame of codes, every pixel `code`.
+fn _frame(w, h, code): i64 {
+    var f = alloc(w * h * 4);
+    var i = 0;
+    while (i < w * h) { store32(f + i * 4, code); i = i + 1; }
+    return f;
+}
+
+fn _put(f, w, x, y, code): i64 {
+    store32(f + (y * w + x) * 4, code);
+    return 0;
+}
+
+# Every band of the frame into `buf`. Returns the length; `masks` must come
+# back all zero (checked by the caller).
+fn _bands(f, w, h, regmap, masks, last, buf): i64 {
+    var pos = 0;
+    var b = 0;
+    while (b < (h + 5) / 6) {
+        pos = sixel_band(f, w, h, b, regmap, masks, last, buf, pos);
+        b = b + 1;
+    }
+    return pos;
+}
+
+fn test_registers() {
+    test_group("v2.6.0 — percent colours and the register map");
+    assert_eq(sixel_pct(0) * 1000000 + sixel_pct(255) * 1000 + sixel_pct(128), 100050, "0, 255 and 128 -> 0, 100 and 50");
+    assert_eq(sixel_pct(95) * 1000 + sixel_pct(135), 37053, "the cube's 95 and 135 -> 37 and 53");
+    var regmap = alloc(256 * 8);
+    var f = _frame(4, 2, KII_COLOR_DEFAULT);
+    _put(f, 4, 0, 0, 200); _put(f, 4, 1, 0, 9); _put(f, 4, 2, 1, 200); _put(f, 4, 3, 1, 16);
+    assert_eq(sixel_registers(f, 4, 2, regmap), 3, "three codes used; transparency is none of them");
+    assert_eq(load64(regmap + 9 * 8) * 100 + load64(regmap + 16 * 8) * 10 + load64(regmap + 200 * 8), 12, "numbered 0, 1, 2 in code order");
+    assert_eq(load64(regmap + 15 * 8), 0 - 1, "an unused code has no register");
+    return 0;
+}
+
+fn test_head() {
+    test_group("v2.6.0 — the head: DCS, raster attributes, the registers");
+    quant_set_tier(16);
+    var regmap = alloc(256 * 8);
+    var f = _frame(2, 1, 1);
+    _put(f, 2, 1, 0, 15);
+    sixel_registers(f, 2, 1, regmap);
+    var buf = alloc(8192);
+    var n = sixel_head(buf, 2, 1, regmap);
+    # Palette entry 1 is (170, 0, 0); entry 15 is (255, 255, 255).
+    assert_eq(_bytes_are(buf, n, "\x1bP0;1;0q\"1;1;2;1#0;2;67;0;0#1;2;100;100;100"), 1,
+      "P2 = 1, square pixels, 2 x 1, two registers in percent");
+    return 0;
+}
+
+fn test_bands() {
+    test_group("v2.6.0 — bands: a bit a row, a colour at a time");
+    quant_set_tier(16);
+    var regmap = alloc(256 * 8);
+    var masks = alloc(256 * 16);
+    var last = alloc(256 * 8);
+    var z = 0;
+    while (z < 256 * 16) { store8(masks + z, 0); z = z + 1; }
+    var buf = alloc(16384);
+    # One band of 3 columns: column 0 all colour 1, column 1 rows 0 and 5
+    # colour 2, column 2 unset.
+    var f = _frame(3, 6, KII_COLOR_DEFAULT);
+    var y = 0;
+    while (y < 6) { _put(f, 3, 0, y, 1); y = y + 1; }
+    _put(f, 3, 1, 0, 2); _put(f, 3, 1, 5, 2);
+    sixel_registers(f, 3, 6, regmap);
+    var n = _bands(f, 3, 6, regmap, masks, last, buf);
+    # Colour 1: ~ (all six bits) then nothing; colour 2: ? (none), then 0x3F + 33 = '`'.
+    assert_eq(_bytes_are(buf, n, "#0~$#1?`"), 1, "each colour to its last column, $ between, no - after the last band");
+    # Two bands, the second partial (h = 8): rows 6 and 7 are its bits 0 and 1.
+    f = _frame(1, 8, 3);
+    sixel_registers(f, 1, 8, regmap);
+    n = _bands(f, 1, 8, regmap, masks, last, buf);
+    assert_eq(_bytes_are(buf, n, "#0~-#0B"), 1, "a full band, -, then a band of two rows (0x3F + 3)");
+    # A run of four or more is !n<char>; three stay as they are.
+    f = _frame(7, 1, 4);
+    _put(f, 7, 4, 0, KII_COLOR_DEFAULT);
+    sixel_registers(f, 7, 1, regmap);
+    n = _bands(f, 7, 1, regmap, masks, last, buf);
+    assert_eq(_bytes_are(buf, n, "#0!4@?@@"), 1, "four @ as !4@, then ? and @@");
+    f = _frame(3, 1, 4);
+    sixel_registers(f, 3, 1, regmap);
+    n = _bands(f, 3, 1, regmap, masks, last, buf);
+    assert_eq(_bytes_are(buf, n, "#0@@@"), 1, "a run of exactly three stays as it is");
+    f = _frame(200, 1, 5);
+    sixel_registers(f, 200, 1, regmap);
+    var masks2 = alloc(256 * 200);
+    z = 0;
+    while (z < 256 * 200) { store8(masks2 + z, 0); z = z + 1; }
+    n = _bands(f, 200, 1, regmap, masks2, last, buf);
+    assert_eq(_bytes_are(buf, n, "#0!200@"), 1, "a long run");
+    # A fully transparent band writes nothing but its -.
+    f = _frame(2, 12, KII_COLOR_DEFAULT);
+    _put(f, 2, 1, 11, 6);
+    sixel_registers(f, 2, 12, regmap);
+    n = _bands(f, 2, 12, regmap, masks, last, buf);
+    assert_eq(_bytes_are(buf, n, "-#0?_"), 1, "an empty band is just -; then row 11 is bit 5 (0x3F + 32)");
+    var clean = 1;
+    z = 0;
+    while (z < 256 * 16) { if (load8(masks + z) != 0) { clean = 0; } z = z + 1; }
+    assert_eq(clean, 1, "the masks come back all zero");
+    return 0;
+}
+
+fn test_cell_size() {
+    test_group("v2.6.0 — --cell-size is W x H, each 1 to 256");
+    var w = 0;
+    var h = 0;
+    assert_eq(kii_cell_size("10x20", &w, &h), 0, "10x20");
+    assert_eq(w * 1000 + h, 10020, "...is 10 by 20");
+    assert_eq(kii_cell_size("1x1", &w, &h) + kii_cell_size("256x256", &w, &h), 0, "the ends, 1 and 256");
+    var bad[96];
+    store64(&bad, ""); store64(&bad + 8, "10"); store64(&bad + 16, "x20"); store64(&bad + 24, "10x");
+    store64(&bad + 32, "0x20"); store64(&bad + 40, "257x1"); store64(&bad + 48, "10x20x"); store64(&bad + 56, "10X20");
+    store64(&bad + 64, " 10x20"); store64(&bad + 72, "10x20 "); store64(&bad + 80, "-1x20"); store64(&bad + 88, "99999999999999999999x1");
+    var k = 0;
+    var refused = 0;
+    while (k < 12) {
+        if (kii_cell_size(load64(&bad + k * 8), &w, &h) == 0 - 1) { refused = refused + 1; }
+        k = k + 1;
+    }
+    assert_eq(refused, 12, "twelve malformed sizes are refused");
+    assert_eq(w + h, 0, "...and leave 0 x 0");
+    assert_eq(kii_cell_size(0, &w, &h), 0 - 1, "no string");
+
+    test_group("v2.6.0 — what --mode sixel refuses");
+    assert_streq(kii_sixel_conflict_line(KII_TIER_TC, 0),
+      "kii: --color tc does not apply to --mode sixel (it holds at most 256 colours; use 256)\n", "truecolour");
+    assert_streq(kii_sixel_conflict_line(KII_TIER_NONE, 0), "kii: --color none does not apply to --mode sixel\n", "none");
+    assert_streq(kii_sixel_conflict_line(KII_TIER_16, 1), "kii: --invert does not apply to --mode sixel\n", "--invert");
+    assert_eq(kii_sixel_conflict_line(KII_TIER_8, 0) + kii_sixel_conflict_line(KII_TIER_256, 0), 0, "8, 16 and 256 are taken");
+    assert_eq(kii_lane_conflict_line(KII_MODE_SIXEL, KII_TIER_NONE, 1), 0, "the lane check leaves sixel to its own");
+    assert_eq(emit_sixel(0, 4, 4), 0 - 1, "emit_sixel with no frame: -1");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_registers();
+    test_head();
+    test_bands();
+    test_cell_size();
+    quant_set_tier(16);
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(SYS_EXIT, exit_code);

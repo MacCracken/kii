@@ -3,8 +3,8 @@
 > **Forward-facing only.** Shipped work is **deleted** from this file rather than
 > checked off in place — the record lives in [`../../CHANGELOG.md`](../../CHANGELOG.md)
 > (per-release detail) and [`state.md`](state.md) (the current snapshot). If an item
-> below has shipped, it should not be here. Current release **v2.5.0**; 2.6.0 is pinned
-> below.
+> below has shipped, it should not be here. Current release **v2.6.0**. Every 2.x pin has
+> shipped, Tier 3 with it; what remains is gated on upstream, a candidate, or unscheduled.
 
 Each release is a single coherent cycle, smallest-first per AGNOS bite-discipline,
 that ships a working binary doing demonstrably more than the last. **Versions here
@@ -23,15 +23,6 @@ Two rules hold for every 2.x release:
   `COLORTERM` or a terminal query: the caller names it. Output depends only on the
   arguments, the image and the terminal's size.
 
-## 2.6.0 — Tier 3: Sixel (`--mode sixel`)
-
-The oldest protocol and the widest (xterm with `-ti vt340`, mlterm, foot, WezTerm, and
-others): pixels as six-row bands in up to 256 registers.
-- kii encodes it itself: the 256-colour quantizer (and `--dither`) gives the registers,
-  and each band is run-length encoded.
-- Sixel is drawn in device pixels, so it needs the cell's pixel size: from the terminal
-  when darshana exposes it (§ Gated on upstream), else a `--cell-size` default.
-
 ## Gated on upstream (no version until the dependency ships)
 
 - **Progressive-DCT JPEG** (chitra). chitra is baseline-only and refuses progressive
@@ -45,7 +36,9 @@ others): pixels as six-row bands in up to 256 registers.
   `TIOCGWINSZ` also reports the window's pixel size, which gives the real ratio on most
   graphical terminals, but darshana's `tty_winsize` reads only rows and columns. Once it
   exposes the pixel fields, kii fits images to the measured aspect (falling back to 2:1
-  where the fields are 0, as on the Linux console) and Sixel gets its pixel size.
+  where the fields are 0, as on the Linux console). Sixel then takes its cell size from them;
+  until then it uses `--cell-size` (2.6.0, default 10x20), and the image protocols could send
+  no more pixels than the box shows (§ Candidates).
 - **Peak memory when reading a file** (cyrius stdlib). `file_read_whole_max` keeps the
   buffers it outgrows, so reading a file costs 2–4× its size
   (`cyrius/docs/development/issues/2026-10-28-file-read-whole-keeps-outgrown-buffers.md`).
@@ -97,6 +90,11 @@ others): pixels as six-row bands in up to 256 registers.
   `MultipartFile` form works in its tmux integration, and a DCS-wrapped passthrough works where
   tmux's `allow-passthrough` is on. kii sends the single `File=` form and does not know when it
   is inside tmux, so either would be a flag (ADR 0014).
+- **An adaptive palette for Sixel.** Sixel's registers can hold any colours, and 2.6.0 fills
+  them from the fixed xterm 256-colour palette, as the roadmap pinned. On the Arch logo that
+  errs by 14.1 a channel where chafa's palette, fitted to the image, errs by 4.4 (ADR 0014
+  § v2.6.0). A median-cut or octree palette per frame is a new quantizer, and it would change
+  every Sixel frame.
 - **The kitty lane's blank line at full width.** When the image fills the terminal's width,
   kitty moves the cursor to the next line itself, and the LF kii writes after the image then
   leaves a blank line. kii does not know the terminal's width under `--width N`; in fit mode it

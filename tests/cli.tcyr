@@ -136,7 +136,7 @@ fn main() {
     assert_eq(cmdit_error(fsm), CMDIT_ERR_BAD_ENUM, "error = BAD_ENUM");
     assert_streq(kii_err_flag_name(fsm), "mode", "BAD_ENUM names --mode");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, kii_err_flag_name(fsm)),
-      "kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty\n", "the --mode line");
+      "kii: --mode must be halfblock, ascii, blocks, braille, iterm, kitty or sixel\n", "the --mode line");
     var fsm2 = cmdit_new("kii");
     kii_register_flags(fsm2);
     store64(&argvm + 16, "");
@@ -174,6 +174,14 @@ fn main() {
     store64(&argvm + 16, "kitty");
     assert_eq(cmdit_parse_argv(fsm10, 3, &argvm), CMDIT_OK, "--mode kitty parses (v2.5.0)");
     assert_eq(cmdit_get_enum(fsm10, KII_F_MODE), KII_MODE_KITTY, "kitty → KII_MODE_KITTY");
+    var fsm11 = cmdit_new("kii");
+    kii_register_flags(fsm11);
+    store64(&argvm + 16, "sixel");
+    assert_eq(cmdit_parse_argv(fsm11, 3, &argvm), CMDIT_OK, "--mode sixel parses (v2.6.0)");
+    assert_eq(cmdit_get_enum(fsm11, KII_F_MODE), KII_MODE_SIXEL, "sixel → KII_MODE_SIXEL");
+    assert_streq(cmdit_get_str(fsm11, KII_F_CELL), "10x20", "--cell-size defaults to 10x20");
+    assert_eq(cmdit_seen(fsm11, KII_F_CELL), 0, "...and is not seen unless given");
+    assert_eq(kii_mode_is_protocol(KII_MODE_SIXEL), 0, "sixel is not one of the payload protocols (it takes --color)");
     assert_eq(kii_mode_is_protocol(KII_MODE_ITERM) * 10 + kii_mode_is_protocol(KII_MODE_KITTY), 11, "both protocols are protocols");
     assert_eq(kii_mode_is_protocol(KII_MODE_HALFBLOCK) + kii_mode_is_protocol(KII_MODE_BRAILLE), 0, "the cell lanes are not");
 
@@ -520,7 +528,7 @@ fn main() {
       "kii: --width must be between 0 and 100000 (0 = fit the terminal)\n", "OUT_OF_RANGE");
     # v1.8.0: BAD_ENUM names the flag it came from (--color or --mode); with
     # no flag named it has nothing to say beyond the generic line.
-    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "mode"), "kii: --mode must be halfblock, ascii, blocks, braille, iterm or kitty\n", "BAD_ENUM / mode");
+    assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "mode"), "kii: --mode must be halfblock, ascii, blocks, braille, iterm, kitty or sixel\n", "BAD_ENUM / mode");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "color"), "kii: --color must be 8, 16, 256, tc or none\n", "BAD_ENUM / color");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, "dither"), "kii: --dither must be none, ordered or fs\n", "BAD_ENUM / dither");
     assert_streq(kii_parse_error_line(CMDIT_ERR_BAD_ENUM, 0), "kii: argument parse error\n", "BAD_ENUM / no flag");

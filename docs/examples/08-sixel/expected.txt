@@ -1,0 +1,9 @@
+Frame: 4,704 bytes, one DCS and a newline. SHA-256 of the frame begins
+113aec0b5fb3bebf. It starts (ESC shown as ^[):
+
+  ^[P0;1;0q"1;1;400;400#0;2;0;37;37#1;2;0;37;53#2;2;0;37;69#3;2;0;53;69#4;2;0;53;84---#1!198?...
+
+and ends with ESC \ and LF. 400 x 400 pixels, five registers (the logo's blues
+in the xterm 256-colour palette, in percent); the first three bands are empty
+(---), the logo's transparent top. `--verbose` reports
+"→ Sixel 400x400 pixels, 5 of 256 colours".

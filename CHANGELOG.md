@@ -4,6 +4,82 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-29
+
+**Tier 3's third protocol: Sixel, `--mode sixel`, encoded by kii**
+([ADR 0014](docs/adr/0014-tier-3-image-protocols.md) § v2.6.0). Every pin of the 2.x roadmap has
+now shipped. Every older lane is byte-identical to 2.5.0 (13,312 of 13,312 cases over the new
+832-image corpus).
+
+### Added
+
+- **`--mode sixel`** writes one DCS: `ESC P 0;1;0 q "1;1;W;H`, the registers as `#r;2;R;G;B` in
+  percent, the image in six-row bands, `ESC \` and a newline.
+  - **kii encodes it.** Sixel is drawn in device pixels from colour registers, so kii resamples
+    the image to the cell box in pixels (the area sampler), quantizes it, and writes each band a
+    colour at a time, with runs of four or more as `!n<char>`.
+  - **Colours**: the 256-colour quantizer by default, or `--color 8` / `16`, with `--dither` as
+    in the cell lanes. `--color tc`, `--color none` and `--invert` are refused.
+  - **Transparency**: pixels below alpha 128 are never drawn (`P2 = 1`), so the terminal's
+    background shows.
+  - **Frame cap**: at most 16,777,216 pixels; past that kii refuses with `Sixel image too
+    large`.
+  - `--verbose` reports `→ Sixel WxH pixels, N of T colours`.
+- **`--cell-size WxH`** (default `10x20`, each side 1–256): the terminal's cell size in pixels,
+  which Sixel needs and kii cannot measure yet (darshana does not report the window's pixel
+  size). It is used only with `--mode sixel`; other modes refuse it. A wrong size makes the
+  image too large or small, never distorted. 10 × 20 is kii's 2:1 cell and chafa's fallback.
+- **`scripts/corpus.sh`** prints the image corpus releases are measured over: every PNG, JPEG,
+  GIF and BMP under `/usr/share` outside the icon themes, then the fixtures. It replaces a
+  472-image list whose recipe was never kept and which was lost with a scratch directory. It
+  gives 832 images here.
+- **Example 08**: the Arch logo as Sixel.
+
+### Changed
+
+- An unknown `--mode` reads `kii: --mode must be halfblock, ascii, blocks, braille, iterm,
+  kitty or sixel`.
+
+### Measured (832-image corpus)
+
+- **Checked by an independent decoder.** No Sixel terminal is installed, and this host's
+  ImageMagick decodes every Sixel as black, its own included. A decoder written from the VT340
+  manual, in Python, read every frame against kii's own pipeline under three sets of width,
+  cell size, tier and dither:
+  - all 2,427 frames decode to exactly the pixels kii's pipeline produced, transparency
+    included;
+  - 36 cases are refused as the half-block lane refuses them;
+  - 33 are refused by the pixel ceiling alone: strips 1–6 pixels wide.
+- **Quality.** The palette is the fixed xterm one. On the Arch logo kii is within 14.1 a channel
+  of a box resize, against chafa's 4.4 with a palette fitted to the image, so an adaptive palette
+  is a roadmap candidate. RAMGON is within 7.15 (10.62 with `fs`).
+- **Size and CPU** at `--width 80`:
+
+  | Image | Bytes | Bytes with `fs` | CPU | Half-block | iTerm2 |
+  |---|---:|---:|---:|---:|---:|
+  | RAMGON | 433 KB | 605 KB | 250 ms | 197 ms | 851 ms |
+  | archlinux logo | 8.5 KB | 179 KB | 21 ms | 2.0 ms | 13 ms |
+
+### Tests
+
+- **1,223 assertions**, up from 1,193.
+  - A new suite, `tests/sixel.tcyr` (25): percent colours, the register map, the head, every
+    band form, the masks left clean, `--cell-size`, the refusals.
+  - cli 252 → 257.
+- **A 20th fuzz surface** (20,000 iterations, 8,711,000 in all): random frames at tiers 8, 16
+  and 256 with transparency, decoded back to their codes by a reference decoder.
+- Of 15 planted defects, the unit suite catches all 15 and the fuzz surface 9.
+- `scripts/check-builds-agree.sh` gains two Sixel lanes and four CLI cases: 244 → 266.
+
+### Documentation
+
+- ADR 0014 is amended with § v2.6.0: the encoding, colours, sizing, the independent check, the
+  quality, and the new corpus.
+- ADRs 0002, 0003, 0007 and 0011 are amended: the DCS grammar, tier 3 complete, `sixel` and
+  `--cell-size`, and dithering's registers.
+- The roadmap's last pin is removed. Nothing is pinned; what remains is gated on upstream
+  (darshana's pixel size among it) or a candidate (an adaptive Sixel palette is new).
+
 ## [2.5.0] - 2026-10-29
 
 **Tier 3's second protocol: kitty graphics, `--mode kitty`**
